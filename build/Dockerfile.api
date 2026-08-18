@@ -1,0 +1,20 @@
+FROM debian:stable-slim
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Built on the host with: GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -o out/casehub-api ./cmd/api
+# API-only, no frontend. Not meant to be reachable from outside the cluster —
+# manager (hjmasha/casehub-manager) is the only caller, over HTTP, see
+# cmd/manager/app/client.
+COPY out/casehub-api /app/casehub-api
+
+EXPOSE 8080
+
+ENTRYPOINT ["/app/casehub-api"]
+# Defaults match cmd/api/app/flag.go; override at `docker run` time, e.g.:
+#   docker run -p 8080:8080 casehub-api -db-host=postgres -db-password=...
+CMD ["-db-host=postgres"]
