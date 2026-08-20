@@ -1,0 +1,10 @@
+/out/
+.vscode/
+
+# Debug/demo-only: the frontend and the mock entry point that bundles it
+# with the manager API. Not part of the real split deployment (see
+# cmd/manager/main.go, build/release.sh) — only used locally for debugging.
+/web/
+/cmd/manager/mock/
+/build/mock-release.sh
+/build/Dockerfile.manager-mock

@@ -1,0 +1,770 @@
+openapi: 3.0.3
+info:
+  title: CaseHub Manager API
+  version: "1.0.0"
+  description: >-
+    Machine-readable companion to API.md in this directory — read API.md
+    first for the prose contract and error/behavior notes (per-item batch
+    failures, revision semantics, etc.) that don't fit cleanly into an
+    OpenAPI schema. See the repository root README.md for the domain model
+    (basecase/branch/merge semantics, folder visibility rules).
+
+    cmd/manager is the only service. There is no authentication of any
+    kind; `required` markers below reflect what the server actually
+    validates, not a validator library.
+servers:
+  - url: /
+
+security: []
+
+tags:
+  - name: folders
+    description: The unversioned directory tree, shared across trunk and every branch.
+  - name: trunk
+    description: Read-only access to merged content (base_cases/case_history/test_executions).
+  - name: cases
+    description: Batch write endpoints for test cases — always require a branch (version).
+  - name: branches
+    description: Create/list branches, and merge/pull between a branch and trunk.
+  - name: branch-cases
+    description: Read/edit a branch's own local (possibly unmerged) case content.
+  - name: branch-executions
+    description: Test execution records scoped to a branch's local revisions.
+  - name: health
+    description: Readiness/liveness probe.
+
+paths:
+  /:
+    get:
+      tags: [health]
+      summary: Health check (readiness/liveness probe)
+      operationId: healthz
+      description: >-
+        Only registered by the real cmd/manager/main.go binary
+        (NewManagerMux). Not registered by RegisterManagerAPI, which
+        cmd/manager/mock uses instead to serve the frontend at "/".
+      responses:
+        "200":
+          description: OK, empty body
+
+  /api/manage/casefolder:
+    post:
+      tags: [folders]
+      summary: Create a folder
+      operationId: createCaseFolder
+      description: >-
+        parent_id:0 creates a new top-level ("product") folder — there can
+        be many side by side, none is a hardcoded singleton root. Non-zero
+        parent_id must reference an existing folder.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/RequestCreateCaseFolder" }
+      responses:
+        "200":
+          description: Created folder
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CaseFolder" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "500": { $ref: "#/components/responses/ServerError" }
+    put:
+      tags: [folders]
+      summary: Rename a folder
+      operationId: updateCaseFolder
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/RequestUpdateCaseFolder" }
+      responses:
+        "200":
+          description: Updated folder
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CaseFolder" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "500": { $ref: "#/components/responses/ServerError" }
+    delete:
+      tags: [folders]
+      summary: Delete a folder
+      operationId: deleteCaseFolder
+      description: >-
+        400 if it's top-level (parent_id==0, never deletable), has case
+        uids, or has sub-folders — must be emptied first.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/RequestDeleteCaseFolder" }
+      responses:
+        "200":
+          description: Deleted folder
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CaseFolder" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "500": { $ref: "#/components/responses/ServerError" }
+    get:
+      tags: [folders]
+      summary: List all folders (flat)
+      operationId: listCaseFolders
+      description: >-
+        Returns every folder, unnested — build the tree client-side from
+        parent_id.
+      responses:
+        "200":
+          description: All folders
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/CaseFolder" }
+        "500": { $ref: "#/components/responses/ServerError" }
+
+  /api/manage/casefolder/migrate:
+    post:
+      tags: [folders]
+      summary: Move or copy a folder to a new parent
+      operationId: migrateCaseFolder
+      description: >-
+        400 if source == target (can't be its own parent) or source is
+        top-level (never movable/copyable). Copy only copies the folder's
+        own name + case_uids, not sub-folders recursively.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/RequestMigrateCaseFolder" }
+      responses:
+        "200":
+          description: The resulting folder (moved or newly-copied)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CaseFolder" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "500": { $ref: "#/components/responses/ServerError" }
+
+  /api/manage/testcase:
+    post:
+      tags: [cases]
+      summary: Batch create test cases
+      operationId: addTestCase
+      description: >-
+        All cases are created inside req.version. Each case needs a
+        non-empty case_id (server allocates uid; fails per-item if
+        case_id already exists). Per-item failures don't fail the request
+        — check each BatchCreateResult.ok.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/RequestAddTestCase" }
+      responses:
+        "200":
+          description: Per-item results, same order as the request
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/BatchCreateResult" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "500": { $ref: "#/components/responses/ServerError" }
+    put:
+      tags: [cases]
+      summary: Batch update test cases
+      operationId: updateTestCase
+      description: >-
+        Resolves each item by uid if present, else by case_id lookup.
+        Same per-item semantics as create.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/RequestUpdateTestCase" }
+      responses:
+        "200":
+          description: Per-item results, same order as the request
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/BatchCreateResult" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "500": { $ref: "#/components/responses/ServerError" }
+    delete:
+      tags: [cases]
+      summary: Unlink test cases from a folder
+      operationId: deleteTestCase
+      description: >-
+        Only removes the folder <-> case association; case data and
+        history are untouched and remain reachable via other folders or
+        by uid. No version needed — folder links aren't versioned.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/RequestDeleteTestCase" }
+      responses:
+        "200":
+          description: Per-item results (always ok:true — this call doesn't fail per-item)
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/BatchCreateResult" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "500": { $ref: "#/components/responses/ServerError" }
+    get:
+      tags: [trunk]
+      summary: List merged trunk cases
+      operationId: listTestCases
+      description: Optional query filters are ANDed.
+      parameters:
+        - { name: case_id, in: query, schema: { type: string } }
+        - { name: case_name, in: query, schema: { type: string } }
+        - { name: priority, in: query, schema: { type: string } }
+        - { name: state, in: query, schema: { type: string } }
+        - { name: description, in: query, schema: { type: string } }
+      responses:
+        "200":
+          description: Matching trunk cases
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/TestCase" }
+        "500": { $ref: "#/components/responses/ServerError" }
+
+  /api/manage/testcase/migrate:
+    post:
+      tags: [cases]
+      summary: Move or copy test cases between folders
+      operationId: migrateTestCase
+      description: >-
+        Moves (or copies, if is_copy) folder association only — case
+        content is untouched, there's only ever one copy of the data.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/RequestMigrateTestCase" }
+      responses:
+        "200":
+          description: Per-item results (always ok:true)
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/BatchCreateResult" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "500": { $ref: "#/components/responses/ServerError" }
+
+  /api/manage/testcase/{id}:
+    get:
+      tags: [trunk]
+      summary: Get a trunk case's latest merged version
+      operationId: getTestCase
+      parameters:
+        - { $ref: "#/components/parameters/UidPath" }
+      responses:
+        "200":
+          description: Latest merged TestCase
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TestCase" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "500": { $ref: "#/components/responses/ServerError" }
+
+  /api/manage/testcase/{id}/history:
+    get:
+      tags: [trunk]
+      summary: List all merged revisions of a trunk case
+      operationId: getTestCaseHistory
+      parameters:
+        - { $ref: "#/components/parameters/UidPath" }
+      responses:
+        "200":
+          description: All merged revisions, oldest first
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/TestCase" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "500": { $ref: "#/components/responses/ServerError" }
+
+  /api/manage/testcase/{id}/executions:
+    get:
+      tags: [trunk]
+      summary: List test executions for a merged trunk revision
+      operationId: listExecutions
+      parameters:
+        - { $ref: "#/components/parameters/UidPath" }
+        - { $ref: "#/components/parameters/RevisionQuery" }
+      responses:
+        "200":
+          description: Executions recorded against that merged revision
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/TestExecution" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "500": { $ref: "#/components/responses/ServerError" }
+
+  /api/manage/version:
+    post:
+      tags: [branches]
+      summary: Create a version branch
+      operationId: createVersion
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/RequestCreateVersion" }
+      responses:
+        "200":
+          description: Echoes the request body back on success
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RequestCreateVersion" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "409":
+          description: A branch with this name already exists
+          content:
+            text/plain: { schema: { type: string } }
+    get:
+      tags: [branches]
+      summary: List all branch names
+      operationId: listVersions
+      responses:
+        "200":
+          description: Branch names
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { type: string }
+
+  /api/manage/version/{name}/merge:
+    post:
+      tags: [branches]
+      summary: Merge a branch's pending content into trunk
+      operationId: mergeVersion
+      description: >-
+        Empty/omitted uids merges every pending uid in the branch. Content
+        and execution merging are independent per uid — a content conflict
+        on one uid never blocks another uid or that uid's execution
+        records (see root README).
+      parameters:
+        - { $ref: "#/components/parameters/VersionNamePath" }
+      requestBody:
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/RequestMergeVersion" }
+      responses:
+        "200":
+          description: Merge outcome
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MergeResult" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "500": { $ref: "#/components/responses/ServerError" }
+
+  /api/manage/version/{name}/pull:
+    post:
+      tags: [branches]
+      summary: Pull trunk's current merged content into a branch
+      operationId: pullVersion
+      description: >-
+        Starting point for further edits in the branch. Idempotent at an
+        unchanged trunk revision. A uid absent from trunk fails just that
+        item (per-item BatchCreateResult), not the whole request.
+      parameters:
+        - { $ref: "#/components/parameters/VersionNamePath" }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/RequestPullVersion" }
+      responses:
+        "200":
+          description: Per-item results
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/BatchCreateResult" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/manage/version/{name}/testcase:
+    get:
+      tags: [branch-cases]
+      summary: List cases touched in a branch
+      operationId: listVersionTestCases
+      description: >-
+        Latest local revision of every uid touched in this branch (merged
+        or not). ?pending=true restricts to uids with unmerged content
+        edits (merge candidates) — excludes pulled-but-untouched cases.
+      parameters:
+        - { $ref: "#/components/parameters/VersionNamePath" }
+        - name: pending
+          in: query
+          schema: { type: string, enum: ["true"] }
+          description: Pass pending=true to only get unmerged merge-candidate cases.
+      responses:
+        "200":
+          description: Branch-local cases
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/TestCase" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "500": { $ref: "#/components/responses/ServerError" }
+
+  /api/manage/version/{name}/testcase/{id}:
+    get:
+      tags: [branch-cases]
+      summary: Get a case's latest local revision in a branch
+      operationId: getVersionTestCase
+      parameters:
+        - { $ref: "#/components/parameters/VersionNamePath" }
+        - { $ref: "#/components/parameters/UidPath" }
+      responses:
+        "200":
+          description: Latest local TestCase in this branch
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TestCase" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "500": { $ref: "#/components/responses/ServerError" }
+
+  /api/manage/version/{name}/testcase/{id}/history:
+    get:
+      tags: [branch-cases]
+      summary: List all local revisions of a case in a branch
+      operationId: getVersionTestCaseHistory
+      parameters:
+        - { $ref: "#/components/parameters/VersionNamePath" }
+        - { $ref: "#/components/parameters/UidPath" }
+      responses:
+        "200":
+          description: All local revisions, oldest first
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/TestCase" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "500": { $ref: "#/components/responses/ServerError" }
+
+  /api/manage/version/{name}/testcase/{id}/history/{revision}:
+    delete:
+      tags: [branch-cases]
+      summary: Delete one local (unmerged) edit
+      operationId: deleteVersionTestCaseHistory
+      description: For undoing a mistaken edit before merge.
+      parameters:
+        - { $ref: "#/components/parameters/VersionNamePath" }
+        - { $ref: "#/components/parameters/UidPath" }
+        - name: revision
+          in: path
+          required: true
+          schema: { type: integer, format: int64 }
+      responses:
+        "204": { description: Deleted }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "500": { $ref: "#/components/responses/ServerError" }
+
+  /api/manage/version/{name}/testcase/{id}/executions:
+    post:
+      tags: [branch-executions]
+      summary: Record a test execution in a branch
+      operationId: recordVersionExecution
+      description: >-
+        body.revision is the branch-local revision (from the branch case,
+        not trunk).
+      parameters:
+        - { $ref: "#/components/parameters/VersionNamePath" }
+        - { $ref: "#/components/parameters/UidPath" }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateExecutionRequest" }
+      responses:
+        "200":
+          description: The created execution
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TestExecution" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "500": { $ref: "#/components/responses/ServerError" }
+    get:
+      tags: [branch-executions]
+      summary: List test executions for a branch-local revision
+      operationId: listVersionExecutions
+      parameters:
+        - { $ref: "#/components/parameters/VersionNamePath" }
+        - { $ref: "#/components/parameters/UidPath" }
+        - { $ref: "#/components/parameters/RevisionQuery" }
+      responses:
+        "200":
+          description: Executions recorded against that local revision
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/TestExecution" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "500": { $ref: "#/components/responses/ServerError" }
+
+  /api/manage/version/{name}/testcase/executions/{id}:
+    delete:
+      tags: [branch-executions]
+      summary: Delete a test execution
+      operationId: deleteVersionExecution
+      description: "{id} is the execution's own row id, not a case uid."
+      parameters:
+        - { $ref: "#/components/parameters/VersionNamePath" }
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer, format: int64 }
+      responses:
+        "204": { description: Deleted }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "500": { $ref: "#/components/responses/ServerError" }
+
+components:
+  parameters:
+    UidPath:
+      name: id
+      in: path
+      required: true
+      description: A case's uid (stable across all its revisions).
+      schema: { type: integer, format: int64 }
+    VersionNamePath:
+      name: name
+      in: path
+      required: true
+      description: Branch name.
+      schema: { type: string }
+    RevisionQuery:
+      name: revision
+      in: query
+      required: true
+      schema: { type: integer, format: int64 }
+
+  responses:
+    BadRequest:
+      description: Invalid JSON or a required/referenced field is missing or invalid
+      content:
+        text/plain: { schema: { type: string } }
+    NotFound:
+      description: Referenced id/folder/version not found
+      content:
+        text/plain: { schema: { type: string } }
+    ServerError:
+      description: Unexpected/store error
+      content:
+        text/plain: { schema: { type: string } }
+
+  schemas:
+    TestCase:
+      type: object
+      description: >-
+        id/revision/created_at are always server-assigned — safe to omit
+        on write. Revisions are not globally comparable: a trunk revision
+        and a branch revision for the same uid are independent
+        numberlines (see root README's "Domain model" section).
+      properties:
+        id: { type: integer, format: int64, readOnly: true }
+        uid: { type: integer, format: int64 }
+        case_id: { type: string, description: "Human-assigned unique id; required on create." }
+        case_name: { type: string }
+        priority: { type: integer, format: int32 }
+        description: { type: string }
+        pre_condition: { type: string }
+        steps: { type: array, items: { type: string } }
+        expected_result: { type: array, items: { type: string } }
+        state:
+          type: string
+          enum: [draft, active, deprecated, history]
+          description: Optional on write; defaults to "draft" if omitted.
+        revision: { type: integer, format: int64, readOnly: true }
+        created_at: { type: string, format: date-time, readOnly: true }
+
+    TestExecution:
+      type: object
+      properties:
+        id: { type: integer, format: int64, readOnly: true }
+        uid: { type: integer, format: int64 }
+        revision:
+          type: integer
+          format: int64
+          description: Which case revision (trunk or branch-local, per context) this execution ran against.
+        content: { type: string, description: "Markdown report; screenshots inlined as base64 data URIs." }
+        executed_by: { type: string }
+        executed_at: { type: string, format: date-time, readOnly: true }
+
+    CaseFolder:
+      type: object
+      properties:
+        folder_id: { type: integer, format: int64, readOnly: true }
+        folder_name: { type: string }
+        parent_id:
+          type: integer
+          format: int64
+          description: "0 = top-level (\"product\") folder; there can be many, no single hardcoded root."
+        case_uids:
+          type: array
+          items: { type: integer, format: int64 }
+          description: Uids directly in this folder — unversioned, shared across trunk and all branches.
+
+    BatchCreateResult:
+      type: object
+      description: Response element for batch endpoints — check ok per item, not just the HTTP status.
+      properties:
+        index: { type: integer }
+        ok: { type: boolean }
+        case: { $ref: "#/components/schemas/TestCase" }
+        error: { type: string }
+
+    MergeConflict:
+      type: object
+      properties:
+        uid: { type: integer, format: int64 }
+        case_id: { type: string }
+        reason: { type: string }
+
+    MergeResult:
+      type: object
+      properties:
+        merged:
+          type: array
+          items: { type: integer, format: int64 }
+        conflicts:
+          type: array
+          items: { $ref: "#/components/schemas/MergeConflict" }
+
+    RequestAddTestCase:
+      type: object
+      required: [folder_id, version, test_cases]
+      properties:
+        folder_id: { type: integer, format: int64 }
+        version: { type: string, description: Branch name to create the cases in. }
+        test_cases:
+          type: array
+          items: { $ref: "#/components/schemas/TestCase" }
+
+    RequestUpdateTestCase:
+      type: object
+      required: [folder_id, version, test_cases]
+      properties:
+        folder_id: { type: integer, format: int64 }
+        version: { type: string }
+        test_cases:
+          type: array
+          items: { $ref: "#/components/schemas/TestCase" }
+
+    RequestDeleteTestCase:
+      type: object
+      required: [folder_id, test_cases]
+      properties:
+        folder_id: { type: integer, format: int64 }
+        test_cases:
+          type: array
+          items: { $ref: "#/components/schemas/TestCase" }
+          description: Only each item's uid is used.
+
+    RequestMigrateTestCase:
+      type: object
+      required: [source_folder_id, target_folder_id, test_cases, is_copy]
+      properties:
+        source_folder_id: { type: integer, format: int64 }
+        target_folder_id: { type: integer, format: int64 }
+        test_cases:
+          type: array
+          items: { $ref: "#/components/schemas/TestCase" }
+          description: Only each item's uid is used.
+        is_copy: { type: boolean }
+
+    RequestCreateCaseFolder:
+      type: object
+      required: [folder_name]
+      properties:
+        folder_name: { type: string }
+        parent_id:
+          type: integer
+          format: int64
+          description: "0 (default) creates a new top-level folder — this is a legal, common input, not an error."
+
+    RequestUpdateCaseFolder:
+      type: object
+      required: [folder_id, folder_name]
+      properties:
+        folder_id: { type: integer, format: int64 }
+        folder_name: { type: string }
+
+    RequestDeleteCaseFolder:
+      type: object
+      required: [folder_id]
+      properties:
+        folder_id: { type: integer, format: int64 }
+
+    RequestMigrateCaseFolder:
+      type: object
+      required: [source_folder_id, target_parent_id, is_copy]
+      properties:
+        source_folder_id: { type: integer, format: int64 }
+        target_parent_id: { type: integer, format: int64 }
+        is_copy: { type: boolean }
+
+    RequestCreateVersion:
+      type: object
+      required: [version]
+      properties:
+        version: { type: string }
+
+    RequestMergeVersion:
+      type: object
+      properties:
+        uids:
+          type: array
+          items: { type: integer, format: int64 }
+          description: Omit/empty to merge every pending uid in the branch.
+
+    RequestPullVersion:
+      type: object
+      required: [uids]
+      properties:
+        uids:
+          type: array
+          items: { type: integer, format: int64 }
+
+    CreateExecutionRequest:
+      type: object
+      properties:
+        revision: { type: integer, format: int64, description: Branch-local revision. }
+        content: { type: string }
+        executed_by: { type: string }
