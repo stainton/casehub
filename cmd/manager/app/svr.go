@@ -2,30 +2,28 @@ package app
 
 import (
 	"encoding/json"
+	"errors"
+	"io"
 	"log"
 	"net"
 	"net/http"
 	"strconv"
 
-	"github.com/stainton/casehub/cmd/manager/app/client"
+	"github.com/stainton/casehub/cmd/manager/app/basecase"
 	"github.com/stainton/casehub/cmd/manager/app/store"
 	"github.com/stainton/casehub/pkg/api"
 	"github.com/stainton/casehub/pkg/model"
 )
 
-// rootFolderID 是 designed.md 约定的根目录 ID：FolderID=1，ParentID=0，
-// FolderName="基线"，由 store/postgres 在启动时幂等创建。
-const rootFolderID = 1
-
 type HttpServer struct {
-	store  store.Store
-	client *client.Client
+	store    store.Store
+	basecase *basecase.BaseCase
 }
 
 // NewManagerMux 构建 manager 路由以及一个 "GET /" 健康检查（用于 pod 的 readinessProbe/livenessProbe）。
-func NewManagerMux(st store.Store, c *client.Client) *http.ServeMux {
+func NewManagerMux(st store.Store, bc *basecase.BaseCase) *http.ServeMux {
 	mux := http.NewServeMux()
-	s := &HttpServer{store: st, client: c}
+	s := &HttpServer{store: st, basecase: bc}
 	mux.HandleFunc("GET /", s.healthz)
 	registerManagerAPI(mux, s)
 	return mux
@@ -33,8 +31,8 @@ func NewManagerMux(st store.Store, c *client.Client) *http.ServeMux {
 
 // RegisterManagerAPI 将 manager 路由挂载到 mux 上，而不提供 "/" 处理程序，
 // 供希望在根目录提供其他内容的调用者使用，例如 cmd/manager/mock，它在根目录提供前端。
-func RegisterManagerAPI(mux *http.ServeMux, st store.Store, c *client.Client) {
-	registerManagerAPI(mux, &HttpServer{store: st, client: c})
+func RegisterManagerAPI(mux *http.ServeMux, st store.Store, bc *basecase.BaseCase) {
+	registerManagerAPI(mux, &HttpServer{store: st, basecase: bc})
 }
 
 func registerManagerAPI(mux *http.ServeMux, s *HttpServer) {
@@ -49,12 +47,24 @@ func registerManagerAPI(mux *http.ServeMux, s *HttpServer) {
 	mux.HandleFunc(api.ManageMigrateCaseFolder, s.migrateCaseFolder)
 	mux.HandleFunc(api.ManageListCaseFolders, s.listCaseFolders)
 
-	// case API 不对外暴露，这几个只读接口原样透传给它，前端只和 manager 打交道。
+	// 基线（已合并用例）上的只读接口。
 	mux.HandleFunc(api.ManageListTestCases, s.listTestCases)
 	mux.HandleFunc(api.ManageGetTestCase, s.getTestCase)
 	mux.HandleFunc(api.ManageGetTestCaseHistory, s.getTestCaseHistory)
-	mux.HandleFunc(api.ManageRecordExecution, s.recordExecution)
 	mux.HandleFunc(api.ManageListExecutions, s.listExecutions)
+
+	// 版本分支：创建/编辑用例、记录测试、合并进基线。
+	mux.HandleFunc(api.ManageCreateVersion, s.createVersion)
+	mux.HandleFunc(api.ManageListVersions, s.listVersions)
+	mux.HandleFunc(api.ManageMergeVersion, s.mergeVersion)
+	mux.HandleFunc(api.ManagePullVersion, s.pullVersion)
+	mux.HandleFunc(api.ManageListVersionTestCases, s.listVersionTestCases)
+	mux.HandleFunc(api.ManageGetVersionTestCase, s.getVersionTestCase)
+	mux.HandleFunc(api.ManageGetVersionTestCaseHistory, s.getVersionTestCaseHistory)
+	mux.HandleFunc(api.ManageDeleteVersionTestCaseHistory, s.deleteVersionTestCaseHistory)
+	mux.HandleFunc(api.ManageRecordVersionExecution, s.recordVersionExecution)
+	mux.HandleFunc(api.ManageListVersionExecutions, s.listVersionExecutions)
+	mux.HandleFunc(api.ManageDeleteVersionExecution, s.deleteVersionExecution)
 }
 
 func Serve(opts *Options, mux *http.ServeMux) error {
@@ -86,9 +96,11 @@ func (s *HttpServer) healthz(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
-// addTestCase 处理批量新增用例：为每个用例先查 case API 确认 case_id 不重复
-// （业务语义上不允许重复），不重复的才创建；创建成功的用例 UID 会被加入
-// folder_id 对应目录。单个用例失败不影响其余用例的处理。
+// addTestCase 处理批量新增用例：所有用例的创建都发生在 req.Version 这个
+// 分支里。每个用例先由基线分配 uid（NewCaseUID 靠 base_cases.case_id 的
+// UNIQUE 约束保证不重名，失败就说明 case_id 已存在），再把第一条编辑记录
+// 写进分支自己的 history 表；成功创建的用例 UID 会被加入 folder_id 对应
+// 目录（目录归属和是否已合并进基线无关）。单个用例失败不影响其余用例。
 func (s *HttpServer) addTestCase(w http.ResponseWriter, r *http.Request) {
 	var req model.RequestAddTestCase
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -97,6 +109,10 @@ func (s *HttpServer) addTestCase(w http.ResponseWriter, r *http.Request) {
 	}
 	if len(req.TestCases) == 0 {
 		http.Error(w, "test_cases is required", http.StatusBadRequest)
+		return
+	}
+	if !s.basecase.VersionExists(req.Version) {
+		http.Error(w, "Version not found: "+req.Version, http.StatusBadRequest)
 		return
 	}
 
@@ -112,31 +128,28 @@ func (s *HttpServer) addTestCase(w http.ResponseWriter, r *http.Request) {
 
 	results := make([]api.BatchCreateResult, len(req.TestCases))
 	var createdUIDs []int64
-	for i, tc := range req.TestCases {
+	for i := range req.TestCases {
+		tc := &req.TestCases[i]
 		results[i] = api.BatchCreateResult{Index: i}
 		if tc.CaseID == "" {
 			results[i].Error = "case_id is required"
 			continue
 		}
 
-		existing, err := s.client.QueryCases(r.Context(), map[string]string{"case_id": tc.CaseID})
+		uid, err := s.basecase.NewCaseUID(r.Context(), tc.CaseID)
 		if err != nil {
-			results[i].Error = "Failed to check case_id: " + err.Error()
+			results[i].Error = "Failed to allocate uid (case_id may already exist): " + err.Error()
 			continue
 		}
-		if len(existing) > 0 {
-			results[i].Error = "case_id already exists: " + tc.CaseID
-			continue
-		}
+		tc.UID = uid
 
-		created, err := s.client.UpsertCase(r.Context(), &tc)
-		if err != nil {
+		if err := s.basecase.UpsertVersionCase(r.Context(), req.Version, tc); err != nil {
 			results[i].Error = err.Error()
 			continue
 		}
 		results[i].OK = true
-		results[i].Case = created
-		createdUIDs = append(createdUIDs, created.UID)
+		results[i].Case = tc
+		createdUIDs = append(createdUIDs, uid)
 	}
 
 	if len(createdUIDs) > 0 {
@@ -149,9 +162,10 @@ func (s *HttpServer) addTestCase(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, results)
 }
 
-// updateTestCase 处理批量更新用例：直接调用 case API 的创建/编辑接口
-// （case_id 已存在时会被视为编辑，新增一个 revision），并确保用例仍然
-// 关联在 folder_id 对应的目录下。
+// updateTestCase 处理批量更新用例：同样只能发生在 req.Version 这个分支里。
+// 用例的 uid 优先用请求里带的 tc.UID；没带的话用 tc.CaseID 去基线的
+// base_cases 里查（case_id 的身份在 NewCaseUID 时就已登记，和是否合并过
+// 无关，所以哪怕这个用例是在同一个未合并分支里刚创建的，也能查到）。
 func (s *HttpServer) updateTestCase(w http.ResponseWriter, r *http.Request) {
 	var req model.RequestUpdateTestCase
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -160,6 +174,10 @@ func (s *HttpServer) updateTestCase(w http.ResponseWriter, r *http.Request) {
 	}
 	if len(req.TestCases) == 0 {
 		http.Error(w, "test_cases is required", http.StatusBadRequest)
+		return
+	}
+	if !s.basecase.VersionExists(req.Version) {
+		http.Error(w, "Version not found: "+req.Version, http.StatusBadRequest)
 		return
 	}
 
@@ -175,21 +193,32 @@ func (s *HttpServer) updateTestCase(w http.ResponseWriter, r *http.Request) {
 
 	results := make([]api.BatchCreateResult, len(req.TestCases))
 	var uids []int64
-	for i, tc := range req.TestCases {
+	for i := range req.TestCases {
+		tc := &req.TestCases[i]
 		results[i] = api.BatchCreateResult{Index: i}
 		if tc.CaseID == "" {
 			results[i].Error = "case_id is required"
 			continue
 		}
 
-		updated, err := s.client.UpsertCase(r.Context(), &tc)
-		if err != nil {
+		uid := tc.UID
+		if uid == 0 {
+			resolved, err := s.basecase.ResolveUID(r.Context(), tc.CaseID)
+			if err != nil {
+				results[i].Error = "Failed to resolve case_id: " + err.Error()
+				continue
+			}
+			uid = resolved
+		}
+		tc.UID = uid
+
+		if err := s.basecase.UpsertVersionCase(r.Context(), req.Version, tc); err != nil {
 			results[i].Error = err.Error()
 			continue
 		}
 		results[i].OK = true
-		results[i].Case = updated
-		uids = append(uids, updated.UID)
+		results[i].Case = tc
+		uids = append(uids, uid)
 	}
 
 	if len(uids) > 0 {
@@ -202,9 +231,8 @@ func (s *HttpServer) updateTestCase(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, results)
 }
 
-// deleteTestCase 将用例从 folder_id 对应目录中移除。case API 没有提供删除
-// 用例的接口（用例的编辑历史是不可变的），所以这里只是解除目录与用例的关联，
-// 用例本身在 case API 中不受影响。
+// deleteTestCase 将用例从 folder_id 对应目录中移除。用例的编辑历史是不可变
+// 的，这里只是解除目录与用例的关联，用例本身不受影响。
 func (s *HttpServer) deleteTestCase(w http.ResponseWriter, r *http.Request) {
 	var req model.RequestDeleteTestCase
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -243,8 +271,7 @@ func (s *HttpServer) deleteTestCase(w http.ResponseWriter, r *http.Request) {
 
 // migrateTestCase 将用例从 source_folder_id 迁移到 target_folder_id：
 // is_copy=false 时从原目录解除关联、加入目标目录（移动）；is_copy=true 时
-// 只加入目标目录、原目录保持不变（复制的是目录关联，用例数据在 case API 中
-// 始终只有一份）。
+// 只加入目标目录、原目录保持不变（复制的是目录关联，用例数据始终只有一份）。
 func (s *HttpServer) migrateTestCase(w http.ResponseWriter, r *http.Request) {
 	var req model.RequestMigrateTestCase
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -296,8 +323,10 @@ func (s *HttpServer) migrateTestCase(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, results)
 }
 
-// createCaseFolder 在 parent_id 下创建一个新目录；parent_id 必须是一个已存在
-// 的目录（根目录的 FolderID 固定是 1，所有新目录最终都挂在它下面）。
+// createCaseFolder 在 parent_id 下创建一个新目录。parent_id=0 是特例：不需要
+// 一个已存在的父目录，创建的是一个新的顶层（产品级）目录——目录树里可以有
+// 多个顶层目录并列存在，比如"产品A""产品B""产品C"，没有哪一个是启动时
+// 写死的根。parent_id 非零时必须引用一个已存在的目录。
 func (s *HttpServer) createCaseFolder(w http.ResponseWriter, r *http.Request) {
 	var req model.RequestCreateCaseFolder
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -309,14 +338,16 @@ func (s *HttpServer) createCaseFolder(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	parent, err := s.store.GetFolder(r.Context(), req.ParentID)
-	if err != nil {
-		http.Error(w, "Failed to load parent folder: "+err.Error(), http.StatusInternalServerError)
-		return
-	}
-	if parent == nil {
-		http.Error(w, "Parent folder not found", http.StatusBadRequest)
-		return
+	if req.ParentID != 0 {
+		parent, err := s.store.GetFolder(r.Context(), req.ParentID)
+		if err != nil {
+			http.Error(w, "Failed to load parent folder: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if parent == nil {
+			http.Error(w, "Parent folder not found", http.StatusBadRequest)
+			return
+		}
 	}
 
 	folder, err := s.store.CreateFolder(r.Context(), req.FolderName, req.ParentID)
@@ -359,16 +390,12 @@ func (s *HttpServer) updateCaseFolder(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, folder)
 }
 
-// deleteCaseFolder 删除一个目录：根目录不可删除，且目录必须先清空
-// （没有子目录、没有关联的用例），避免子目录或用例失去归属。
+// deleteCaseFolder 删除一个目录：顶层（产品级，ParentID=0）目录不可删除，
+// 且目录必须先清空（没有子目录、没有关联的用例），避免子目录或用例失去归属。
 func (s *HttpServer) deleteCaseFolder(w http.ResponseWriter, r *http.Request) {
 	var req model.RequestDeleteCaseFolder
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "Invalid JSON", http.StatusBadRequest)
-		return
-	}
-	if req.FolderID == rootFolderID {
-		http.Error(w, "Root folder cannot be deleted", http.StatusBadRequest)
 		return
 	}
 
@@ -379,6 +406,10 @@ func (s *HttpServer) deleteCaseFolder(w http.ResponseWriter, r *http.Request) {
 	}
 	if folder == nil {
 		http.Error(w, "Folder not found", http.StatusNotFound)
+		return
+	}
+	if folder.ParentID == 0 {
+		http.Error(w, "Top-level folder cannot be deleted", http.StatusBadRequest)
 		return
 	}
 	if len(folder.CaseUIDs) > 0 {
@@ -412,10 +443,6 @@ func (s *HttpServer) migrateCaseFolder(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Invalid JSON", http.StatusBadRequest)
 		return
 	}
-	if req.SourceFolderID == rootFolderID {
-		http.Error(w, "Root folder cannot be migrated", http.StatusBadRequest)
-		return
-	}
 	if req.SourceFolderID == req.TargetParentID {
 		http.Error(w, "A folder cannot become its own parent", http.StatusBadRequest)
 		return
@@ -428,6 +455,10 @@ func (s *HttpServer) migrateCaseFolder(w http.ResponseWriter, r *http.Request) {
 	}
 	if source == nil {
 		http.Error(w, "Source folder not found", http.StatusNotFound)
+		return
+	}
+	if source.ParentID == 0 {
+		http.Error(w, "Top-level folder cannot be migrated", http.StatusBadRequest)
 		return
 	}
 	target, err := s.store.GetFolder(r.Context(), req.TargetParentID)
@@ -468,7 +499,7 @@ func (s *HttpServer) listCaseFolders(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, folders)
 }
 
-// listTestCases 透传到 case API 的用例查询，和目录无关。
+// listTestCases 查询基线上已合并的最新用例，和目录无关。
 func (s *HttpServer) listTestCases(w http.ResponseWriter, r *http.Request) {
 	filters := map[string]string{}
 	for _, key := range api.QueryCaseFields {
@@ -477,7 +508,7 @@ func (s *HttpServer) listTestCases(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	cases, err := s.client.QueryCases(r.Context(), filters)
+	cases, err := s.basecase.QueryCases(r.Context(), filters)
 	if err != nil {
 		http.Error(w, "Failed to query cases: "+err.Error(), http.StatusInternalServerError)
 		return
@@ -485,7 +516,7 @@ func (s *HttpServer) listTestCases(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, cases)
 }
 
-// getTestCase 透传到 case API，返回某个用例的最新版本。
+// getTestCase 返回基线上某个用例已合并的最新版本。
 func (s *HttpServer) getTestCase(w http.ResponseWriter, r *http.Request) {
 	uid, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	if err != nil {
@@ -493,15 +524,19 @@ func (s *HttpServer) getTestCase(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	tc, err := s.client.GetCase(r.Context(), uid)
+	tc, err := s.basecase.GetCase(r.Context(), uid)
 	if err != nil {
 		http.Error(w, "Failed to load case: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if tc == nil {
+		http.Error(w, "Case not found", http.StatusNotFound)
 		return
 	}
 	writeJSON(w, http.StatusOK, tc)
 }
 
-// getTestCaseHistory 透传到 case API，返回某个用例的全部编辑历史。
+// getTestCaseHistory 返回基线上某个用例的全部已合并编辑历史。
 func (s *HttpServer) getTestCaseHistory(w http.ResponseWriter, r *http.Request) {
 	uid, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	if err != nil {
@@ -509,7 +544,7 @@ func (s *HttpServer) getTestCaseHistory(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	history, err := s.client.GetCaseHistory(r.Context(), uid)
+	history, err := s.basecase.GetCaseHistory(r.Context(), uid)
 	if err != nil {
 		http.Error(w, "Failed to load case history: "+err.Error(), http.StatusInternalServerError)
 		return
@@ -517,29 +552,7 @@ func (s *HttpServer) getTestCaseHistory(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, http.StatusOK, history)
 }
 
-// recordExecution 透传到 case API，新增一条测试执行记录，和目录无关。
-func (s *HttpServer) recordExecution(w http.ResponseWriter, r *http.Request) {
-	uid, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
-	if err != nil {
-		http.Error(w, "Invalid case id", http.StatusBadRequest)
-		return
-	}
-
-	var body api.CreateExecutionRequest
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		http.Error(w, "Invalid JSON", http.StatusBadRequest)
-		return
-	}
-
-	te, err := s.client.CreateExecution(r.Context(), uid, body)
-	if err != nil {
-		http.Error(w, "Failed to save execution: "+err.Error(), http.StatusInternalServerError)
-		return
-	}
-	writeJSON(w, http.StatusOK, te)
-}
-
-// listExecutions 透传到 case API，返回某个用例某个 revision 下的全部测试记录。
+// listExecutions 返回基线上某个用例某个已合并 revision 下的全部测试记录。
 func (s *HttpServer) listExecutions(w http.ResponseWriter, r *http.Request) {
 	uid, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	if err != nil {
@@ -552,12 +565,269 @@ func (s *HttpServer) listExecutions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	executions, err := s.client.ListExecutions(r.Context(), uid, revision)
+	executions, err := s.basecase.GetExecutions(r.Context(), uid, revision)
 	if err != nil {
 		http.Error(w, "Failed to load executions: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 	writeJSON(w, http.StatusOK, executions)
+}
+
+// createVersion 创建一个新的版本分支。
+func (s *HttpServer) createVersion(w http.ResponseWriter, r *http.Request) {
+	var req model.RequestCreateVersion
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid JSON", http.StatusBadRequest)
+		return
+	}
+	if req.Version == "" {
+		http.Error(w, "version is required", http.StatusBadRequest)
+		return
+	}
+
+	if err := s.basecase.NewVersion(r.Context(), req.Version); err != nil {
+		if errors.Is(err, basecase.ErrVersionExists) {
+			http.Error(w, "Version already exists", http.StatusConflict)
+			return
+		}
+		http.Error(w, "Failed to create version: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, req)
+}
+
+// listVersions 返回当前存在的全部版本分支名称。
+func (s *HttpServer) listVersions(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, s.basecase.ListVersions())
+}
+
+// mergeVersion 把 {name} 分支里的用例合并进基线，请求体里的 uids 为空/省略
+// 表示合并分支里全部被编辑过的用例。
+func (s *HttpServer) mergeVersion(w http.ResponseWriter, r *http.Request) {
+	version := r.PathValue("name")
+
+	var req model.RequestMergeVersion
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
+		http.Error(w, "Invalid JSON", http.StatusBadRequest)
+		return
+	}
+
+	result, err := s.basecase.MergeVersion(r.Context(), version, req.UIDs)
+	if err != nil {
+		if errors.Is(err, basecase.ErrVersionNotFound) {
+			http.Error(w, "Version not found", http.StatusNotFound)
+			return
+		}
+		http.Error(w, "Failed to merge version: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
+// pullVersion 把 uids 在基线上已合并的最新内容拉取进 {name} 分支，作为
+// 这些用例在分支里的起始本地 revision（不拷贝任何执行记录）。单个用例
+// 失败（比如基线上不存在这个 uid）不影响其余用例。
+func (s *HttpServer) pullVersion(w http.ResponseWriter, r *http.Request) {
+	version := r.PathValue("name")
+
+	var req model.RequestPullVersion
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid JSON", http.StatusBadRequest)
+		return
+	}
+	if len(req.UIDs) == 0 {
+		http.Error(w, "uids is required", http.StatusBadRequest)
+		return
+	}
+	if !s.basecase.VersionExists(version) {
+		http.Error(w, "Version not found", http.StatusNotFound)
+		return
+	}
+
+	results := make([]api.BatchCreateResult, len(req.UIDs))
+	for i, uid := range req.UIDs {
+		results[i] = api.BatchCreateResult{Index: i}
+		tc, err := s.basecase.PullFromBase(r.Context(), version, uid)
+		if err != nil {
+			results[i].Error = err.Error()
+			continue
+		}
+		results[i].OK = true
+		results[i].Case = tc
+	}
+
+	writeJSON(w, http.StatusOK, results)
+}
+
+// listVersionTestCases 返回 {name} 分支里每个被编辑过的用例的最新一条记录，
+// 不管合没合并过；?pending=true 时只返回还没合并过的（供合并选择器用）。
+func (s *HttpServer) listVersionTestCases(w http.ResponseWriter, r *http.Request) {
+	version := r.PathValue("name")
+
+	var cases []*model.TestCase
+	var err error
+	if r.URL.Query().Get("pending") == "true" {
+		cases, err = s.basecase.ListPendingVersionCases(r.Context(), version)
+	} else {
+		cases, err = s.basecase.ListVersionCases(r.Context(), version)
+	}
+	if err != nil {
+		if errors.Is(err, basecase.ErrVersionNotFound) {
+			http.Error(w, "Version not found", http.StatusNotFound)
+			return
+		}
+		http.Error(w, "Failed to list version cases: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, cases)
+}
+
+// getVersionTestCase 返回某个用例在 {name} 分支里的最新一条编辑记录。
+func (s *HttpServer) getVersionTestCase(w http.ResponseWriter, r *http.Request) {
+	version := r.PathValue("name")
+	uid, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		http.Error(w, "Invalid case id", http.StatusBadRequest)
+		return
+	}
+
+	tc, err := s.basecase.GetVersionCase(r.Context(), version, uid)
+	if err != nil {
+		if errors.Is(err, basecase.ErrVersionNotFound) {
+			http.Error(w, "Version not found", http.StatusNotFound)
+			return
+		}
+		http.Error(w, "Failed to load case: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if tc == nil {
+		http.Error(w, "Case not found in this version", http.StatusNotFound)
+		return
+	}
+	writeJSON(w, http.StatusOK, tc)
+}
+
+// getVersionTestCaseHistory 返回某个用例在 {name} 分支里的全部编辑记录。
+func (s *HttpServer) getVersionTestCaseHistory(w http.ResponseWriter, r *http.Request) {
+	version := r.PathValue("name")
+	uid, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		http.Error(w, "Invalid case id", http.StatusBadRequest)
+		return
+	}
+
+	history, err := s.basecase.GetVersionCaseHistory(r.Context(), version, uid)
+	if err != nil {
+		if errors.Is(err, basecase.ErrVersionNotFound) {
+			http.Error(w, "Version not found", http.StatusNotFound)
+			return
+		}
+		http.Error(w, "Failed to load case history: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, history)
+}
+
+// deleteVersionTestCaseHistory 删除 {name} 分支里某个用例的一条局部编辑
+// 记录，用于合并前撤销一次写错的编辑。
+func (s *HttpServer) deleteVersionTestCaseHistory(w http.ResponseWriter, r *http.Request) {
+	version := r.PathValue("name")
+	uid, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		http.Error(w, "Invalid case id", http.StatusBadRequest)
+		return
+	}
+	revision, err := strconv.ParseInt(r.PathValue("revision"), 10, 64)
+	if err != nil {
+		http.Error(w, "Invalid revision", http.StatusBadRequest)
+		return
+	}
+
+	if err := s.basecase.DeleteVersionHistory(r.Context(), version, uid, revision); err != nil {
+		if errors.Is(err, basecase.ErrVersionNotFound) {
+			http.Error(w, "Version not found", http.StatusNotFound)
+			return
+		}
+		http.Error(w, "Failed to delete history: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// recordVersionExecution 在 {name} 分支里新增一条测试执行记录，关联到
+// body.revision 这个分支内的局部 revision（不是基线 revision）。
+func (s *HttpServer) recordVersionExecution(w http.ResponseWriter, r *http.Request) {
+	version := r.PathValue("name")
+	uid, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		http.Error(w, "Invalid case id", http.StatusBadRequest)
+		return
+	}
+
+	var body api.CreateExecutionRequest
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, "Invalid JSON", http.StatusBadRequest)
+		return
+	}
+
+	te := &model.TestExecution{UID: uid, Revision: body.Revision, Content: body.Content, ExecutedBy: body.ExecutedBy}
+	if err := s.basecase.RecordVersionExecution(r.Context(), version, te); err != nil {
+		if errors.Is(err, basecase.ErrVersionNotFound) {
+			http.Error(w, "Version not found", http.StatusNotFound)
+			return
+		}
+		http.Error(w, "Failed to save execution: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, te)
+}
+
+// listVersionExecutions 返回 {name} 分支里某个用例某个局部 revision 下的
+// 全部测试记录。
+func (s *HttpServer) listVersionExecutions(w http.ResponseWriter, r *http.Request) {
+	version := r.PathValue("name")
+	uid, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		http.Error(w, "Invalid case id", http.StatusBadRequest)
+		return
+	}
+	revision, err := strconv.ParseInt(r.URL.Query().Get(api.RevisionQueryParam), 10, 64)
+	if err != nil {
+		http.Error(w, "revision is required", http.StatusBadRequest)
+		return
+	}
+
+	executions, err := s.basecase.ListVersionExecutions(r.Context(), version, uid, revision)
+	if err != nil {
+		if errors.Is(err, basecase.ErrVersionNotFound) {
+			http.Error(w, "Version not found", http.StatusNotFound)
+			return
+		}
+		http.Error(w, "Failed to load executions: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, executions)
+}
+
+// deleteVersionExecution 删除 {name} 分支里的一条执行记录。
+func (s *HttpServer) deleteVersionExecution(w http.ResponseWriter, r *http.Request) {
+	version := r.PathValue("name")
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		http.Error(w, "Invalid execution id", http.StatusBadRequest)
+		return
+	}
+
+	if err := s.basecase.DeleteVersionExecution(r.Context(), version, id); err != nil {
+		if errors.Is(err, basecase.ErrVersionNotFound) {
+			http.Error(w, "Version not found", http.StatusNotFound)
+			return
+		}
+		http.Error(w, "Failed to delete execution: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // writeJSON 写回 JSON 响应，设置 Content-Type 为 application/json，并写入状态码和响应体。

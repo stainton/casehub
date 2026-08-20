@@ -1,8 +1,8 @@
 // Package store defines the persistence abstraction that cmd/manager/app
 // depends on for organizing test cases into folders. It owns exactly one
-// table, case_folders, and never touches the tables the case API owns
-// (base_cases, case_history, test_executions) — manager reaches those only
-// through cmd/manager/app/client, over HTTP.
+// table, case_folders, and never touches the case baseline tables
+// (base_cases, case_history, test_executions) or the per-version branch
+// tables — those are owned exclusively by cmd/manager/app/basecase.
 package store
 
 import (

@@ -8,16 +8,14 @@ WORKDIR /app
 
 # Built on the host with: GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -o out/casehub-manager ./cmd/manager
 # This is cmd/manager/main.go, the frontend-less entry point for the real
-# split deployment: manager talks to the case API (hjmasha/casehub-api) over
-# HTTP and serves no static files. For the single-container image that
-# bundles the debug/demo frontend, see build/Dockerfile.manager-mock (built
-# by build/mock-release.sh).
+# deployment: manager owns Postgres directly and serves no static files. For
+# the single-container image that bundles the debug/demo frontend, see
+# build/Dockerfile.manager-mock (built by build/mock-release.sh).
 COPY out/casehub-manager /app/casehub-manager
 
 EXPOSE 8081
 
 ENTRYPOINT ["/app/casehub-manager"]
 # Defaults match cmd/manager/app/flag.go; override at `docker run` time, e.g.:
-#   docker run -p 8081:8081 casehub-manager \
-#     -db-host=postgres -db-password=... -api-base-url=http://casehub-api:8080
+#   docker run -p 8081:8081 casehub-manager -db-host=postgres -db-password=...
 CMD ["-db-host=postgres"]

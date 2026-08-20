@@ -30,9 +30,10 @@ type Store struct {
 }
 
 // New creates the database if it doesn't exist, opens a connection pool, and
-// ensures case_folders、其 ID 序列、以及根目录（FolderID=1，ParentID=0，
-// FolderName="基线"）都已就位。The caller owns the returned Store and must
-// Close it.
+// ensures case_folders 和它的 ID 序列都已就位。目录树不再预置任何一行——
+// 顶层（产品级，parent_id=0）目录和其它目录一样，都是按需通过
+// POST /api/manage/casefolder 创建的，没有哪一个是启动时特殊写死的"根"。
+// The caller owns the returned Store and must Close it.
 func New(ctx context.Context, cfg Config) (*Store, error) {
 	if err := createDatabaseIfNotExists(ctx, cfg); err != nil {
 		return nil, err
@@ -48,10 +49,6 @@ func New(ctx context.Context, cfg Config) (*Store, error) {
 		return nil, err
 	}
 	if _, err := pool.Exec(ctx, CreateFolderIDSeq); err != nil {
-		pool.Close()
-		return nil, err
-	}
-	if _, err := pool.Exec(ctx, InsertRootFolderIfNotExists); err != nil {
 		pool.Close()
 		return nil, err
 	}

@@ -4,8 +4,8 @@ const (
 	CreateDatabase = `CREATE DATABASE %s`
 
 	// case_folders 存储用例的目录组织信息。folder_id 不用 IDENTITY 列，而是
-	// 从单独的序列（从 2 开始）分配，这样 1 可以稳定留给根目录，不会和自动
-	// 分配的 ID 冲突。
+	// 从单独的序列分配——目录树不预置任何一行，顶层（产品级，parent_id=0）
+	// 目录和其它目录一样按需创建，没有哪个 ID 是特殊保留的。
 	CreateTableCaseFolders = `CREATE TABLE IF NOT EXISTS case_folders (
 		folder_id BIGINT PRIMARY KEY,
 		folder_name VARCHAR(255) NOT NULL,
@@ -13,13 +13,7 @@ const (
 		case_uids BIGINT[] NOT NULL DEFAULT '{}'
 	)`
 
-	CreateFolderIDSeq = `CREATE SEQUENCE IF NOT EXISTS case_folders_folder_id_seq START WITH 2`
-
-	// InsertRootFolderIfNotExists 幂等创建根目录：FolderID=1，ParentID=0，
-	// FolderName="基线"（designed.md 约定）。
-	InsertRootFolderIfNotExists = `INSERT INTO case_folders (folder_id, folder_name, parent_id, case_uids)
-		VALUES (1, '基线', 0, '{}')
-		ON CONFLICT (folder_id) DO NOTHING`
+	CreateFolderIDSeq = `CREATE SEQUENCE IF NOT EXISTS case_folders_folder_id_seq START WITH 1`
 
 	InsertFolder = `INSERT INTO case_folders (folder_id, folder_name, parent_id, case_uids)
 		VALUES (nextval('case_folders_folder_id_seq'), $1, $2, $3)
