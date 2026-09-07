@@ -1,0 +1,27 @@
+services:
+  app:
+    build: .
+    environment:
+      CASEHUB_STORE: postgres
+      DATABASE_URL: postgres://casehub:casehub@db:5432/casehub?sslmode=disable
+      PORT: "8080"
+    ports:
+      - "8080:8080"
+    depends_on:
+      db:
+        condition: service_healthy
+  db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: casehub
+      POSTGRES_USER: casehub
+      POSTGRES_PASSWORD: casehub
+    volumes:
+      - casehub-db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U casehub"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+volumes:
+  casehub-db:

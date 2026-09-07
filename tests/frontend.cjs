@@ -1,0 +1,66 @@
+// Run against a disposable CASEHUB_STORE=memory server, never production data.
+// PLAYWRIGHT_MODULE may point to an existing Playwright installation.
+const {chromium}=require(process.env.PLAYWRIGHT_MODULE||'playwright');
+const assert=require('node:assert/strict');
+(async()=>{
+  const browser=await chromium.launch({headless:true,args:['--no-sandbox']});
+  try {
+    const page=await browser.newPage();
+    const errors=[];
+    page.on('pageerror',e=>errors.push(e.stack||e.message));
+    await page.goto(process.env.CASEHUB_TEST_URL||'http://127.0.0.1:18081');
+    await page.locator('#revision').filter({hasText:'主线 r'}).waitFor();
+    assert.equal(await page.locator('.tree-row').filter({hasText:'◇'}).count(),0);
+    await page.locator('#create-version').click();
+    await page.locator('[name="Name"]').fill(`UI 验证 ${Date.now()}`);
+    await page.locator('#modal-form button[type="submit"]').click();
+    await page.locator('#modal').waitFor({state:'hidden'});
+    const branch=page.locator('.version').last();
+    await branch.locator('.case-row').first().click();
+    assert.equal(await branch.locator('.case-check').count(),2);
+    await page.locator('#edit-case').click();
+    await page.locator('[name="Title"]').fill('历史快照验证 <安全文本>');
+    await page.locator('#modal-form button[type="submit"]').click();
+    await page.locator('#modal').waitFor({state:'hidden'});
+    await page.locator('.history-row').first().click();
+    await page.locator('.history-snapshot').waitFor();
+    assert.match(await page.locator('.history-snapshot').innerText(),/历史快照验证 <安全文本>/);
+    assert.match(await page.locator('.changed').first().innerText(),/正确账号密码登录/);
+    await page.reload();
+    await page.locator('.history-snapshot').waitFor();
+    await page.getByRole('link',{name:'← 返回用例详情'}).click();
+    await page.locator('#open-record').click();
+    await page.locator('.toastui-editor-ww-container [contenteditable="true"]').fill('富文本记录');
+    const note='## 执行环境\n\n**加粗结果**\n\n- 检查登录\n\n[链接](https://example.com)';
+    await page.evaluate(note=>recordEditor.setMarkdown(note),note);
+    await page.getByText('Markdown',{exact:true}).click();
+    assert.equal(await page.evaluate(()=>recordEditor.isMarkdownMode()),true);
+    await page.getByText('所见即所得',{exact:true}).click();
+    await page.locator('#save-draft').click();
+    await page.locator('.record').filter({hasText:'草稿'}).waitFor();
+    assert.equal(await page.locator('.record-note strong').first().innerText(),'加粗结果');
+    await page.locator('#theme').click();
+    assert.match(await page.evaluate(()=>recordEditor.getMarkdown()),/加粗结果/);
+    await page.locator('#record-form button[type="submit"]').click();
+    await page.locator('.record').filter({hasText:'已提交'}).waitFor();
+    assert.equal(await page.locator('.record [contenteditable="true"]').count(),0);
+    const state=await page.evaluate(()=>fetch('/api/state').then(r=>r.json()));
+    const submitted=state.records.find(r=>r.Submitted);
+    assert.equal(submitted.Result,'passed');
+    assert.match(submitted.Note,/\*\*加粗结果\*\*/);
+    assert.equal(await page.evaluate(()=>recordEditor.getMarkdown()),'');
+    await page.evaluate(()=>recordEditor.setMarkdown('未保存内容'));
+    await page.locator('#drawer-close').click();
+    await page.locator('#open-record').click();
+    assert.equal(await page.evaluate(()=>recordEditor.getMarkdown()),'');
+    await page.locator('#drawer-close').click();
+    await page.getByRole('link',{name:'API 文档'}).click();
+    await page.getByRole('heading',{name:'后端 API',exact:true}).waitFor();
+    assert.equal(await page.locator('details').count(),10);
+    assert.equal(await page.locator('html').getAttribute('class'),'dark');
+    await page.locator('#submitRecord summary').click();
+    assert.match(await page.locator('#submitRecord pre').innerText(),/"Note"/);
+    assert.deepEqual(errors,[]);
+    console.log('PASS: case icons, history navigation/reload, rich text, Markdown persistence, immutable records, discard, theme, API docs');
+  } finally {await browser.close()}
+})().catch(e=>{console.error(e);process.exit(1)});

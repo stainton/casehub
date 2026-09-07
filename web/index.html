@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>CaseHub · 测试用例管理</title>
+  <link rel="stylesheet" href="/web/vendor/toastui-editor.min.css">
+  <link rel="stylesheet" href="/web/vendor/toastui-editor-dark.min.css">
+  <link rel="stylesheet" href="/web/style.css">
+  <link rel="stylesheet" href="/web/overrides.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand"><span class="mark">C</span><div><strong>CaseHub</strong><small>测试用例管理</small></div></div>
+    <div class="header-actions"><a class="header-link" href="/web/api.html">API 文档</a><span id="revision" class="revision"></span><button class="icon-button" id="theme" title="切换主题">◐</button><span class="avatar">本</span></div>
+  </header>
+  <main id="workspace">
+    <aside id="sidebar">
+      <div class="sidebar-head">
+        <div class="segmented"><button class="active" data-view="cases">用例树</button><button data-view="tasks">测试任务</button></div>
+        <button class="icon-button" id="collapse" title="折叠">‹</button>
+      </div>
+      <div id="bulk" class="bulk hidden"><span id="selected-count"></span><button data-bulk="export">导出</button><button data-bulk="task">创建任务</button></div>
+      <div id="case-view"><div id="versions" class="versions"></div><button class="create-version" id="create-version">＋ 创建测试版本</button></div>
+      <div id="task-view" class="hidden"><div id="tasks"></div></div>
+    </aside>
+    <div id="resize-left" class="resizer"></div>
+    <button id="expand" class="expand hidden">›</button>
+    <section id="search-panel" class="search-panel hidden">
+      <div class="panel-head"><strong>搜索结果</strong><button class="icon-button" id="close-search">×</button></div>
+      <div class="search-form"><input id="search-query" placeholder="标题或 ID"><select id="search-field"><option value="all">全部字段</option><option value="Preconditions">前置条件</option><option value="Steps">步骤</option><option value="Expected">预期结果</option></select><select id="search-mode"><option value="list">平铺</option><option value="tree">目录</option></select><button id="run-search">搜索</button></div>
+      <div id="search-results"></div>
+    </section>
+    <section id="content">
+      <div id="empty" class="empty"><div class="empty-icon">⌘</div><h2>选择一个文件夹或测试用例</h2><p>从左侧用例树开始浏览，也可以右键打开操作菜单。</p></div>
+      <div id="detail" class="hidden"></div>
+    </section>
+  </main>
+  <div id="context-menu" class="context-menu hidden"></div>
+  <dialog id="modal"><form id="modal-form"><div class="modal-head"><h3 id="modal-title"></h3><button type="button" class="icon-button" id="modal-close">×</button></div><div id="modal-body"></div><p class="modal-actions"><button type="button" class="secondary" id="modal-cancel">取消</button><button type="submit">保存</button></p></form></dialog>
+  <aside id="drawer" class="drawer hidden"><div class="panel-head"><div><strong>测试记录</strong><small id="drawer-case"></small></div><button class="icon-button" id="drawer-close">×</button></div><div id="record-history"></div><form id="record-form"><label>提交到版本<select id="record-version"></select></label><label>测试结果<select name="result" required><option value="passed">通过</option><option value="failed">失败</option><option value="blocked">阻塞</option></select></label><div class="record-editor-label" id="record-editor-label">执行备注 · Markdown / 富文本</div><div id="record-editor" aria-labelledby="record-editor-label"></div><div class="drawer-actions"><button type="button" class="secondary" id="save-draft">保存草稿</button><button type="submit">提交记录</button></div></form></aside>
+  <div id="toast" class="toast hidden"></div>
+  <script src="/web/vendor/toastui-editor-all.min.js"></script>
+  <script src="/web/vendor/zh-cn.js"></script>
+  <script src="/web/app.js"></script>
+</body>
+</html>
