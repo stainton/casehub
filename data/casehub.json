@@ -124,7 +124,7 @@
       "Priority": "P0",
       "CreatedBy": "本地用户",
       "UpdatedBy": "本地用户",
-      "Result": "",
+      "Result": "passed",
       "CreatedAt": "2026-09-04T09:41:18.078Z",
       "UpdatedAt": "2026-09-04T09:41:18.078Z",
       "BaseRevision": 1,
@@ -379,6 +379,18 @@
       "Submitted": true,
       "CreatedAt": "2026-09-07T10:43:37.65Z",
       "UpdatedAt": "2026-09-07T10:43:37.65Z"
+    },
+    {
+      "ID": "7d9913808a4be3ff",
+      "CaseID": "CASE-0001",
+      "VersionID": "635d151468be7eee",
+      "TaskID": "b44d26f775f3dda0",
+      "Result": "passed",
+      "Note": "",
+      "Author": "本地用户",
+      "Submitted": true,
+      "CreatedAt": "2026-09-07T11:03:32.213Z",
+      "UpdatedAt": "2026-09-07T11:03:32.213Z"
     }
   ],
   "tasks": [
