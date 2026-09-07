@@ -14,3 +14,14 @@ table{border-collapse:collapse;width:100%}th,td{text-align:left;vertical-align:t
 .drawer{width:min(640px,96vw)}.record-editor-label{margin:12px 0 8px;color:var(--muted);font-size:12px}
 #record-editor{color:var(--text)}.record-note{overflow-wrap:anywhere}.record-note .toastui-editor-contents{color:var(--text)}
 .docs-page{overflow:auto}.docs-page .topbar{position:sticky;top:0;z-index:10}.api-docs{max-width:1000px;margin:auto;padding:32px 24px 64px}.api-docs pre{overflow:auto;padding:16px;border-radius:8px;background:var(--surface2)}.api-docs summary{cursor:pointer;font-weight:600}.api-docs h2{font-size:19px;margin-top:0}.api-docs section,.api-docs details{scroll-margin-top:80px}.api-nav{display:flex;gap:20px;flex-wrap:wrap}
+.api-layout{display:grid;grid-template-columns:240px minmax(0,1000px);justify-content:center;align-items:start;max-width:1280px;margin:auto}
+.api-layout .api-docs{width:100%;min-width:0;margin:0}
+.api-layout .api-nav{position:sticky;top:60px;max-height:calc(100vh - 60px);overflow:auto;display:flex;flex-direction:column;flex-wrap:nowrap;gap:4px;padding:28px 16px;background:var(--surface);border-right:1px solid var(--line)}
+.api-nav strong{padding:0 10px 12px}.api-nav a{display:block;padding:8px 10px;border-radius:6px;text-decoration:none;color:var(--muted)}
+.api-nav a:hover,.api-nav a[aria-current]{background:var(--brand-soft);color:var(--brand)}
+.api-operation-links{border-left:1px solid var(--line);margin-left:12px;padding-left:6px}.api-operation-links small{display:block;font-size:11px;overflow-wrap:anywhere}
+.record-history-heading{display:flex;justify-content:space-between;align-items:center;color:var(--muted);margin-bottom:8px}
+.record summary{cursor:pointer;border-radius:4px}.record summary:focus-visible{outline:2px solid var(--brand);outline-offset:3px}.record summary>small{display:block;margin:4px 0}
+.record-preview{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:12px;color:var(--muted)}
+.record[open] .record-preview{display:none}.record-note{margin-top:10px}.record-history-toggle{width:100%;margin:8px 0}
+@media(max-width:700px){.api-layout{grid-template-columns:140px minmax(0,1fr)}.api-layout .api-nav{padding:20px 6px}.api-layout .api-docs{padding:20px 12px 48px}.api-nav a{padding:7px 6px;font-size:12px}.api-operation-links{margin-left:4px;padding-left:2px}.docs-page .topbar{padding:0 10px}.docs-page .brand strong{font-size:13px}.docs-page .header-actions{gap:4px}}

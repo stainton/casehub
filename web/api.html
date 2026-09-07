@@ -1,8 +1,7 @@
 <!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>CaseHub · API 文档</title><link rel="stylesheet" href="/web/style.css"><link rel="stylesheet" href="/web/overrides.css"></head>
 <body class="docs-page"><header class="topbar"><div class="brand"><span class="mark">C</span><strong>CaseHub · API 文档</strong></div><div class="header-actions"><a class="header-link" href="/">返回用例管理</a><button class="icon-button" id="theme" title="切换主题">◐</button></div></header>
-<main class="api-docs"><h1>后端 API</h1><p class="meta">当前服务器提供两个 JSON 接口。相对地址与网站同源，目前未启用身份认证。</p>
-<nav class="api-nav"><a href="#state">读取状态</a><a href="#action">执行操作</a><a href="#errors">响应与错误</a></nav>
+<div class="api-layout"><nav class="api-nav" aria-label="API 文档导航"><strong>API 文档目录</strong><a href="#state">读取状态</a><a href="#action">执行操作</a><div class="api-operation-links"><a href="#createVersion">创建测试版本<small>createVersion</small></a><a href="#createFolder">新建文件夹<small>createFolder</small></a><a href="#renameFolder">重命名空文件夹<small>renameFolder</small></a><a href="#createCase">新增用例<small>createCase</small></a><a href="#editCase">编辑用例<small>editCase</small></a><a href="#saveRecord">保存测试记录草稿<small>saveRecord</small></a><a href="#submitRecord">提交测试记录<small>submitRecord</small></a><a href="#createTask">创建测试任务<small>createTask</small></a><a href="#sync">拉取主线更新<small>sync</small></a><a href="#merge">合并到主线<small>merge</small></a></div><a href="#errors">响应与错误</a></nav><main class="api-docs"><h1>后端 API</h1><p class="meta">当前服务器提供两个 JSON 接口。相对地址与网站同源，目前未启用身份认证。</p>
 <section class="card" id="state"><h2>GET <code>/api/state</code></h2><p>读取完整状态，无请求参数。首次访问时初始化示例主线。</p><a href="/api/state" target="_blank" rel="noopener">查看当前 JSON 状态 ↗</a><pre><code>{
   "mainRevision": 1,
   "versions": [],
@@ -81,4 +80,4 @@
   &quot;VersionID&quot;: &quot;版本ID&quot;
 }</code></pre></details>
 <section class="card" id="errors"><h2>响应与错误</h2><p>成功返回 HTTP 200：</p><pre><code>{ "state": { "mainRevision": 1, "versions": [], "folders": [], "cases": [], "histories": [], "records": [], "tasks": [] }, "warnings": ["可选的提示信息"] }</code></pre><p>warnings 和 conflicts 为空时省略。客户端保存成功后应采用返回的完整 state 刷新页面。</p><table><thead><tr><th>状态码</th><th>含义</th></tr></thead><tbody><tr><td>400</td><td>无效 JSON、未知操作或业务校验失败；操作接口存储错误也返回 400。</td></tr><tr><td>409</td><td>主线文本已更新，需处理冲突。</td></tr><tr><td>500</td><td>读取状态时存储异常。</td></tr></tbody></table><pre><code>{ "error": "主线已有更新，需要先同步并处理冲突", "conflicts": ["CASE-0001"] }</code></pre><p>错误响应包含 error；操作错误还包含 conflicts（可能为 null）。编辑用例、保存或提交记录时，人工确认后可使用 Force: true；合并操作不会通过 Force 跳过冲突。保存记录时 Submitted: true 也会生成已提交记录。</p></section>
-</main><script src="/web/api.js"></script></body></html>
+</main></div><script src="/web/api.js"></script></body></html>
