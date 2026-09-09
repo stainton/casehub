@@ -1,0 +1,80 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: casehub
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: casehub
+  template:
+    metadata:
+      labels:
+        app: casehub
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+      containers:
+        - name: casehub
+          # Replace with the actual image before deploying.
+          image: example.com/casehub:placeholder
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8080
+          env:
+            - name: PORT
+              value: "8080"
+            - name: CASEHUB_DATA
+              value: /app/data/casehub.json
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: casehub-db
+                  key: DATABASE_URL
+                  optional: true
+          volumeMounts:
+            - name: data
+              mountPath: /app/data
+          readinessProbe:
+            httpGet:
+              path: /api/state
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 3
+          livenessProbe:
+            httpGet:
+              path: /
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 20
+            timeoutSeconds: 3
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: "1"
+              memory: 512Mi
+      volumes:
+        - name: data
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: casehub
+spec:
+  type: NodePort
+  selector:
+    app: casehub
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+      nodePort: 30080

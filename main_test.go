@@ -12,6 +12,22 @@ import (
 	"casehub/internal/store"
 )
 
+func TestStorageKind(t *testing.T) {
+	for _, tc := range []struct{ name, kind, url, want string }{
+		{"default local", "", "", "file"},
+		{"database service", "", "postgres://casehub:password@postgres.database.svc.cluster.local:5432/casehub", "postgres"},
+		{"explicit memory", "memory", "postgres://db/casehub", "memory"},
+		{"explicit file", "file", "postgres://db/casehub", "file"},
+		{"explicit postgres", "postgres", "postgres://db/casehub", "postgres"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := storageKind(tc.kind, tc.url); got != tc.want {
+				t.Fatalf("got %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestFrontendAssetsAndMarkdownRecord(t *testing.T) {
 	handler := routes(&api{service: core.NewService(store.NewMemory())})
 	for _, path := range []string{"/", "/web/api.html", "/web/api.js", "/web/vendor/toastui-editor-all.min.js", "/web/vendor/toastui-editor.min.css", "/web/vendor/toastui-editor-dark.min.css", "/web/vendor/zh-cn.js"} {

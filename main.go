@@ -5,6 +5,7 @@ import (
 	"embed"
 	"encoding/json"
 	"errors"
+	"flag"
 	"io"
 	"log"
 	"net/http"
@@ -68,16 +69,18 @@ func routes(a *api) http.Handler {
 	return m
 }
 func main() {
+	databaseURL := flag.String("database-url", os.Getenv("DATABASE_URL"), "PostgreSQL connection URL (defaults to DATABASE_URL)")
+	flag.Parse()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	kind := os.Getenv("CASEHUB_STORE")
+	kind := storageKind(os.Getenv("CASEHUB_STORE"), *databaseURL)
 	var repo core.Repository
 	var closeDB func()
 	switch kind {
 	case "memory":
 		repo = store.NewMemory()
 	case "postgres":
-		p, e := store.NewPostgres(ctx, os.Getenv("DATABASE_URL"))
+		p, e := store.NewPostgres(ctx, *databaseURL)
 		if e != nil {
 			log.Fatal(e)
 		}
@@ -93,6 +96,15 @@ func main() {
 	port := env("PORT", "8080")
 	log.Printf("CaseHub listening on :%s (store=%s)", port, kind)
 	log.Fatal(http.ListenAndServe(":"+port, routes(&api{service: core.NewService(repo)})))
+}
+func storageKind(kind, databaseURL string) string {
+	if kind != "" {
+		return kind
+	}
+	if databaseURL != "" {
+		return "postgres"
+	}
+	return "file"
 }
 func env(key, fallback string) string {
 	if v := os.Getenv(key); v != "" {
