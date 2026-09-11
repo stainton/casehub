@@ -45,12 +45,20 @@
   <main id="req-workspace" class="hidden">
     <aside id="req-sidebar">
       <div class="sidebar-head">
-        <strong>需求文档</strong>
+        <div class="segmented"><button class="active" data-reqview="docs">需求文档</button><button data-reqview="review">用例评审</button></div>
         <button class="icon-button" id="req-collapse" title="折叠">‹</button>
       </div>
-      <div id="req-tree" class="versions"></div>
-      <button class="create-version" id="create-req-folder">＋ 新建文件夹</button>
-      <button class="create-version" id="create-req-doc">＋ 新增需求文档</button>
+      <div id="req-doc-view">
+        <div id="req-tree" class="versions"></div>
+        <button class="create-version" id="create-req-folder">＋ 新建文件夹</button>
+        <button class="create-version" id="create-req-doc">＋ 新增需求文档</button>
+      </div>
+      <div id="req-review-view" class="hidden">
+        <div id="review-tree" class="versions"></div>
+        <button class="create-version" id="create-review-folder">＋ 新建文件夹</button>
+        <button class="create-version" id="create-review-case">＋ 新增用例</button>
+        <button class="create-version" id="import-review">⇪ 导入到版本…</button>
+      </div>
     </aside>
     <div id="req-resize-left" class="resizer"></div>
     <button id="req-expand" class="expand hidden" title="展开侧栏" aria-label="展开侧栏" aria-controls="req-sidebar">›</button>

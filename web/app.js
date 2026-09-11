@@ -1,14 +1,14 @@
 const $=s=>document.querySelector(s), $$=s=>[...document.querySelectorAll(s)];
 let state=null, focus=null, selected=new Map(), view='cases', modalSave=null, recordCase=null, recordTask='', recordEditor=null, recordViewers=[], recordHistoryLimit=3;
-let page='cases', reqFocus=null, reqEditor=null, reqSidebarWidth=null, aiDoc=null;
+let page='cases', reqFocus=null, reqEditor=null, reqSidebarWidth=null, aiDoc=null, reqPage='docs';
 const esc=s=>String(s??'').replace(/[&<>'"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]));
 const fmt=s=>s?new Date(s).toLocaleString():'—';
 const version=id=>state.versions.find(v=>v.id===id), folders=id=>state.folders.filter(f=>f.VersionID===id), cases=id=>state.cases.filter(c=>c.VersionID===id);
 async function request(path,options){let r=await fetch(path,options),x=await r.json();if(!r.ok){let e=Error(x.error||'请求失败');e.status=r.status;e.conflicts=x.conflicts;throw e}return x}
-function normalizeState(s){s=s||{};for(const key of ['versions','folders','cases','histories','records','tasks','reqFolders','reqDocs'])if(!Array.isArray(s[key]))s[key]=[];return s}
+function normalizeState(s){s=s||{};for(const key of ['versions','folders','cases','histories','records','tasks','reqFolders','reqDocs','pendingFolders','pendingCases'])if(!Array.isArray(s[key]))s[key]=[];return s}
 async function refresh(){state=normalizeState(await request('/api/state'));render();}
 async function act(type,data={},retry=false){try{let out=await request('/api/action',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({Type:type,Author:'本地用户',...data})});state=normalizeState(out.state);if(out.warnings?.length)toast(out.warnings.join('；'));render();return out}catch(e){if(e.status===409&&type==='merge'){alert(`${e.message}\n冲突用例：${(e.conflicts||[]).join(', ')}\n请拉取主线，然后打开冲突用例编辑并确认人工处理。`)}else if(e.status===409&&!retry&&confirm(`${e.message}\n冲突用例：${(e.conflicts||[]).join(', ')}\n是否以当前编辑内容作为人工解决结果？`))return act(type,{...data,Force:true},true);toast(e.message,true);throw e}}
-function render(){ $('#revision').textContent=`主线 r${state.mainRevision}`;renderVersions();renderTasks();renderFocus();if(recordTask)$('#edit-case')?.remove();updateBulk();if(location.hash)renderHistoryRoute();renderReqTree(); }
+function render(){ $('#revision').textContent=`主线 r${state.mainRevision}`;renderVersions();renderTasks();renderFocus();if(recordTask)$('#edit-case')?.remove();updateBulk();if(location.hash)renderHistoryRoute();renderReqTree();renderReviewTree(); }
 function renderVersions(){let box=$('#versions');box.innerHTML=state.versions.map(v=>`<div class="version" data-version="${v.id}"><div class="version-title"><span class="chev">⌄</span><span>${esc(v.name)}</span><span class="badge">${v.mainline?'只读主线':'测试版本'}</span>${v.mainline?'':`<span class="version-actions"><button data-sync="${v.id}">拉取主线</button><button data-merge="${v.id}">合并</button></span>`}</div><div class="version-body">${tree(v.id)}</div></div>`).join('');bindTree(box);}
 function tree(vid,onlyIDs=null,taskID=''){let fs=folders(vid),cs=cases(vid),roots=fs.filter(f=>!f.ParentID||!fs.some(x=>x.ID===f.ParentID));let branch=!version(vid).mainline;function node(f,depth){let children=fs.filter(x=>x.ParentID===f.ID),own=cs.filter(c=>c.FolderID===f.ID);let visible=!onlyIDs||own.some(c=>onlyIDs.has(c.ID))||children.some(ch=>hasHit(ch));if(!visible)return'';return `<div class="tree-row folder-row" style="padding-left:${8+depth*17}px" data-folder="${f.ID}" data-version="${vid}"><span>▾</span><span>📁</span><span class="label">${esc(f.Name)}</span></div><div>${own.filter(c=>!onlyIDs||onlyIDs.has(c.ID)).map(c=>caseRow(c,depth+1,branch&&!taskID,taskID)).join('')}${children.map(ch=>node(ch,depth+1)).join('')}</div>`}function hasHit(f){return cs.some(c=>c.FolderID===f.ID&&onlyIDs.has(c.ID))||fs.filter(x=>x.ParentID===f.ID).some(hasHit)}return roots.map(r=>node(r,0)).join('')||'<p class="meta">空版本</p>'}
 function caseRow(c,depth,branch,taskID=''){let checked=selected.get(c.VersionID)?.has(c.ID);return `<div class="tree-row ${taskID?'task-case':'case-row'}" style="padding-left:${8+depth*17}px" data-case="${c.ID}" data-c="${c.ID}" data-version="${c.VersionID}" data-v="${c.VersionID}" ${taskID?`data-task="${taskID}"`:''}>${branch?`<input class="case-check" type="checkbox" ${checked?'checked':''}>`:''}<span class="label">${esc(c.Title)}</span>${c.Dirty?'<span title="未合并">●</span>':''}${c.Result?`<span class="result ${c.Result}"></span>`:''}</div>`}
@@ -155,6 +155,26 @@ function renderReqFocus(){
     d.innerHTML=`<div class="detail-head"><div><div class="eyebrow">需求文件夹</div><h1>📁 ${esc(f.Name)}</h1></div></div><div class="card meta-grid"><span>需求文档 <b>${count}</b></span><span>子文件夹 <b>${descendants.length}</b></span><span>创建者 <b>${esc(f.CreatedBy)}</b></span><span>创建时间 <b>${fmt(f.CreatedAt)}</b></span></div>`;
     return;
   }
+  if(reqFocus.type==='reviewFolder'){
+    const f=pendingFolder(reqFocus.id);
+    if(!f){reqFocus=null;return renderReqFocus()}
+    reqEditor?.destroy();reqEditor=null;
+    const descendants=pendingDescendantFolders(f),count=state.pendingCases.filter(x=>x.FolderID===f.ID||descendants.includes(x.FolderID)).length;
+    d.innerHTML=`<div class="detail-head"><div><div class="eyebrow">待评审文件夹</div><h1>📁 ${esc(f.Name)}</h1></div></div><div class="card meta-grid"><span>用例 <b>${count}</b></span><span>子文件夹 <b>${descendants.length}</b></span><span>创建者 <b>${esc(f.CreatedBy)}</b></span><span>创建时间 <b>${fmt(f.CreatedAt)}</b></span></div>`;
+    return;
+  }
+  if(reqFocus.type==='reviewCase'){
+    const c=state.pendingCases.find(x=>x.ID===reqFocus.id);
+    if(!c){reqFocus=null;return renderReqFocus()}
+    reqEditor?.destroy();reqEditor=null;
+    const reviewLabel=({passed:'已通过',rejected:'未通过'})[c.Review]||'待评审';
+    d.innerHTML=`<div class="detail-head"><div><div class="eyebrow">${esc(c.ID)} · <span class="badge">${reviewLabel}</span></div><h1>${esc(c.Title)}</h1></div><div class="detail-actions"><button id="edit-review-case" class="secondary">编辑</button><button id="delete-review-case" class="secondary">删除</button><button id="reject-review-case" class="secondary">评审不通过</button><button id="approve-review-case">评审通过</button></div></div><div class="card field-grid"><div class="field"><h4>优先级</h4><p>${esc(c.Priority||'未设置')}</p></div><div class="field"><h4>评审状态</h4><p>${reviewLabel}</p></div><div class="field"><h4>前置条件</h4><p>${esc(c.Preconditions||'—')}</p></div><div class="field"><h4>预期结果</h4><p>${esc(c.Expected||'—')}</p></div><div class="field" style="grid-column:1/-1"><h4>执行步骤</h4><p>${esc(c.Steps||'—')}</p></div></div><div class="card meta-grid"><span>创建者 <b>${esc(c.CreatedBy)}</b></span><span>更新者 <b>${esc(c.UpdatedBy)}</b></span><span>更新时间 <b>${fmt(c.UpdatedAt)}</b></span>${c.ReviewedBy?`<span>评审人 <b>${esc(c.ReviewedBy)}</b></span><span>评审时间 <b>${fmt(c.ReviewedAt)}</b></span>`:''}</div>`;
+    $('#edit-review-case').onclick=()=>pendingCaseModal(c);
+    $('#delete-review-case').onclick=()=>{if(confirm('确定删除这条待评审用例？'))actReview('deletePendingCase',{CaseID:c.ID})};
+    $('#approve-review-case').onclick=()=>actReview('reviewPendingCase',{CaseID:c.ID,Review:'passed'});
+    $('#reject-review-case').onclick=()=>actReview('reviewPendingCase',{CaseID:c.ID,Review:'rejected'});
+    return;
+  }
   const doc=state.reqDocs.find(x=>x.ID===reqFocus.id);
   if(!doc){reqFocus=null;return renderReqFocus()}
   d.innerHTML=`<div class="detail-head"><div><div class="eyebrow">${esc(doc.ID)}</div><h1>${esc(doc.Title)}</h1></div><div class="detail-actions"><button type="button" id="req-ai-design" class="secondary">AI 设计</button><button type="button" id="save-req-doc">保存</button></div></div><div class="card meta-grid"><span>创建者 <b>${esc(doc.CreatedBy)}</b></span><span>创建时间 <b>${fmt(doc.CreatedAt)}</b></span><span>更新者 <b>${esc(doc.UpdatedBy)}</b></span><span>更新时间 <b>${fmt(doc.UpdatedAt)}</b></span></div><div class="card"><div id="req-editor"></div></div>`;
@@ -184,10 +204,61 @@ function renameReqDocModal(doc){showModal('重命名需求文档',`<label>标题
 function openAiDrawer(doc){aiDoc=doc;$('#ai-drawer-doc').textContent=`${doc.ID} · ${doc.Title}`;$('#ai-drawer').classList.remove('hidden')}
 $('#ai-drawer-close').onclick=()=>$('#ai-drawer').classList.add('hidden');
 
+// ---- Pending case review (用例评审) ----
+function actReview(type,data={}){return act(type,data).then(()=>renderReqFocus())}
+const pendingFolder=id=>state.pendingFolders.find(f=>f.ID===id);
+const pendingChildren=id=>state.pendingFolders.filter(f=>f.ParentID===id);
+const pendingCasesIn=id=>state.pendingCases.filter(c=>c.FolderID===id);
+function pendingRoots(){return state.pendingFolders.filter(f=>!f.ParentID||!state.pendingFolders.some(x=>x.ID===f.ParentID))}
+function pendingDescendantFolders(f){let out=[];function walk(id){pendingChildren(id).forEach(x=>{out.push(x.ID);walk(x.ID)})}walk(f.ID);return out}
+function reviewBadge(c){return c.Review==='passed'?'<span class="result passed" title="评审通过"></span>':c.Review==='rejected'?'<span class="result failed" title="评审不通过"></span>':''}
+function reviewCaseRow(c,depth){return `<div class="tree-row case-row" style="padding-left:${8+depth*17}px" data-review-case="${c.ID}"><span class="label">${esc(c.Title)}</span>${reviewBadge(c)}</div>`}
+function reviewTreeHTML(){
+  function node(f,depth){
+    let children=pendingChildren(f.ID),own=pendingCasesIn(f.ID);
+    return `<div class="tree-row folder-row" style="padding-left:${8+depth*17}px" data-review-folder="${f.ID}"><span>▾</span><span>📁</span><span class="label">${esc(f.Name)}</span></div><div>${own.map(c=>reviewCaseRow(c,depth+1)).join('')}${children.map(ch=>node(ch,depth+1)).join('')}</div>`;
+  }
+  return pendingRoots().map(r=>node(r,0)).join('')||'<p class="meta">暂无待评审用例</p>';
+}
+function renderReviewTree(){const box=$('#review-tree');box.innerHTML=reviewTreeHTML();bindReviewTree(box)}
+function bindReviewTree(root){
+  root.querySelectorAll('[data-review-folder]').forEach(e=>{e.onclick=()=>setReqFocus({type:'reviewFolder',id:e.dataset.reviewFolder});e.oncontextmenu=x=>menu(x,reviewFolderMenu(e.dataset.reviewFolder))});
+  root.querySelectorAll('[data-review-case]').forEach(e=>{e.onclick=()=>setReqFocus({type:'reviewCase',id:e.dataset.reviewCase});e.oncontextmenu=x=>menu(x,reviewCaseMenu(e.dataset.reviewCase))});
+}
+function currentReviewFolderTarget(){
+  if(reqFocus?.type==='reviewFolder')return reqFocus.id;
+  if(reqFocus?.type==='reviewCase'){const c=state.pendingCases.find(x=>x.ID===reqFocus.id);if(c)return c.FolderID}
+  return pendingRoots()[0]?.ID||'';
+}
+function reviewFolderMenu(id){return [['查看详情',()=>setReqFocus({type:'reviewFolder',id})],['新建文件夹',()=>pendingFolderModal(id)],['新增用例',()=>pendingCaseModal(null,id)],['重命名空文件夹',()=>renamePendingFolderModal(id)]]}
+function reviewCaseMenu(id){return [['查看详情',()=>setReqFocus({type:'reviewCase',id})],['编辑',()=>pendingCaseModal(state.pendingCases.find(x=>x.ID===id))],['删除',()=>{if(confirm('确定删除这条待评审用例？'))actReview('deletePendingCase',{CaseID:id})}],['评审通过',()=>actReview('reviewPendingCase',{CaseID:id,Review:'passed'})],['评审不通过',()=>actReview('reviewPendingCase',{CaseID:id,Review:'rejected'})]]}
+function pendingFolderModal(parent){showModal('新建文件夹',`<label>文件夹名称<input name="Name" required></label>`,x=>actReview('createPendingFolder',{...x,ParentID:parent}))}
+function renamePendingFolderModal(id){const f=pendingFolder(id);showModal('重命名文件夹',`<label>文件夹名称<input name="Name" required value="${esc(f.Name)}"></label>`,x=>actReview('renamePendingFolder',{...x,FolderID:id}))}
+function pendingCaseModal(c,folderId){folderId=c?.FolderID||folderId;showModal(c?'编辑待评审用例':'新增待评审用例',`<label>标题<input name="Title" required value="${esc(c?.Title||'')}"></label><label>优先级<select name="Priority">${['P0','P1','P2','P3'].map(x=>`<option ${c?.Priority===x?'selected':''}>${x}</option>`).join('')}</select></label><label>前置条件<textarea name="Preconditions">${esc(c?.Preconditions||'')}</textarea></label><label>执行步骤<textarea name="Steps">${esc(c?.Steps||'')}</textarea></label><label>预期结果<textarea name="Expected">${esc(c?.Expected||'')}</textarea></label>`,x=>actReview(c?'editPendingCase':'createPendingCase',{...x,FolderID:folderId,CaseID:c?.ID||''}))}
+function importReviewModal(){
+  if(!state.pendingCases.length)return toast('待评审区没有用例',true);
+  const unreviewed=state.pendingCases.filter(c=>c.Review!=='passed');
+  if(unreviewed.length)return toast(`还有 ${unreviewed.length} 条用例未通过评审，无法导入`,true);
+  const branches=state.versions.filter(v=>!v.mainline);
+  if(!branches.length)return toast('请先创建一个测试版本作为导入目标',true);
+  showModal('导入到版本',`<label>目标版本<select name="VersionID">${branches.map(v=>`<option value="${v.id}">${esc(v.name)}</option>`).join('')}</select></label><p class="meta">将导入 ${state.pendingCases.length} 条已评审通过的用例，并保持目录结构。</p>`,x=>act('importPendingCases',x).then(()=>{reqFocus=null;renderReqFocus();toast('已导入到目标版本')}))
+}
+$('#create-review-folder').onclick=()=>pendingFolderModal(currentReviewFolderTarget());
+$('#create-review-case').onclick=()=>pendingCaseModal(null,currentReviewFolderTarget());
+$('#import-review').onclick=importReviewModal;
+$$('#req-sidebar [data-reqview]').forEach(b=>b.onclick=()=>{
+  $$('#req-sidebar [data-reqview]').forEach(x=>x.classList.toggle('active',x===b));
+  reqPage=b.dataset.reqview;
+  $('#req-doc-view').classList.toggle('hidden',reqPage!=='docs');
+  $('#req-review-view').classList.toggle('hidden',reqPage!=='review');
+  updateReqEmptyHint();
+});
+
 function updateReqEmptyHint(){
-  const collapsed=$('#req-sidebar').classList.contains('hidden');
-  $('#req-empty-title').textContent=collapsed?'展开侧栏，继续浏览':'从一个需求文档开始';
-  $('#req-empty-hint').textContent=collapsed?'还没有选择要查看的内容。展开侧栏后，选择文件夹或需求文档即可查看详情。':'选择左侧的文件夹或需求文档，即可在这里查看详情。';
+  const collapsed=$('#req-sidebar').classList.contains('hidden'),review=reqPage==='review';
+  $('#req-empty-title').textContent=collapsed?'展开侧栏，继续浏览':review?'从一条待评审用例开始':'从一个需求文档开始';
+  $('#req-empty-hint').textContent=collapsed?'还没有选择要查看的内容。展开侧栏后，选择文件夹或需求文档即可查看详情。':review?'选择左侧的文件夹或待评审用例，即可在这里查看详情。':'选择左侧的文件夹或需求文档，即可在这里查看详情。';
+  $('#req-empty-expand').textContent=review?'展开用例评审树':'展开需求树';
   $('#req-empty-expand').classList.toggle('hidden',!collapsed);
 }
 function setReqSidebarCollapsed(collapsed){

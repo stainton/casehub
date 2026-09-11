@@ -72,16 +72,31 @@ type ReqDoc struct {
 	CreatedAt, UpdatedAt time.Time
 }
 
+type PendingFolder struct {
+	ID, ParentID, Name, CreatedBy string
+	CreatedAt                     time.Time
+}
+
+type PendingCase struct {
+	ID, FolderID                                    string
+	Title, Preconditions, Steps, Expected, Priority string
+	Review                                          string
+	CreatedBy, UpdatedBy, ReviewedBy                string
+	CreatedAt, UpdatedAt, ReviewedAt                time.Time
+}
+
 type State struct {
-	MainRevision int64       `json:"mainRevision"`
-	Versions     []Version   `json:"versions"`
-	Folders      []Folder    `json:"folders"`
-	Cases        []TestCase  `json:"cases"`
-	Histories    []History   `json:"histories"`
-	Records      []Record    `json:"records"`
-	Tasks        []Task      `json:"tasks"`
-	ReqFolders   []ReqFolder `json:"reqFolders"`
-	ReqDocs      []ReqDoc    `json:"reqDocs"`
+	MainRevision   int64           `json:"mainRevision"`
+	Versions       []Version       `json:"versions"`
+	Folders        []Folder        `json:"folders"`
+	Cases          []TestCase      `json:"cases"`
+	Histories      []History       `json:"histories"`
+	Records        []Record        `json:"records"`
+	Tasks          []Task          `json:"tasks"`
+	ReqFolders     []ReqFolder     `json:"reqFolders"`
+	ReqDocs        []ReqDoc        `json:"reqDocs"`
+	PendingFolders []PendingFolder `json:"pendingFolders"`
+	PendingCases   []PendingCase   `json:"pendingCases"`
 }
 
 type Action struct {
@@ -91,6 +106,7 @@ type Action struct {
 	CaseIDs                                             []string
 	Submitted, Force                                    bool
 	DocID, Content                                      string
+	Review                                              string
 }
 
 type Result struct {
@@ -157,6 +173,22 @@ func reqDocAt(s *State, id string) (*ReqDoc, int) {
 	}
 	return nil, -1
 }
+func pendingFolderAt(s *State, id string) (*PendingFolder, int) {
+	for i := range s.PendingFolders {
+		if s.PendingFolders[i].ID == id {
+			return &s.PendingFolders[i], i
+		}
+	}
+	return nil, -1
+}
+func pendingCaseAt(s *State, id string) (*PendingCase, int) {
+	for i := range s.PendingCases {
+		if s.PendingCases[i].ID == id {
+			return &s.PendingCases[i], i
+		}
+	}
+	return nil, -1
+}
 
 func Seed() State {
 	t := now()
@@ -179,6 +211,7 @@ func Seed() State {
 	s.ReqDocs = []ReqDoc{
 		{ID: "REQ-0001", FolderID: "req-root", Title: "登录模块需求说明", Content: "## 背景\n\n用户需要通过账号密码登录系统。\n\n## 需求描述\n\n- 支持账号密码登录\n- 登录失败提示错误信息\n", CreatedBy: "system", UpdatedBy: "system", CreatedAt: t, UpdatedAt: t},
 	}
+	s.PendingFolders = []PendingFolder{{ID: "pending-root", Name: "待评审用例", CreatedBy: "system", CreatedAt: t}}
 	return s
 }
 
@@ -209,6 +242,12 @@ func normalizeState(state *State) {
 	}
 	if state.ReqDocs == nil {
 		state.ReqDocs = []ReqDoc{}
+	}
+	if state.PendingFolders == nil {
+		state.PendingFolders = []PendingFolder{}
+	}
+	if state.PendingCases == nil {
+		state.PendingCases = []PendingCase{}
 	}
 }
 
@@ -262,6 +301,20 @@ func (s *Service) Apply(ctx context.Context, a Action) (Result, error) {
 		err = createReqDoc(&st, a)
 	case "editReqDoc":
 		err = editReqDoc(&st, a)
+	case "createPendingFolder":
+		err = createPendingFolder(&st, a)
+	case "renamePendingFolder":
+		err = renamePendingFolder(&st, a)
+	case "createPendingCase":
+		err = createPendingCase(&st, a)
+	case "editPendingCase":
+		err = editPendingCase(&st, a)
+	case "deletePendingCase":
+		err = deletePendingCase(&st, a)
+	case "reviewPendingCase":
+		err = reviewPendingCase(&st, a)
+	case "importPendingCases":
+		err = importPendingCases(&st, a)
 	case "sync":
 		var conflicts []string
 		conflicts, err = syncVersion(&st, a)
@@ -628,5 +681,185 @@ func editReqDoc(s *State, a Action) error {
 	d.Content = a.Content
 	d.UpdatedBy = a.Author
 	d.UpdatedAt = now()
+	return nil
+}
+func createPendingFolder(s *State, a Action) error {
+	if strings.TrimSpace(a.Name) == "" {
+		return errors.New("文件夹名称不能为空")
+	}
+	if a.ParentID != "" {
+		if f, _ := pendingFolderAt(s, a.ParentID); f == nil {
+			return errors.New("父文件夹不存在")
+		}
+	}
+	s.PendingFolders = append(s.PendingFolders, PendingFolder{ID: ID(), ParentID: a.ParentID, Name: strings.TrimSpace(a.Name), CreatedBy: a.Author, CreatedAt: now()})
+	return nil
+}
+func renamePendingFolder(s *State, a Action) error {
+	f, _ := pendingFolderAt(s, a.FolderID)
+	if f == nil {
+		return errors.New("文件夹不存在")
+	}
+	for _, x := range s.PendingFolders {
+		if x.ParentID == f.ID {
+			return errors.New("只能重命名空文件夹")
+		}
+	}
+	for _, x := range s.PendingCases {
+		if x.FolderID == f.ID {
+			return errors.New("只能重命名空文件夹")
+		}
+	}
+	if strings.TrimSpace(a.Name) == "" {
+		return errors.New("文件夹名称不能为空")
+	}
+	f.Name = strings.TrimSpace(a.Name)
+	return nil
+}
+func createPendingCase(s *State, a Action) error {
+	if f, _ := pendingFolderAt(s, a.FolderID); f == nil {
+		return errors.New("文件夹不存在")
+	}
+	if strings.TrimSpace(a.Title) == "" {
+		return errors.New("用例标题不能为空")
+	}
+	t := now()
+	c := PendingCase{ID: "CASE-" + strings.ToUpper(ID()[:6]), FolderID: a.FolderID, Title: strings.TrimSpace(a.Title), Preconditions: a.Preconditions, Steps: a.Steps, Expected: a.Expected, Priority: a.Priority, CreatedBy: a.Author, UpdatedBy: a.Author, CreatedAt: t, UpdatedAt: t}
+	s.PendingCases = append(s.PendingCases, c)
+	return nil
+}
+func editPendingCase(s *State, a Action) error {
+	c, _ := pendingCaseAt(s, a.CaseID)
+	if c == nil {
+		return errors.New("用例不存在")
+	}
+	title := strings.TrimSpace(a.Title)
+	if title == "" {
+		return errors.New("用例标题不能为空")
+	}
+	c.Title = title
+	c.Preconditions = a.Preconditions
+	c.Steps = a.Steps
+	c.Expected = a.Expected
+	c.Priority = a.Priority
+	c.UpdatedBy = a.Author
+	c.UpdatedAt = now()
+	c.Review = ""
+	c.ReviewedBy = ""
+	c.ReviewedAt = time.Time{}
+	return nil
+}
+func deletePendingCase(s *State, a Action) error {
+	c, i := pendingCaseAt(s, a.CaseID)
+	if c == nil {
+		return errors.New("用例不存在")
+	}
+	s.PendingCases = append(s.PendingCases[:i], s.PendingCases[i+1:]...)
+	return nil
+}
+func reviewPendingCase(s *State, a Action) error {
+	c, _ := pendingCaseAt(s, a.CaseID)
+	if c == nil {
+		return errors.New("用例不存在")
+	}
+	if a.Review != "passed" && a.Review != "rejected" {
+		return errors.New("评审结果必须是通过或不通过")
+	}
+	c.Review = a.Review
+	c.ReviewedBy = a.Author
+	c.ReviewedAt = now()
+	return nil
+}
+
+// importPendingCases copies the entire pending-review tree into a branch
+// version once every pending case has passed review, preserving the folder
+// structure. It is all-or-nothing: any name conflict with the target
+// version aborts before anything is written, and success clears the
+// pending-review area since it has served its purpose.
+func importPendingCases(s *State, a Action) error {
+	v, err := requireBranch(s, a.VersionID)
+	if err != nil {
+		return err
+	}
+	if len(s.PendingCases) == 0 {
+		return errors.New("没有待导入的用例")
+	}
+	var unreviewed []string
+	for _, c := range s.PendingCases {
+		if c.Review != "passed" {
+			unreviewed = append(unreviewed, c.Title)
+		}
+	}
+	if len(unreviewed) > 0 {
+		return fmt.Errorf("存在未通过评审的用例：%s", strings.Join(unreviewed, "、"))
+	}
+
+	targetFolderID := map[string]string{} // pending folder ID -> resolved target folder ID
+	targetFolderID["pending-root"] = "root"
+	newFolders := []Folder{}
+	var conflicts []string
+	var resolve func(pf PendingFolder) string
+	resolve = func(pf PendingFolder) string {
+		if id, ok := targetFolderID[pf.ID]; ok {
+			return id
+		}
+		parentID := "root"
+		if pf.ParentID != "" {
+			if parent, _ := pendingFolderAt(s, pf.ParentID); parent != nil {
+				parentID = resolve(*parent)
+			}
+		}
+		for _, f := range s.Folders {
+			if f.VersionID == v.ID && f.ParentID == parentID && f.Name == pf.Name {
+				targetFolderID[pf.ID] = f.ID
+				return f.ID
+			}
+		}
+		for _, nf := range newFolders {
+			if nf.ParentID == parentID && nf.Name == pf.Name {
+				targetFolderID[pf.ID] = nf.ID
+				return nf.ID
+			}
+		}
+		nf := Folder{ID: ID(), VersionID: v.ID, ParentID: parentID, Name: pf.Name, CreatedBy: a.Author, CreatedAt: now()}
+		newFolders = append(newFolders, nf)
+		targetFolderID[pf.ID] = nf.ID
+		return nf.ID
+	}
+	for _, pf := range s.PendingFolders {
+		if pf.ID == "pending-root" {
+			continue
+		}
+		resolve(pf)
+	}
+	for _, pc := range s.PendingCases {
+		folderID := "root"
+		if pf, _ := pendingFolderAt(s, pc.FolderID); pf != nil {
+			folderID = resolve(*pf)
+		}
+		for _, c := range s.Cases {
+			if c.VersionID == v.ID && c.FolderID == folderID && c.Title == pc.Title {
+				conflicts = append(conflicts, pc.Title)
+			}
+		}
+	}
+	if len(conflicts) > 0 {
+		return fmt.Errorf("目标版本已存在同名用例，导入已取消：%s", strings.Join(conflicts, "、"))
+	}
+
+	s.Folders = append(s.Folders, newFolders...)
+	t := now()
+	for _, pc := range s.PendingCases {
+		folderID, _ := targetFolderID[pc.FolderID]
+		if folderID == "" {
+			folderID = "root"
+		}
+		c := TestCase{ID: pc.ID, VersionID: v.ID, FolderID: folderID, Title: pc.Title, Preconditions: pc.Preconditions, Steps: pc.Steps, Expected: pc.Expected, Priority: pc.Priority, CreatedBy: a.Author, UpdatedBy: a.Author, CreatedAt: t, UpdatedAt: t, Dirty: true}
+		s.Cases = append(s.Cases, c)
+		after := c
+		s.Histories = append(s.Histories, History{ID: ID(), CaseID: c.ID, VersionID: v.ID, SourceVersionID: v.ID, Action: "create", Author: a.Author, After: &after, CreatedAt: t})
+	}
+	s.PendingFolders = []PendingFolder{{ID: "pending-root", Name: "待评审用例", CreatedBy: "system", CreatedAt: t}}
+	s.PendingCases = []PendingCase{}
 	return nil
 }

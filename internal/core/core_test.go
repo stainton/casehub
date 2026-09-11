@@ -144,3 +144,103 @@ func TestRequirementDocWorkflow(t *testing.T) {
 		t.Fatal("createReqDoc should fail for missing folder")
 	}
 }
+
+func TestPendingCaseReviewAndImport(t *testing.T) {
+	svc := core.NewService(store.NewMemory())
+	state := apply(t, svc, core.Action{Type: "createPendingFolder", ParentID: "pending-root", Name: "支付", Author: "alice"})
+	var folderID string
+	for _, f := range state.PendingFolders {
+		if f.Name == "支付" {
+			folderID = f.ID
+		}
+	}
+	if folderID == "" {
+		t.Fatal("pending folder was not created")
+	}
+	state = apply(t, svc, core.Action{Type: "createPendingCase", FolderID: folderID, Title: "退款成功", Priority: "P1", Author: "alice"})
+	var pending core.PendingCase
+	for _, c := range state.PendingCases {
+		if c.Title == "退款成功" {
+			pending = c
+		}
+	}
+	if pending.ID == "" {
+		t.Fatal("pending case was not created")
+	}
+
+	state = apply(t, svc, core.Action{Type: "reviewPendingCase", CaseID: pending.ID, Review: "passed", Author: "bob"})
+	for _, c := range state.PendingCases {
+		if c.ID == pending.ID && c.Review != "passed" {
+			t.Fatalf("review was not recorded: %+v", c)
+		}
+	}
+	state = apply(t, svc, core.Action{Type: "editPendingCase", CaseID: pending.ID, Title: "退款成功（重审）", Priority: "P1", Author: "alice"})
+	for _, c := range state.PendingCases {
+		if c.ID == pending.ID && c.Review != "" {
+			t.Fatal("editing a pending case must reset its review status")
+		}
+	}
+	apply(t, svc, core.Action{Type: "reviewPendingCase", CaseID: pending.ID, Review: "passed", Author: "bob"})
+
+	if _, err := svc.Apply(context.Background(), core.Action{Type: "importPendingCases", VersionID: "main"}); err == nil {
+		t.Fatal("importing into mainline must fail")
+	}
+
+	branch := branchID(t, apply(t, svc, core.Action{Type: "createVersion", Name: "迭代 A", Author: "alice"}), "迭代 A")
+	state = apply(t, svc, core.Action{Type: "createFolder", VersionID: branch, ParentID: "root", Name: "支付", Author: "alice"})
+	var payFolderID string
+	for _, f := range state.Folders {
+		if f.VersionID == branch && f.Name == "支付" {
+			payFolderID = f.ID
+		}
+	}
+	apply(t, svc, core.Action{Type: "createCase", VersionID: branch, FolderID: payFolderID, Title: "退款成功（重审）", Author: "alice"})
+	if _, err := svc.Apply(context.Background(), core.Action{Type: "importPendingCases", VersionID: branch}); err == nil {
+		t.Fatal("importing a case that already exists by title in the resolved folder must fail")
+	}
+	afterConflict, err := svc.State(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(afterConflict.PendingCases) != 1 {
+		t.Fatal("failed import must not touch the pending-review area")
+	}
+
+	state = apply(t, svc, core.Action{Type: "deletePendingCase", CaseID: pending.ID, Author: "alice"})
+	if len(state.PendingCases) != 0 {
+		t.Fatal("pending case was not deleted")
+	}
+	state = apply(t, svc, core.Action{Type: "createPendingCase", FolderID: folderID, Title: "退款失败提示", Priority: "P2", Author: "alice"})
+	var second core.PendingCase
+	for _, c := range state.PendingCases {
+		if c.Title == "退款失败提示" {
+			second = c
+		}
+	}
+	if _, err := svc.Apply(context.Background(), core.Action{Type: "importPendingCases", VersionID: branch}); err == nil {
+		t.Fatal("importing before review must fail")
+	}
+	apply(t, svc, core.Action{Type: "reviewPendingCase", CaseID: second.ID, Review: "passed", Author: "bob"})
+	state = apply(t, svc, core.Action{Type: "importPendingCases", VersionID: branch, Author: "bob"})
+	if len(state.PendingFolders) != 1 || len(state.PendingCases) != 0 {
+		t.Fatalf("pending-review area must be cleared after import: %+v", state)
+	}
+	found := false
+	for _, c := range state.Cases {
+		if c.VersionID == branch && c.Title == "退款失败提示" {
+			found = true
+			var inFolder *core.Folder
+			for i, f := range state.Folders {
+				if f.VersionID == branch && f.ID == c.FolderID {
+					inFolder = &state.Folders[i]
+				}
+			}
+			if inFolder == nil || inFolder.Name != "支付" {
+				t.Fatalf("imported case landed in wrong folder: %+v", c)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("imported case missing from target version")
+	}
+}
