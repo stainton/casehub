@@ -108,3 +108,39 @@ func TestEmptyCollectionsAreJSONArrays(t *testing.T) {
 		}
 	}
 }
+
+func TestRequirementDocWorkflow(t *testing.T) {
+	svc := core.NewService(store.NewMemory())
+	state := apply(t, svc, core.Action{Type: "createReqFolder", ParentID: "req-root", Name: "支付模块", Author: "alice"})
+	var folderID string
+	for _, f := range state.ReqFolders {
+		if f.Name == "支付模块" {
+			folderID = f.ID
+		}
+	}
+	if folderID == "" {
+		t.Fatal("requirement folder was not created")
+	}
+	state = apply(t, svc, core.Action{Type: "createReqDoc", FolderID: folderID, Title: "支付流程需求", Content: "初稿", Author: "alice"})
+	var doc core.ReqDoc
+	for _, d := range state.ReqDocs {
+		if d.Title == "支付流程需求" {
+			doc = d
+		}
+	}
+	if doc.ID == "" {
+		t.Fatal("requirement doc was not created")
+	}
+	state = apply(t, svc, core.Action{Type: "editReqDoc", DocID: doc.ID, Title: "支付流程需求 v2", Content: "## 更新\n\n补充退款流程", Author: "bob"})
+	for _, d := range state.ReqDocs {
+		if d.ID == doc.ID {
+			doc = d
+		}
+	}
+	if doc.Title != "支付流程需求 v2" || doc.Content != "## 更新\n\n补充退款流程" || doc.UpdatedBy != "bob" {
+		t.Fatalf("requirement doc was not updated: %+v", doc)
+	}
+	if _, err := svc.Apply(context.Background(), core.Action{Type: "createReqDoc", FolderID: "missing-folder", Title: "x"}); err == nil {
+		t.Fatal("createReqDoc should fail for missing folder")
+	}
+}

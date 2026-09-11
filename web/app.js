@@ -1,13 +1,14 @@
 const $=s=>document.querySelector(s), $$=s=>[...document.querySelectorAll(s)];
 let state=null, focus=null, selected=new Map(), view='cases', modalSave=null, recordCase=null, recordTask='', recordEditor=null, recordViewers=[], recordHistoryLimit=3;
+let page='cases', reqFocus=null, reqEditor=null, reqSidebarWidth=null, aiDoc=null;
 const esc=s=>String(s??'').replace(/[&<>'"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]));
 const fmt=s=>s?new Date(s).toLocaleString():'—';
 const version=id=>state.versions.find(v=>v.id===id), folders=id=>state.folders.filter(f=>f.VersionID===id), cases=id=>state.cases.filter(c=>c.VersionID===id);
 async function request(path,options){let r=await fetch(path,options),x=await r.json();if(!r.ok){let e=Error(x.error||'请求失败');e.status=r.status;e.conflicts=x.conflicts;throw e}return x}
-function normalizeState(s){s=s||{};for(const key of ['versions','folders','cases','histories','records','tasks'])if(!Array.isArray(s[key]))s[key]=[];return s}
+function normalizeState(s){s=s||{};for(const key of ['versions','folders','cases','histories','records','tasks','reqFolders','reqDocs'])if(!Array.isArray(s[key]))s[key]=[];return s}
 async function refresh(){state=normalizeState(await request('/api/state'));render();}
 async function act(type,data={},retry=false){try{let out=await request('/api/action',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({Type:type,Author:'本地用户',...data})});state=normalizeState(out.state);if(out.warnings?.length)toast(out.warnings.join('；'));render();return out}catch(e){if(e.status===409&&type==='merge'){alert(`${e.message}\n冲突用例：${(e.conflicts||[]).join(', ')}\n请拉取主线，然后打开冲突用例编辑并确认人工处理。`)}else if(e.status===409&&!retry&&confirm(`${e.message}\n冲突用例：${(e.conflicts||[]).join(', ')}\n是否以当前编辑内容作为人工解决结果？`))return act(type,{...data,Force:true},true);toast(e.message,true);throw e}}
-function render(){ $('#revision').textContent=`主线 r${state.mainRevision}`;renderVersions();renderTasks();renderFocus();if(recordTask)$('#edit-case')?.remove();updateBulk();if(location.hash)renderHistoryRoute(); }
+function render(){ $('#revision').textContent=`主线 r${state.mainRevision}`;renderVersions();renderTasks();renderFocus();if(recordTask)$('#edit-case')?.remove();updateBulk();if(location.hash)renderHistoryRoute();renderReqTree(); }
 function renderVersions(){let box=$('#versions');box.innerHTML=state.versions.map(v=>`<div class="version" data-version="${v.id}"><div class="version-title"><span class="chev">⌄</span><span>${esc(v.name)}</span><span class="badge">${v.mainline?'只读主线':'测试版本'}</span>${v.mainline?'':`<span class="version-actions"><button data-sync="${v.id}">拉取主线</button><button data-merge="${v.id}">合并</button></span>`}</div><div class="version-body">${tree(v.id)}</div></div>`).join('');bindTree(box);}
 function tree(vid,onlyIDs=null,taskID=''){let fs=folders(vid),cs=cases(vid),roots=fs.filter(f=>!f.ParentID||!fs.some(x=>x.ID===f.ParentID));let branch=!version(vid).mainline;function node(f,depth){let children=fs.filter(x=>x.ParentID===f.ID),own=cs.filter(c=>c.FolderID===f.ID);let visible=!onlyIDs||own.some(c=>onlyIDs.has(c.ID))||children.some(ch=>hasHit(ch));if(!visible)return'';return `<div class="tree-row folder-row" style="padding-left:${8+depth*17}px" data-folder="${f.ID}" data-version="${vid}"><span>▾</span><span>📁</span><span class="label">${esc(f.Name)}</span></div><div>${own.filter(c=>!onlyIDs||onlyIDs.has(c.ID)).map(c=>caseRow(c,depth+1,branch&&!taskID,taskID)).join('')}${children.map(ch=>node(ch,depth+1)).join('')}</div>`}function hasHit(f){return cs.some(c=>c.FolderID===f.ID&&onlyIDs.has(c.ID))||fs.filter(x=>x.ParentID===f.ID).some(hasHit)}return roots.map(r=>node(r,0)).join('')||'<p class="meta">空版本</p>'}
 function caseRow(c,depth,branch,taskID=''){let checked=selected.get(c.VersionID)?.has(c.ID);return `<div class="tree-row ${taskID?'task-case':'case-row'}" style="padding-left:${8+depth*17}px" data-case="${c.ID}" data-c="${c.ID}" data-version="${c.VersionID}" data-v="${c.VersionID}" ${taskID?`data-task="${taskID}"`:''}>${branch?`<input class="case-check" type="checkbox" ${checked?'checked':''}>`:''}<span class="label">${esc(c.Title)}</span>${c.Dirty?'<span title="未合并">●</span>':''}${c.Result?`<span class="result ${c.Result}"></span>`:''}</div>`}
@@ -70,11 +71,16 @@ async function saveRecord(type){
 }
 function resultName(x){return({passed:'通过',failed:'失败',blocked:'阻塞'}[x]||'未执行')}
 function toast(msg,bad=false){let t=$('#toast');t.textContent=msg;t.style.background=bad?'#991b1b':'#172033';t.classList.remove('hidden');clearTimeout(t._timer);t._timer=setTimeout(()=>t.classList.add('hidden'),3200)}
-$('#create-version').onclick=versionModal;$('#theme').onclick=()=>{document.documentElement.classList.toggle('dark');localStorage.setItem('casehub-theme',document.documentElement.classList.contains('dark')?'dark':'light');if(recordEditor){$('#record-editor').classList.toggle('toastui-editor-dark',document.documentElement.classList.contains('dark'));renderRecordHistory()}};$('#collapse').onclick=()=>setSidebarCollapsed(true);$('#expand').onclick=$('#empty-expand').onclick=()=>setSidebarCollapsed(false);
+$('#create-version').onclick=versionModal;$('#theme').onclick=()=>{document.documentElement.classList.toggle('dark');localStorage.setItem('casehub-theme',document.documentElement.classList.contains('dark')?'dark':'light');if(recordEditor){$('#record-editor').classList.toggle('toastui-editor-dark',document.documentElement.classList.contains('dark'));renderRecordHistory()}if(reqEditor)$('#req-editor').classList.toggle('toastui-editor-dark',document.documentElement.classList.contains('dark'))};$('#collapse').onclick=()=>setSidebarCollapsed(true);$('#expand').onclick=$('#empty-expand').onclick=()=>setSidebarCollapsed(false);
 $$('[data-view]').forEach(b=>b.onclick=()=>{$$('[data-view]').forEach(x=>x.classList.toggle('active',x===b));view=b.dataset.view;$('#case-view').classList.toggle('hidden',view!=='cases');$('#task-view').classList.toggle('hidden',view!=='tasks');updateEmptyHint()});document.addEventListener('click',e=>{if(!e.target.closest('#context-menu'))$('#context-menu').classList.add('hidden')});
 $('#modal-close').onclick=$('#modal-cancel').onclick=()=>$('#modal').close();$('#modal-form').onsubmit=async e=>{e.preventDefault();try{await modalSave(Object.fromEntries(new FormData(e.target)));$('#modal').close()}catch{}};$('#drawer-close').onclick=()=>{$('#record-form').reset();recordEditor?.setMarkdown('');$('#drawer').classList.add('hidden')};$('#record-version').onchange=()=>{recordHistoryLimit=3;$('#record-history').replaceChildren();renderRecordHistory()};$('#record-form').onsubmit=async e=>{e.preventDefault();try{await saveRecord('submitRecord')}catch{}};$('#save-draft').onclick=()=>saveRecord('saveRecord').catch(()=>{});$('#close-search').onclick=()=>{$('#search-panel').classList.add('hidden');$('#workspace').style.gridTemplateColumns='var(--side) 5px minmax(0,1fr)'};$('#run-search').onclick=runSearch;
 $$('[data-bulk]').forEach(b=>b.onclick=()=>{let entries=[...selected.entries()].find(([,s])=>s.size);if(!entries)return;if(b.dataset.bulk==='export')exportSelected(entries[0],[...entries[1]]);else taskModal(entries[0],[...entries[1]])});function exportSelected(v,ids){let data=cases(v).filter(c=>ids.includes(c.ID)),a=document.createElement('a');a.href=URL.createObjectURL(new Blob([JSON.stringify(data,null,2)],{type:'application/json'}));a.download='casehub-selected.json';a.click()}
-let resizing=false,lastX=340;$('#resize-left').onmousedown=()=>{resizing=true;$('#resize-left').classList.add('dragging')};document.onmousemove=e=>{if(resizing){lastX=e.clientX;document.documentElement.style.setProperty('--side',Math.max(0,Math.min(600,e.clientX))+'px')}};document.onmouseup=()=>{if(resizing&&lastX<70)$('#collapse').click();else if(resizing&&lastX<220)document.documentElement.style.setProperty('--side','220px');resizing=false;$('#resize-left').classList.remove('dragging')};
+let resizing=false,lastX=340,resizeVar='--side',resizeCollapse='#collapse';
+function bindResizer(handleSel,collapseSel,cssVar){$(handleSel).onmousedown=()=>{resizing=true;resizeVar=cssVar;resizeCollapse=collapseSel;$(handleSel).classList.add('dragging')}}
+bindResizer('#resize-left','#collapse','--side');
+bindResizer('#req-resize-left','#req-collapse','--req-side');
+document.onmousemove=e=>{if(resizing){lastX=e.clientX;document.documentElement.style.setProperty(resizeVar,Math.max(0,Math.min(600,e.clientX))+'px')}};
+document.onmouseup=()=>{if(resizing&&lastX<70)$(resizeCollapse).click();else if(resizing&&lastX<220)document.documentElement.style.setProperty(resizeVar,'220px');resizing=false;$$('.resizer').forEach(r=>r.classList.remove('dragging'))};
 document.documentElement.classList.toggle('dark',localStorage.getItem('casehub-theme')==='dark');
 window.addEventListener('hashchange',renderHistoryRoute);
 refresh().catch(e=>toast(e.message,true));
@@ -116,3 +122,95 @@ function setSidebarCollapsed(collapsed){
   $('#expand').classList.toggle('hidden',!collapsed);
   updateEmptyHint();
 }
+
+// ---- Requirement management page ----
+const reqFolder=id=>state.reqFolders.find(f=>f.ID===id);
+const reqChildren=id=>state.reqFolders.filter(f=>f.ParentID===id);
+const reqDocsIn=id=>state.reqDocs.filter(d=>d.FolderID===id);
+function reqRoots(){return state.reqFolders.filter(f=>!f.ParentID||!state.reqFolders.some(x=>x.ID===f.ParentID))}
+function reqDescendantFolders(f){let out=[];function walk(id){reqChildren(id).forEach(x=>{out.push(x.ID);walk(x.ID)})}walk(f.ID);return out}
+function reqTreeHTML(){
+  function node(f,depth){
+    let children=reqChildren(f.ID),own=reqDocsIn(f.ID);
+    return `<div class="tree-row folder-row" style="padding-left:${8+depth*17}px" data-req-folder="${f.ID}"><span>▾</span><span>📁</span><span class="label">${esc(f.Name)}</span></div><div>${own.map(d=>reqDocRow(d,depth+1)).join('')}${children.map(ch=>node(ch,depth+1)).join('')}</div>`;
+  }
+  return reqRoots().map(r=>node(r,0)).join('')||'<p class="meta">暂无需求文档</p>';
+}
+function reqDocRow(d,depth){return `<div class="tree-row case-row" style="padding-left:${8+depth*17}px" data-req-doc="${d.ID}"><span class="label">📄 ${esc(d.Title)}</span></div>`}
+function renderReqTree(){const box=$('#req-tree');box.innerHTML=reqTreeHTML();bindReqTree(box)}
+function bindReqTree(root){
+  root.querySelectorAll('[data-req-folder]').forEach(e=>{e.onclick=()=>setReqFocus({type:'folder',id:e.dataset.reqFolder});e.oncontextmenu=x=>menu(x,reqFolderMenu(e.dataset.reqFolder))});
+  root.querySelectorAll('[data-req-doc]').forEach(e=>{e.onclick=()=>setReqFocus({type:'doc',id:e.dataset.reqDoc});e.oncontextmenu=x=>menu(x,reqDocMenu(e.dataset.reqDoc))});
+}
+function setReqFocus(x){reqFocus=x;renderReqFocus()}
+function renderReqFocus(){
+  if(!reqFocus){updateReqEmptyHint();$('#req-empty').classList.remove('hidden');$('#req-detail').classList.add('hidden');return}
+  $('#req-empty').classList.add('hidden');
+  const d=$('#req-detail');d.classList.remove('hidden');
+  if(reqFocus.type==='folder'){
+    const f=reqFolder(reqFocus.id);
+    if(!f){reqFocus=null;return renderReqFocus()}
+    reqEditor?.destroy();reqEditor=null;
+    const descendants=reqDescendantFolders(f),count=state.reqDocs.filter(x=>x.FolderID===f.ID||descendants.includes(x.FolderID)).length;
+    d.innerHTML=`<div class="detail-head"><div><div class="eyebrow">需求文件夹</div><h1>📁 ${esc(f.Name)}</h1></div></div><div class="card meta-grid"><span>需求文档 <b>${count}</b></span><span>子文件夹 <b>${descendants.length}</b></span><span>创建者 <b>${esc(f.CreatedBy)}</b></span><span>创建时间 <b>${fmt(f.CreatedAt)}</b></span></div>`;
+    return;
+  }
+  const doc=state.reqDocs.find(x=>x.ID===reqFocus.id);
+  if(!doc){reqFocus=null;return renderReqFocus()}
+  d.innerHTML=`<div class="detail-head"><div><div class="eyebrow">${esc(doc.ID)}</div><h1>${esc(doc.Title)}</h1></div><div class="detail-actions"><button type="button" id="req-ai-design" class="secondary">AI 设计</button><button type="button" id="save-req-doc">保存</button></div></div><div class="card meta-grid"><span>创建者 <b>${esc(doc.CreatedBy)}</b></span><span>创建时间 <b>${fmt(doc.CreatedAt)}</b></span><span>更新者 <b>${esc(doc.UpdatedBy)}</b></span><span>更新时间 <b>${fmt(doc.UpdatedAt)}</b></span></div><div class="card"><div id="req-editor"></div></div>`;
+  reqEditor?.destroy();
+  reqEditor=new toastui.Editor({el:$('#req-editor'),height:'520px',initialEditType:'wysiwyg',previewStyle:'tab',initialValue:doc.Content||'',language:'zh-CN',theme:document.documentElement.classList.contains('dark')?'dark':'light',usageStatistics:false});
+  $('#save-req-doc').onclick=()=>saveReqDoc(doc).catch(()=>{});
+  $('#req-ai-design').onclick=()=>openAiDrawer(doc);
+}
+async function saveReqDoc(doc){
+  await act('editReqDoc',{DocID:doc.ID,Title:doc.Title,Content:reqEditor.getMarkdown()});
+  renderReqFocus();
+  toast('需求文档已保存');
+}
+function reqFolderMenu(id){return [['查看详情',()=>setReqFocus({type:'folder',id})],['新建文件夹',()=>reqFolderModal(id)],['新增需求文档',()=>reqDocModal(id)],['重命名文件夹',()=>renameReqFolderModal(id)]]}
+function reqDocMenu(id){const doc=state.reqDocs.find(x=>x.ID===id);return [['查看详情',()=>setReqFocus({type:'doc',id})],['重命名',()=>renameReqDocModal(doc)],['AI 设计',()=>openAiDrawer(doc)]]}
+function reqFolderModal(parent){showModal('新建文件夹',`<label>文件夹名称<input name="Name" required></label>`,x=>act('createReqFolder',{...x,ParentID:parent}))}
+function renameReqFolderModal(id){const f=reqFolder(id);showModal('重命名文件夹',`<label>文件夹名称<input name="Name" required value="${esc(f.Name)}"></label>`,x=>act('renameReqFolder',{...x,FolderID:id}))}
+function reqDocModal(folderId){showModal('新增需求文档',`<label>标题<input name="Title" required></label>`,x=>act('createReqDoc',{...x,FolderID:folderId,Content:''}))}
+function renameReqDocModal(doc){showModal('重命名需求文档',`<label>标题<input name="Title" required value="${esc(doc.Title)}"></label>`,x=>act('editReqDoc',{...x,DocID:doc.ID,Content:doc.Content}))}
+function openAiDrawer(doc){aiDoc=doc;$('#ai-drawer-doc').textContent=`${doc.ID} · ${doc.Title}`;$('#ai-drawer').classList.remove('hidden')}
+$('#ai-drawer-close').onclick=()=>$('#ai-drawer').classList.add('hidden');
+
+function updateReqEmptyHint(){
+  const collapsed=$('#req-sidebar').classList.contains('hidden');
+  $('#req-empty-title').textContent=collapsed?'展开侧栏，继续浏览':'从一个需求文档开始';
+  $('#req-empty-hint').textContent=collapsed?'还没有选择要查看的内容。展开侧栏后，选择文件夹或需求文档即可查看详情。':'选择左侧的文件夹或需求文档，即可在这里查看详情。';
+  $('#req-empty-expand').classList.toggle('hidden',!collapsed);
+}
+function setReqSidebarCollapsed(collapsed){
+  if(collapsed&&!$('#req-sidebar').classList.contains('hidden')){
+    const width=$('#req-sidebar').getBoundingClientRect().width;
+    if(width>=220)reqSidebarWidth=width;
+  }
+  document.documentElement.style.setProperty('--req-side',collapsed?'0px':`${reqSidebarWidth||340}px`);
+  $('#req-workspace').classList.toggle('sidebar-collapsed',collapsed);
+  $('#req-sidebar').classList.toggle('hidden',collapsed);
+  $('#req-resize-left').classList.toggle('hidden',collapsed);
+  $('#req-expand').classList.toggle('hidden',!collapsed);
+  updateReqEmptyHint();
+}
+$('#req-collapse').onclick=()=>setReqSidebarCollapsed(true);
+$('#req-expand').onclick=$('#req-empty-expand').onclick=()=>setReqSidebarCollapsed(false);
+
+// ---- Top-left app switcher (用例管理 / 需求管理) ----
+function setPage(p){
+  page=p;
+  $$('#app-menu [data-app]').forEach(b=>b.classList.toggle('active',b.dataset.app===p));
+  $('#app-menu').classList.add('hidden');
+  $('#app-switch-btn').setAttribute('aria-expanded','false');
+  const isReq=p==='requirements';
+  $('#app-subtitle').textContent=isReq?'需求文档管理':'测试用例管理';
+  $('#workspace').classList.toggle('hidden',isReq);
+  $('#req-workspace').classList.toggle('hidden',!isReq);
+  $('#revision').classList.toggle('hidden',isReq);
+  if(isReq)updateReqEmptyHint();
+}
+$('#app-switch-btn').onclick=e=>{e.stopPropagation();const open=$('#app-menu').classList.toggle('hidden');$('#app-switch-btn').setAttribute('aria-expanded',String(!open))};
+$$('#app-menu [data-app]').forEach(b=>b.onclick=()=>setPage(b.dataset.app));
+document.addEventListener('click',e=>{if(!e.target.closest('.app-switch'))$('#app-menu').classList.add('hidden')});

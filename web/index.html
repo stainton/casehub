@@ -11,7 +11,13 @@
 </head>
 <body>
   <header class="topbar">
-    <div class="brand"><span class="mark">C</span><div><strong>CaseHub</strong><small>测试用例管理</small></div></div>
+    <div class="app-switch">
+      <button type="button" class="brand" id="app-switch-btn" aria-haspopup="true" aria-expanded="false"><span class="mark">C</span><div><strong id="app-title">CaseHub</strong><small id="app-subtitle">测试用例管理</small></div><span class="switch-caret">▾</span></button>
+      <div id="app-menu" class="app-menu hidden">
+        <button type="button" data-app="cases" class="active">🗂 用例管理</button>
+        <button type="button" data-app="requirements">📄 需求管理</button>
+      </div>
+    </div>
     <div class="header-actions"><a class="header-link" href="/web/api.html">API 文档</a><span id="revision" class="revision"></span><button class="icon-button" id="theme" title="切换主题">◐</button><span class="avatar">本</span></div>
   </header>
   <main id="workspace">
@@ -36,9 +42,25 @@
       <div id="detail" class="hidden"></div>
     </section>
   </main>
+  <main id="req-workspace" class="hidden">
+    <aside id="req-sidebar">
+      <div class="sidebar-head">
+        <strong>需求文档</strong>
+        <button class="icon-button" id="req-collapse" title="折叠">‹</button>
+      </div>
+      <div id="req-tree" class="versions"></div>
+    </aside>
+    <div id="req-resize-left" class="resizer"></div>
+    <button id="req-expand" class="expand hidden" title="展开侧栏" aria-label="展开侧栏" aria-controls="req-sidebar">›</button>
+    <section id="req-content">
+      <div id="req-empty" class="empty"><div class="empty-icon">📄</div><h2 id="req-empty-title">从一个需求文档开始</h2><p id="req-empty-hint">选择左侧的文件夹或需求文档，即可在这里查看详情。</p><button type="button" id="req-empty-expand" class="hidden">展开需求树</button></div>
+      <div id="req-detail" class="hidden"></div>
+    </section>
+  </main>
   <div id="context-menu" class="context-menu hidden"></div>
   <dialog id="modal"><form id="modal-form"><div class="modal-head"><h3 id="modal-title"></h3><button type="button" class="icon-button" id="modal-close">×</button></div><div id="modal-body"></div><p class="modal-actions"><button type="button" class="secondary" id="modal-cancel">取消</button><button type="submit">保存</button></p></form></dialog>
   <aside id="drawer" class="drawer hidden"><div class="panel-head"><div><strong>测试记录</strong><small id="drawer-case"></small></div><button class="icon-button" id="drawer-close">×</button></div><div id="record-history"></div><form id="record-form"><label>提交到版本<select id="record-version"></select></label><label>测试结果<select name="result" required><option value="passed">通过</option><option value="failed">失败</option><option value="blocked">阻塞</option></select></label><div class="record-editor-label" id="record-editor-label">执行备注 · Markdown / 富文本</div><div id="record-editor" aria-labelledby="record-editor-label"></div><div class="drawer-actions"><button type="button" class="secondary" id="save-draft">保存草稿</button><button type="submit">提交记录</button></div></form></aside>
+  <aside id="ai-drawer" class="drawer hidden"><div class="panel-head"><div><strong>AI 设计</strong><small id="ai-drawer-doc"></small></div><button class="icon-button" id="ai-drawer-close">×</button></div><div id="ai-drawer-body" class="ai-drawer-body"><p class="meta">AI 设计能力即将上线，敬请期待。</p></div></aside>
   <div id="toast" class="toast hidden"></div>
   <script src="/web/vendor/toastui-editor-all.min.js"></script>
   <script src="/web/vendor/zh-cn.js"></script>

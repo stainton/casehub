@@ -60,14 +60,28 @@ type Task struct {
 	CreatedAt                      time.Time
 }
 
+type ReqFolder struct {
+	ID, ParentID, Name, CreatedBy string
+	CreatedAt                     time.Time
+}
+
+type ReqDoc struct {
+	ID, FolderID         string
+	Title, Content       string
+	CreatedBy, UpdatedBy string
+	CreatedAt, UpdatedAt time.Time
+}
+
 type State struct {
-	MainRevision int64      `json:"mainRevision"`
-	Versions     []Version  `json:"versions"`
-	Folders      []Folder   `json:"folders"`
-	Cases        []TestCase `json:"cases"`
-	Histories    []History  `json:"histories"`
-	Records      []Record   `json:"records"`
-	Tasks        []Task     `json:"tasks"`
+	MainRevision int64       `json:"mainRevision"`
+	Versions     []Version   `json:"versions"`
+	Folders      []Folder    `json:"folders"`
+	Cases        []TestCase  `json:"cases"`
+	Histories    []History   `json:"histories"`
+	Records      []Record    `json:"records"`
+	Tasks        []Task      `json:"tasks"`
+	ReqFolders   []ReqFolder `json:"reqFolders"`
+	ReqDocs      []ReqDoc    `json:"reqDocs"`
 }
 
 type Action struct {
@@ -76,6 +90,7 @@ type Action struct {
 	Priority, Result, Note, Author                      string
 	CaseIDs                                             []string
 	Submitted, Force                                    bool
+	DocID, Content                                      string
 }
 
 type Result struct {
@@ -126,6 +141,22 @@ func versionAt(s *State, id string) (*Version, int) {
 	}
 	return nil, -1
 }
+func reqFolderAt(s *State, id string) (*ReqFolder, int) {
+	for i := range s.ReqFolders {
+		if s.ReqFolders[i].ID == id {
+			return &s.ReqFolders[i], i
+		}
+	}
+	return nil, -1
+}
+func reqDocAt(s *State, id string) (*ReqDoc, int) {
+	for i := range s.ReqDocs {
+		if s.ReqDocs[i].ID == id {
+			return &s.ReqDocs[i], i
+		}
+	}
+	return nil, -1
+}
 
 func Seed() State {
 	t := now()
@@ -143,6 +174,10 @@ func Seed() State {
 	s.Cases = []TestCase{
 		{ID: "CASE-0001", VersionID: "main", FolderID: "auth", Title: "正确账号密码登录", Preconditions: "用户账号已启用", Steps: "1. 打开登录页\n2. 输入正确账号和密码\n3. 点击登录", Expected: "进入系统首页", Priority: "P0", CreatedBy: "system", UpdatedBy: "system", CreatedAt: t, UpdatedAt: t, Revision: 1},
 		{ID: "CASE-0002", VersionID: "main", FolderID: "auth", Title: "错误密码登录失败", Preconditions: "用户账号已启用", Steps: "输入正确账号和错误密码后提交", Expected: "提示账号或密码错误", Priority: "P1", CreatedBy: "system", UpdatedBy: "system", CreatedAt: t, UpdatedAt: t, Revision: 1},
+	}
+	s.ReqFolders = []ReqFolder{{ID: "req-root", Name: "全部需求", CreatedBy: "system", CreatedAt: t}}
+	s.ReqDocs = []ReqDoc{
+		{ID: "REQ-0001", FolderID: "req-root", Title: "登录模块需求说明", Content: "## 背景\n\n用户需要通过账号密码登录系统。\n\n## 需求描述\n\n- 支持账号密码登录\n- 登录失败提示错误信息\n", CreatedBy: "system", UpdatedBy: "system", CreatedAt: t, UpdatedAt: t},
 	}
 	return s
 }
@@ -168,6 +203,12 @@ func normalizeState(state *State) {
 	}
 	if state.Tasks == nil {
 		state.Tasks = []Task{}
+	}
+	if state.ReqFolders == nil {
+		state.ReqFolders = []ReqFolder{}
+	}
+	if state.ReqDocs == nil {
+		state.ReqDocs = []ReqDoc{}
 	}
 }
 
@@ -213,6 +254,14 @@ func (s *Service) Apply(ctx context.Context, a Action) (Result, error) {
 		warnings, err = recordCase(&st, a)
 	case "createTask":
 		err = createTask(&st, a)
+	case "createReqFolder":
+		err = createReqFolder(&st, a)
+	case "renameReqFolder":
+		err = renameReqFolder(&st, a)
+	case "createReqDoc":
+		err = createReqDoc(&st, a)
+	case "editReqDoc":
+		err = editReqDoc(&st, a)
 	case "sync":
 		var conflicts []string
 		conflicts, err = syncVersion(&st, a)
@@ -531,4 +580,53 @@ func mergeVersion(s *State, a Action) ([]string, error) {
 	}
 	v.BaseMainRevision = s.MainRevision
 	return nil, nil
+}
+func createReqFolder(s *State, a Action) error {
+	if strings.TrimSpace(a.Name) == "" {
+		return errors.New("文件夹名称不能为空")
+	}
+	if a.ParentID != "" {
+		if f, _ := reqFolderAt(s, a.ParentID); f == nil {
+			return errors.New("父文件夹不存在")
+		}
+	}
+	s.ReqFolders = append(s.ReqFolders, ReqFolder{ID: ID(), ParentID: a.ParentID, Name: strings.TrimSpace(a.Name), CreatedBy: a.Author, CreatedAt: now()})
+	return nil
+}
+func renameReqFolder(s *State, a Action) error {
+	f, _ := reqFolderAt(s, a.FolderID)
+	if f == nil {
+		return errors.New("文件夹不存在")
+	}
+	if strings.TrimSpace(a.Name) == "" {
+		return errors.New("文件夹名称不能为空")
+	}
+	f.Name = strings.TrimSpace(a.Name)
+	return nil
+}
+func createReqDoc(s *State, a Action) error {
+	if f, _ := reqFolderAt(s, a.FolderID); f == nil {
+		return errors.New("文件夹不存在")
+	}
+	if strings.TrimSpace(a.Title) == "" {
+		return errors.New("需求文档标题不能为空")
+	}
+	t := now()
+	s.ReqDocs = append(s.ReqDocs, ReqDoc{ID: "REQ-" + strings.ToUpper(ID()[:6]), FolderID: a.FolderID, Title: strings.TrimSpace(a.Title), Content: a.Content, CreatedBy: a.Author, UpdatedBy: a.Author, CreatedAt: t, UpdatedAt: t})
+	return nil
+}
+func editReqDoc(s *State, a Action) error {
+	d, _ := reqDocAt(s, a.DocID)
+	if d == nil {
+		return errors.New("需求文档不存在")
+	}
+	title := strings.TrimSpace(a.Title)
+	if title == "" {
+		return errors.New("需求文档标题不能为空")
+	}
+	d.Title = title
+	d.Content = a.Content
+	d.UpdatedBy = a.Author
+	d.UpdatedAt = now()
+	return nil
 }
