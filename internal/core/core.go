@@ -249,6 +249,19 @@ func normalizeState(state *State) {
 	if state.PendingCases == nil {
 		state.PendingCases = []PendingCase{}
 	}
+	hasPendingRoot := false
+	for _, f := range state.PendingFolders {
+		if f.ID == "pending-root" {
+			hasPendingRoot = true
+			break
+		}
+	}
+	if !hasPendingRoot {
+		// Repositories persisted before the review feature existed have no
+		// PendingFolders at all; createPendingFolder/importPendingCases both
+		// assume "pending-root" is always present as the review area's anchor.
+		state.PendingFolders = append([]PendingFolder{{ID: "pending-root", Name: "待评审用例", CreatedBy: "system", CreatedAt: now()}}, state.PendingFolders...)
+	}
 }
 
 func (s *Service) State(ctx context.Context) (State, error) {
