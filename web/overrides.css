@@ -50,5 +50,8 @@ table{border-collapse:collapse;width:100%}th,td{text-align:left;vertical-align:t
 .app-menu button:hover{background:var(--surface2)}
 .app-menu button.active{background:var(--brand-soft);color:var(--brand);font-weight:600}
 
-/* AI design drawer placeholder. */
+/* AI design drawer (auto-test planner integration). */
 .ai-drawer-body{padding:20px}
+.ai-drawer-body input{width:100%}
+.ai-log{max-height:320px;overflow:auto;font-family:monospace;font-size:12px;background:var(--surface2);border-radius:8px;padding:10px;margin-top:12px;white-space:pre-wrap}
+.ai-log div+div{margin-top:4px}

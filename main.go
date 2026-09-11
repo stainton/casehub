@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"casehub/internal/core"
+	"casehub/internal/planner"
 	"casehub/internal/store"
 )
 
@@ -52,10 +53,14 @@ func (a *api) action(w http.ResponseWriter, r *http.Request) {
 	}
 	jsonOut(w, 200, out)
 }
-func routes(a *api) http.Handler {
+func routes(a *api, plannerProxy http.Handler, plannerEnabled bool) http.Handler {
 	m := http.NewServeMux()
 	m.HandleFunc("GET /api/state", a.state)
 	m.HandleFunc("POST /api/action", a.action)
+	m.HandleFunc("GET /api/planner/status", func(w http.ResponseWriter, r *http.Request) {
+		jsonOut(w, 200, map[string]bool{"enabled": plannerEnabled})
+	})
+	m.Handle("/api/planner/", plannerProxy)
 	fs := http.FileServerFS(assets)
 	m.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/" {
@@ -94,8 +99,9 @@ func main() {
 		defer closeDB()
 	}
 	port := env("PORT", "8080")
-	log.Printf("CaseHub listening on :%s (store=%s)", port, kind)
-	log.Fatal(http.ListenAndServe(":"+port, routes(&api{service: core.NewService(repo)})))
+	plannerProxy, plannerEnabled := planner.New(os.Getenv("CASEHUB_PLANNER_URL"), os.Getenv("CASEHUB_PLANNER_TOKEN"))
+	log.Printf("CaseHub listening on :%s (store=%s, planner=%v)", port, kind, plannerEnabled)
+	log.Fatal(http.ListenAndServe(":"+port, routes(&api{service: core.NewService(repo)}, plannerProxy, plannerEnabled)))
 }
 func storageKind(kind, databaseURL string) string {
 	if kind != "" {

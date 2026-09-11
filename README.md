@@ -84,6 +84,8 @@ http://<可访问的节点 IP>:30080
 | `CASEHUB_STORE` | 自动选择 | 显式指定 `file`、`memory` 或 `postgres` 时优先；否则有 DB 连接串用 `postgres`，无连接串用 `file` |
 | `CASEHUB_DATA` | `data/casehub.json` | 文件存储路径 |
 | `DATABASE_URL` | — | PostgreSQL 连接串；可通过 `-database-url` 启动参数覆盖 |
+| `CASEHUB_PLANNER_URL` | — | auto-test planner HTTP 服务地址（如 `http://localhost:4501`）；为空则需求管理页的"AI 设计"抽屉显示未配置，不提供 API |
+| `CASEHUB_PLANNER_TOKEN` | — | 调用 planner 服务的 `Authorization: Bearer` Token，对应该服务自己的 `PLANNER_API_TOKEN`；只在服务端使用，不下发到浏览器 |
 
 当前默认主线带有两条示例用例，因为设计文档尚未定义首次导入主线的来源与格式。
 

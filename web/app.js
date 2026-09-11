@@ -1,6 +1,7 @@
 const $=s=>document.querySelector(s), $$=s=>[...document.querySelectorAll(s)];
 let state=null, focus=null, selected=new Map(), view='cases', modalSave=null, recordCase=null, recordTask='', recordEditor=null, recordViewers=[], recordHistoryLimit=3;
 let page='cases', reqFocus=null, reqEditor=null, reqSidebarWidth=null, aiDoc=null, reqPage='docs';
+let aiSource=null, aiPlannerEnabled=null;
 const esc=s=>String(s??'').replace(/[&<>'"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]));
 const fmt=s=>s?new Date(s).toLocaleString():'—';
 const version=id=>state.versions.find(v=>v.id===id), folders=id=>state.folders.filter(f=>f.VersionID===id), cases=id=>state.cases.filter(c=>c.VersionID===id);
@@ -201,8 +202,148 @@ function reqFolderModal(parent){showModal('新建文件夹',`<label>文件夹名
 function renameReqFolderModal(id){const f=reqFolder(id);showModal('重命名文件夹',`<label>文件夹名称<input name="Name" required value="${esc(f.Name)}"></label>`,x=>act('renameReqFolder',{...x,FolderID:id}))}
 function reqDocModal(folderId){showModal('新增需求文档',`<label>标题<input name="Title" required></label>`,x=>act('createReqDoc',{...x,FolderID:folderId,Content:''}))}
 function renameReqDocModal(doc){showModal('重命名需求文档',`<label>标题<input name="Title" required value="${esc(doc.Title)}"></label>`,x=>act('editReqDoc',{...x,DocID:doc.ID,Content:doc.Content}))}
-function openAiDrawer(doc){aiDoc=doc;$('#ai-drawer-doc').textContent=`${doc.ID} · ${doc.Title}`;$('#ai-drawer').classList.remove('hidden')}
-$('#ai-drawer-close').onclick=()=>$('#ai-drawer').classList.add('hidden');
+// ---- AI 设计抽屉：对接 auto-test planner HTTP 服务 ----
+const aiJobKey=doc=>`casehub-ai-job-${doc.ID}`;
+function closeAiStream(){aiSource?.close();aiSource=null}
+async function plannerRequest(path,options){
+  const r=await fetch(path,options),ct=r.headers.get('content-type')||'';
+  const x=ct.includes('application/json')?await r.json():null;
+  if(!r.ok){const e=Error(x?.error?.message||'AI 设计服务请求失败');e.status=r.status;e.code=x?.error?.code;throw e}
+  return x;
+}
+function openAiDrawer(doc){
+  aiDoc=doc;
+  $('#ai-drawer-doc').textContent=`${doc.ID} · ${doc.Title}`;
+  $('#ai-drawer').classList.remove('hidden');
+  renderAiDrawer(doc);
+}
+$('#ai-drawer-close').onclick=()=>{closeAiStream();$('#ai-drawer').classList.add('hidden')};
+
+async function renderAiDrawer(doc){
+  const body=$('#ai-drawer-body');
+  closeAiStream();
+  body.innerHTML='<p class="meta">正在检查 AI 设计服务…</p>';
+  if(aiPlannerEnabled===null){
+    try{aiPlannerEnabled=(await plannerRequest('/api/planner/status')).enabled}
+    catch{aiPlannerEnabled=false}
+  }
+  if(aiDoc!==doc)return; // drawer moved to another doc while awaiting
+  if(!aiPlannerEnabled){
+    body.innerHTML='<p class="meta">AI 设计服务未配置（缺少 CASEHUB_PLANNER_URL），暂时无法使用。</p>';
+    return;
+  }
+  const jobId=localStorage.getItem(aiJobKey(doc));
+  if(!jobId)return renderAiForm(doc);
+  try{
+    const job=await plannerRequest(`/api/planner/jobs/${jobId}`);
+    if(aiDoc!==doc)return;
+    renderAiJob(doc,job);
+  }catch(e){
+    if(aiDoc!==doc)return;
+    localStorage.removeItem(aiJobKey(doc));
+    renderAiForm(doc);
+  }
+}
+function renderAiForm(doc,notice){
+  $('#ai-drawer-body').innerHTML=`${notice?`<p class="meta">${esc(notice)}</p>`:''}<form id="ai-form"><label>被测系统 URL<input name="baseUrl" required placeholder="https://test.example.com/login"></label><label>补充说明（可选）<textarea name="instructions" placeholder="覆盖范围、登录方式等"></textarea></label><label>测试账号 · 用户名（可选）<input name="username"></label><label>测试账号 · 密码（可选）<input name="password" type="password"></label><p class="drawer-actions"><button type="submit">开始设计</button></p></form>`;
+  $('#ai-form').onsubmit=async e=>{
+    e.preventDefault();
+    const x=Object.fromEntries(new FormData(e.target));
+    const payload={requirements:[{id:doc.ID,title:doc.Title,content:doc.Content||''}],target:{baseUrl:x.baseUrl},context:{instructions:x.instructions||''}};
+    if(x.username||x.password)payload.context.testData={username:x.username||'',password:x.password||''};
+    const btn=e.target.querySelector('button');btn.disabled=true;
+    try{
+      const job=await plannerRequest('/api/planner/jobs',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+      localStorage.setItem(aiJobKey(doc),job.id);
+      renderAiJob(doc,job);
+    }catch(err){toast(err.message,true);btn.disabled=false}
+  };
+}
+function aiStageLabel(job){
+  const status={queued:'排队中',running:'进行中',succeeded:'已完成',failed:'失败',cancelled:'已取消'}[job.status]||job.status;
+  return job.stage?`${status} · ${esc(job.stage)}`:status;
+}
+function renderAiJob(doc,job){
+  if(job.status==='succeeded')return loadAiResult(doc,job);
+  if(job.status==='failed'||job.status==='cancelled')return renderAiTerminal(doc,job);
+  $('#ai-drawer-body').innerHTML=`<div class="card meta-grid"><span>状态 <b>${aiStageLabel(job)}</b></span></div><div id="ai-log" class="ai-log"></div><p class="drawer-actions"><button type="button" class="secondary" id="ai-cancel">取消任务</button></p>`;
+  $('#ai-cancel').onclick=async()=>{
+    try{await plannerRequest(`/api/planner/jobs/${job.id}`,{method:'DELETE'})}catch(e){toast(e.message,true)}
+  };
+  openAiStream(doc,job.id);
+}
+function aiLogLine(msg){
+  const log=$('#ai-log');
+  if(!log)return;
+  const atBottom=log.scrollTop+log.clientHeight>=log.scrollHeight-4;
+  const line=document.createElement('div');
+  line.textContent=msg;
+  log.appendChild(line);
+  while(log.childElementCount>200)log.removeChild(log.firstChild);
+  if(atBottom)log.scrollTop=log.scrollHeight;
+}
+function openAiStream(doc,jobId){
+  closeAiStream();
+  const source=new EventSource(`/api/planner/jobs/${jobId}/events`);
+  aiSource=source;
+  source.addEventListener('snapshot',e=>{
+    const job=JSON.parse(e.data);
+    if(aiDoc!==doc)return;
+    const badge=$('#ai-drawer-body .meta-grid b');
+    if(badge)badge.textContent=aiStageLabel(job);
+    if(['succeeded','failed','cancelled'].includes(job.status)){closeAiStream();renderAiJob(doc,job)}
+  });
+  source.addEventListener('progress',e=>{
+    const ev=JSON.parse(e.data);
+    if(aiDoc!==doc)return;
+    const badge=$('#ai-drawer-body .meta-grid b');
+    if(badge)badge.textContent=aiStageLabel(ev);
+    aiLogLine(`[${fmt(ev.createdAt)}] ${ev.stage||''} ${ev.message||''}${ev.tool?` (${ev.tool} ${ev.toolStatus||''})`:''}`.trim());
+    if(['succeeded','failed','cancelled'].includes(ev.status)){closeAiStream();plannerRequest(`/api/planner/jobs/${jobId}`).then(job=>{if(aiDoc===doc)renderAiJob(doc,job)})}
+  });
+  source.addEventListener('reset',e=>{
+    if(aiDoc!==doc)return;
+    const r=JSON.parse(e.data);
+    aiLogLine(`……${r.message||'更早的进度记录已丢失'}`);
+  });
+}
+function renderAiTerminal(doc,job){
+  const failed=job.status==='failed',cancelled=job.status==='cancelled';
+  $('#ai-drawer-body').innerHTML=`<div class="card meta-grid"><span>状态 <b>${aiStageLabel(job)}</b></span></div>${job.error?`<p class="meta">${esc(job.error.code)}：${esc(job.error.message)}</p>`:cancelled?'<p class="meta">任务已取消。</p>':''}<p class="drawer-actions"><button type="button" id="ai-retry">重试</button></p>`;
+  $('#ai-retry').onclick=()=>{localStorage.removeItem(aiJobKey(doc));renderAiForm(doc)};
+}
+async function loadAiResult(doc,job){
+  $('#ai-drawer-body').innerHTML='<p class="meta">正在读取设计结果…</p>';
+  try{
+    const result=await plannerRequest(`/api/planner/jobs/${job.id}/result`);
+    if(aiDoc!==doc)return;
+    renderAiResult(doc,job,result);
+  }catch(e){
+    if(aiDoc!==doc)return;
+    localStorage.removeItem(aiJobKey(doc));
+    renderAiForm(doc,`读取设计结果失败：${e.message}`);
+  }
+}
+function renderAiResult(doc,job,result){
+  $('#ai-drawer-body').innerHTML=`<div class="card meta-grid"><span>草稿用例 <b>${result.cases.length}</b></span></div>${result.limitations?.length?`<div class="card"><h3>未验证/受限范围</h3><ul>${result.limitations.map(l=>`<li>${esc(l)}</li>`).join('')}</ul></div>`:''}<p class="drawer-actions"><button type="button" class="secondary" id="ai-restart">重新设计</button><button type="button" id="ai-import">导入到用例评审</button></p>`;
+  $('#ai-restart').onclick=()=>{localStorage.removeItem(aiJobKey(doc));renderAiForm(doc)};
+  $('#ai-import').onclick=async()=>{
+    const btn=$('#ai-import');btn.disabled=true;
+    try{
+      await importAiResult(doc,result);
+      localStorage.removeItem(aiJobKey(doc));
+      toast(`已导入 ${result.cases.length} 条草稿到"用例评审"`);
+      $('#ai-drawer').classList.add('hidden');
+    }catch(e){toast(e.message,true);btn.disabled=false}
+  };
+}
+async function importAiResult(doc,result){
+  const before=new Set(state.pendingFolders.map(f=>f.ID));
+  const out=await act('createPendingFolder',{ParentID:'pending-root',Name:`${doc.ID} · ${doc.Title}`});
+  const folder=out.state.pendingFolders.find(f=>!before.has(f.ID));
+  for(const c of result.cases)
+    await act('createPendingCase',{FolderID:folder.ID,Title:c.name,Priority:c.priority,Preconditions:c.precondition,Steps:c.steps,Expected:c.expects});
+}
 
 // ---- Pending case review (用例评审) ----
 function actReview(type,data={}){return act(type,data).then(()=>renderReqFocus())}

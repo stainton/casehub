@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"casehub/internal/core"
+	"casehub/internal/planner"
 	"casehub/internal/store"
 )
 
@@ -29,7 +30,8 @@ func TestStorageKind(t *testing.T) {
 }
 
 func TestFrontendAssetsAndMarkdownRecord(t *testing.T) {
-	handler := routes(&api{service: core.NewService(store.NewMemory())})
+	plannerProxy, plannerEnabled := planner.New("", "")
+	handler := routes(&api{service: core.NewService(store.NewMemory())}, plannerProxy, plannerEnabled)
 	for _, path := range []string{"/", "/web/api.html", "/web/api.js", "/web/vendor/toastui-editor-all.min.js", "/web/vendor/toastui-editor.min.css", "/web/vendor/toastui-editor-dark.min.css", "/web/vendor/zh-cn.js"} {
 		w := httptest.NewRecorder()
 		handler.ServeHTTP(w, httptest.NewRequest(http.MethodGet, path, nil))
