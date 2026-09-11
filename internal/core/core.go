@@ -784,21 +784,40 @@ func reviewPendingCase(s *State, a Action) error {
 	return nil
 }
 
-// importPendingCases copies the entire pending-review tree into a branch
-// version once every pending case has passed review, preserving the folder
-// structure. It is all-or-nothing: any name conflict with the target
-// version aborts before anything is written, and success clears the
-// pending-review area since it has served its purpose.
+// importPendingCases copies pending-review cases into a branch version once
+// they have passed review, preserving their folder structure. With CaseIDs
+// empty it targets the entire pending-review tree (legacy/API behavior) and,
+// since that empties the area, resets it to a bare pending-root; with CaseIDs
+// set it is scoped to just those cases (used by the folder- and case-level
+// "导入到版本" menu actions) and only removes the imported cases, leaving the
+// rest of the review area untouched. Either way it is all-or-nothing within
+// its scope: any name conflict with the target version aborts before
+// anything is written.
 func importPendingCases(s *State, a Action) error {
 	v, err := requireBranch(s, a.VersionID)
 	if err != nil {
 		return err
 	}
-	if len(s.PendingCases) == 0 {
-		return errors.New("没有待导入的用例")
+	scoped := len(a.CaseIDs) > 0
+	var targets []PendingCase
+	if scoped {
+		want := map[string]bool{}
+		for _, id := range a.CaseIDs {
+			want[id] = true
+		}
+		for _, c := range s.PendingCases {
+			if want[c.ID] {
+				targets = append(targets, c)
+			}
+		}
+	} else {
+		targets = s.PendingCases
+	}
+	if len(targets) == 0 {
+		return errors.New("没有可导入的用例")
 	}
 	var unreviewed []string
-	for _, c := range s.PendingCases {
+	for _, c := range targets {
 		if c.Review != "passed" {
 			unreviewed = append(unreviewed, c.Title)
 		}
@@ -839,13 +858,15 @@ func importPendingCases(s *State, a Action) error {
 		targetFolderID[pf.ID] = nf.ID
 		return nf.ID
 	}
-	for _, pf := range s.PendingFolders {
-		if pf.ID == "pending-root" {
-			continue
+	if !scoped {
+		for _, pf := range s.PendingFolders {
+			if pf.ID == "pending-root" {
+				continue
+			}
+			resolve(pf)
 		}
-		resolve(pf)
 	}
-	for _, pc := range s.PendingCases {
+	for _, pc := range targets {
 		folderID := "root"
 		if pf, _ := pendingFolderAt(s, pc.FolderID); pf != nil {
 			folderID = resolve(*pf)
@@ -862,17 +883,29 @@ func importPendingCases(s *State, a Action) error {
 
 	s.Folders = append(s.Folders, newFolders...)
 	t := now()
-	for _, pc := range s.PendingCases {
-		folderID, _ := targetFolderID[pc.FolderID]
-		if folderID == "" {
+	imported := map[string]bool{}
+	for _, pc := range targets {
+		folderID, ok := targetFolderID[pc.FolderID]
+		if !ok {
 			folderID = "root"
 		}
 		c := TestCase{ID: pc.ID, VersionID: v.ID, FolderID: folderID, Title: pc.Title, Preconditions: pc.Preconditions, Steps: pc.Steps, Expected: pc.Expected, Priority: pc.Priority, CreatedBy: a.Author, UpdatedBy: a.Author, CreatedAt: t, UpdatedAt: t, Dirty: true}
 		s.Cases = append(s.Cases, c)
 		after := c
 		s.Histories = append(s.Histories, History{ID: ID(), CaseID: c.ID, VersionID: v.ID, SourceVersionID: v.ID, Action: "create", Author: a.Author, After: &after, CreatedAt: t})
+		imported[pc.ID] = true
 	}
-	s.PendingFolders = []PendingFolder{{ID: "pending-root", Name: "待评审用例", CreatedBy: "system", CreatedAt: t}}
-	s.PendingCases = []PendingCase{}
+	if scoped {
+		remaining := make([]PendingCase, 0, len(s.PendingCases)-len(imported))
+		for _, c := range s.PendingCases {
+			if !imported[c.ID] {
+				remaining = append(remaining, c)
+			}
+		}
+		s.PendingCases = remaining
+	} else {
+		s.PendingFolders = []PendingFolder{{ID: "pending-root", Name: "待评审用例", CreatedBy: "system", CreatedAt: t}}
+		s.PendingCases = []PendingCase{}
+	}
 	return nil
 }

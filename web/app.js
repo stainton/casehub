@@ -169,11 +169,12 @@ function renderReqFocus(){
     if(!c){reqFocus=null;return renderReqFocus()}
     reqEditor?.destroy();reqEditor=null;
     const reviewLabel=({passed:'已通过',rejected:'未通过'})[c.Review]||'待评审';
-    d.innerHTML=`<div class="detail-head"><div><div class="eyebrow">${esc(c.ID)} · <span class="badge">${reviewLabel}</span></div><h1>${esc(c.Title)}</h1></div><div class="detail-actions"><button id="edit-review-case" class="secondary">编辑</button><button id="delete-review-case" class="secondary">删除</button><button id="reject-review-case" class="secondary">评审不通过</button><button id="approve-review-case">评审通过</button></div></div><div class="card field-grid"><div class="field"><h4>优先级</h4><p>${esc(c.Priority||'未设置')}</p></div><div class="field"><h4>评审状态</h4><p>${reviewLabel}</p></div><div class="field"><h4>前置条件</h4><p>${esc(c.Preconditions||'—')}</p></div><div class="field"><h4>预期结果</h4><p>${esc(c.Expected||'—')}</p></div><div class="field" style="grid-column:1/-1"><h4>执行步骤</h4><p>${esc(c.Steps||'—')}</p></div></div><div class="card meta-grid"><span>创建者 <b>${esc(c.CreatedBy)}</b></span><span>更新者 <b>${esc(c.UpdatedBy)}</b></span><span>更新时间 <b>${fmt(c.UpdatedAt)}</b></span>${c.ReviewedBy?`<span>评审人 <b>${esc(c.ReviewedBy)}</b></span><span>评审时间 <b>${fmt(c.ReviewedAt)}</b></span>`:''}</div>`;
+    d.innerHTML=`<div class="detail-head"><div><div class="eyebrow">${esc(c.ID)} · <span class="badge">${reviewLabel}</span></div><h1>${esc(c.Title)}</h1></div><div class="detail-actions"><button id="edit-review-case" class="secondary">编辑</button><button id="delete-review-case" class="secondary">删除</button><button id="reject-review-case" class="secondary">评审不通过</button><button id="approve-review-case">评审通过</button><button id="import-review-case" class="secondary">导入到版本…</button></div></div><div class="card field-grid"><div class="field"><h4>优先级</h4><p>${esc(c.Priority||'未设置')}</p></div><div class="field"><h4>评审状态</h4><p>${reviewLabel}</p></div><div class="field"><h4>前置条件</h4><p>${esc(c.Preconditions||'—')}</p></div><div class="field"><h4>预期结果</h4><p>${esc(c.Expected||'—')}</p></div><div class="field" style="grid-column:1/-1"><h4>执行步骤</h4><p>${esc(c.Steps||'—')}</p></div></div><div class="card meta-grid"><span>创建者 <b>${esc(c.CreatedBy)}</b></span><span>更新者 <b>${esc(c.UpdatedBy)}</b></span><span>更新时间 <b>${fmt(c.UpdatedAt)}</b></span>${c.ReviewedBy?`<span>评审人 <b>${esc(c.ReviewedBy)}</b></span><span>评审时间 <b>${fmt(c.ReviewedAt)}</b></span>`:''}</div>`;
     $('#edit-review-case').onclick=()=>pendingCaseModal(c);
     $('#delete-review-case').onclick=()=>{if(confirm('确定删除这条待评审用例？'))actReview('deletePendingCase',{CaseID:c.ID})};
     $('#approve-review-case').onclick=()=>actReview('reviewPendingCase',{CaseID:c.ID,Review:'passed'});
     $('#reject-review-case').onclick=()=>actReview('reviewPendingCase',{CaseID:c.ID,Review:'rejected'});
+    $('#import-review-case').onclick=()=>importReviewModal([c.ID]);
     return;
   }
   const doc=state.reqDocs.find(x=>x.ID===reqFocus.id);
@@ -402,27 +403,24 @@ function bindReviewTree(root){
   root.querySelectorAll('[data-review-folder]').forEach(e=>{e.onclick=()=>setReqFocus({type:'reviewFolder',id:e.dataset.reviewFolder});e.oncontextmenu=x=>menu(x,reviewFolderMenu(e.dataset.reviewFolder))});
   root.querySelectorAll('[data-review-case]').forEach(e=>{e.onclick=()=>setReqFocus({type:'reviewCase',id:e.dataset.reviewCase});e.oncontextmenu=x=>menu(x,reviewCaseMenu(e.dataset.reviewCase))});
 }
-function currentReviewFolderTarget(){
-  if(reqFocus?.type==='reviewFolder')return reqFocus.id;
-  if(reqFocus?.type==='reviewCase'){const c=state.pendingCases.find(x=>x.ID===reqFocus.id);if(c)return c.FolderID}
-  return pendingRoots()[0]?.ID||'';
+function pendingCaseIdsIn(folderId){
+  const f=pendingFolder(folderId);
+  const scope=f?[f.ID,...pendingDescendantFolders(f)]:[folderId];
+  return state.pendingCases.filter(c=>scope.includes(c.FolderID)).map(c=>c.ID);
 }
-function reviewFolderMenu(id){return [['查看详情',()=>setReqFocus({type:'reviewFolder',id})],['新建文件夹',()=>pendingFolderModal(id)],['新增用例',()=>pendingCaseModal(null,id)],['重命名空文件夹',()=>renamePendingFolderModal(id)]]}
-function reviewCaseMenu(id){return [['查看详情',()=>setReqFocus({type:'reviewCase',id})],['编辑',()=>pendingCaseModal(state.pendingCases.find(x=>x.ID===id))],['删除',()=>{if(confirm('确定删除这条待评审用例？'))actReview('deletePendingCase',{CaseID:id})}],['评审通过',()=>actReview('reviewPendingCase',{CaseID:id,Review:'passed'})],['评审不通过',()=>actReview('reviewPendingCase',{CaseID:id,Review:'rejected'})]]}
+function reviewFolderMenu(id){return [['查看详情',()=>setReqFocus({type:'reviewFolder',id})],['新建文件夹',()=>pendingFolderModal(id)],['新增用例',()=>pendingCaseModal(null,id)],['导入到版本…',()=>importReviewModal(pendingCaseIdsIn(id))],['重命名空文件夹',()=>renamePendingFolderModal(id)]]}
+function reviewCaseMenu(id){return [['查看详情',()=>setReqFocus({type:'reviewCase',id})],['编辑',()=>pendingCaseModal(state.pendingCases.find(x=>x.ID===id))],['导入到版本…',()=>importReviewModal([id])],['删除',()=>{if(confirm('确定删除这条待评审用例？'))actReview('deletePendingCase',{CaseID:id})}],['评审通过',()=>actReview('reviewPendingCase',{CaseID:id,Review:'passed'})],['评审不通过',()=>actReview('reviewPendingCase',{CaseID:id,Review:'rejected'})]]}
 function pendingFolderModal(parent){showModal('新建文件夹',`<label>文件夹名称<input name="Name" required></label>`,x=>actReview('createPendingFolder',{...x,ParentID:parent}))}
 function renamePendingFolderModal(id){const f=pendingFolder(id);showModal('重命名文件夹',`<label>文件夹名称<input name="Name" required value="${esc(f.Name)}"></label>`,x=>actReview('renamePendingFolder',{...x,FolderID:id}))}
 function pendingCaseModal(c,folderId){folderId=c?.FolderID||folderId;showModal(c?'编辑待评审用例':'新增待评审用例',`<label>标题<input name="Title" required value="${esc(c?.Title||'')}"></label><label>优先级<select name="Priority">${['P0','P1','P2','P3'].map(x=>`<option ${c?.Priority===x?'selected':''}>${x}</option>`).join('')}</select></label><label>前置条件<textarea name="Preconditions">${esc(c?.Preconditions||'')}</textarea></label><label>执行步骤<textarea name="Steps">${esc(c?.Steps||'')}</textarea></label><label>预期结果<textarea name="Expected">${esc(c?.Expected||'')}</textarea></label>`,x=>actReview(c?'editPendingCase':'createPendingCase',{...x,FolderID:folderId,CaseID:c?.ID||''}))}
-function importReviewModal(){
-  if(!state.pendingCases.length)return toast('待评审区没有用例',true);
-  const unreviewed=state.pendingCases.filter(c=>c.Review!=='passed');
+function importReviewModal(caseIds){
+  if(!caseIds.length)return toast('该范围内没有待评审用例',true);
+  const unreviewed=state.pendingCases.filter(c=>caseIds.includes(c.ID)&&c.Review!=='passed');
   if(unreviewed.length)return toast(`还有 ${unreviewed.length} 条用例未通过评审，无法导入`,true);
   const branches=state.versions.filter(v=>!v.mainline);
   if(!branches.length)return toast('请先创建一个测试版本作为导入目标',true);
-  showModal('导入到版本',`<label>目标版本<select name="VersionID">${branches.map(v=>`<option value="${v.id}">${esc(v.name)}</option>`).join('')}</select></label><p class="meta">将导入 ${state.pendingCases.length} 条已评审通过的用例，并保持目录结构。</p>`,x=>act('importPendingCases',x).then(()=>{reqFocus=null;renderReqFocus();toast('已导入到目标版本')}))
+  showModal('导入到版本',`<label>目标版本<select name="VersionID">${branches.map(v=>`<option value="${v.id}">${esc(v.name)}</option>`).join('')}</select></label><p class="meta">将导入 ${caseIds.length} 条已评审通过的用例，并保持目录结构。</p>`,x=>act('importPendingCases',{...x,CaseIDs:caseIds}).then(()=>{reqFocus=null;renderReqFocus();toast('已导入到目标版本')}))
 }
-$('#create-review-folder').onclick=()=>pendingFolderModal(currentReviewFolderTarget());
-$('#create-review-case').onclick=()=>pendingCaseModal(null,currentReviewFolderTarget());
-$('#import-review').onclick=importReviewModal;
 $$('#req-sidebar [data-reqview]').forEach(b=>b.onclick=()=>{
   $$('#req-sidebar [data-reqview]').forEach(x=>x.classList.toggle('active',x===b));
   reqPage=b.dataset.reqview;
@@ -453,12 +451,10 @@ function setReqSidebarCollapsed(collapsed){
 $('#req-collapse').onclick=()=>setReqSidebarCollapsed(true);
 $('#req-expand').onclick=$('#req-empty-expand').onclick=()=>setReqSidebarCollapsed(false);
 
-// ---- Top-left app switcher (用例管理 / 需求管理) ----
+// ---- Page tab bar (用例管理 / 需求管理) ----
 function setPage(p){
   page=p;
-  $$('#app-menu [data-app]').forEach(b=>b.classList.toggle('active',b.dataset.app===p));
-  $('#app-menu').classList.add('hidden');
-  $('#app-switch-btn').setAttribute('aria-expanded','false');
+  $$('.page-tab').forEach(b=>{const active=b.dataset.app===p;b.classList.toggle('active',active);b.setAttribute('aria-selected',String(active))});
   const isReq=p==='requirements';
   $('#app-subtitle').textContent=isReq?'需求文档管理':'测试用例管理';
   $('#workspace').classList.toggle('hidden',isReq);
@@ -466,6 +462,4 @@ function setPage(p){
   $('#revision').classList.toggle('hidden',isReq);
   if(isReq)updateReqEmptyHint();
 }
-$('#app-switch-btn').onclick=e=>{e.stopPropagation();const open=$('#app-menu').classList.toggle('hidden');$('#app-switch-btn').setAttribute('aria-expanded',String(!open))};
-$$('#app-menu [data-app]').forEach(b=>b.onclick=()=>setPage(b.dataset.app));
-document.addEventListener('click',e=>{if(!e.target.closest('.app-switch'))$('#app-menu').classList.add('hidden')});
+$$('.page-tab').forEach(b=>b.onclick=()=>setPage(b.dataset.app));

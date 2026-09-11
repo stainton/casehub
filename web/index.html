@@ -11,15 +11,13 @@
 </head>
 <body>
   <header class="topbar">
-    <div class="app-switch">
-      <button type="button" class="brand" id="app-switch-btn" aria-haspopup="true" aria-expanded="false"><span class="mark">C</span><div><strong id="app-title">CaseHub</strong><small id="app-subtitle">测试用例管理</small></div><span class="switch-caret">▾</span></button>
-      <div id="app-menu" class="app-menu hidden">
-        <button type="button" data-app="cases" class="active">🗂 用例管理</button>
-        <button type="button" data-app="requirements">📄 需求管理</button>
-      </div>
-    </div>
+    <div class="brand"><span class="mark">C</span><div><strong id="app-title">CaseHub</strong><small id="app-subtitle">测试用例管理</small></div></div>
     <div class="header-actions"><a class="header-link" href="/web/api.html">API 文档</a><span id="revision" class="revision"></span><button class="icon-button" id="theme" title="切换主题">◐</button><span class="avatar">本</span></div>
   </header>
+  <nav class="page-tabs" role="tablist">
+    <button type="button" class="page-tab active" role="tab" aria-selected="true" data-app="cases">🗂 用例管理</button>
+    <button type="button" class="page-tab" role="tab" aria-selected="false" data-app="requirements">📄 需求管理</button>
+  </nav>
   <main id="workspace">
     <aside id="sidebar">
       <div class="sidebar-head">
@@ -55,9 +53,6 @@
       </div>
       <div id="req-review-view" class="hidden">
         <div id="review-tree" class="versions"></div>
-        <button class="create-version" id="create-review-folder">＋ 新建文件夹</button>
-        <button class="create-version" id="create-review-case">＋ 新增用例</button>
-        <button class="create-version" id="import-review">⇪ 导入到版本…</button>
       </div>
     </aside>
     <div id="req-resize-left" class="resizer"></div>

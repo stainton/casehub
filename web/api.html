@@ -14,7 +14,7 @@
   "reqDocs": [],
   "pendingFolders": [],
   "pendingCases": []
-}</code></pre><p>上例仅展示响应结构。versions 使用 id、name、mainline、baseMainRevision、createdBy、createdAt 等小写开头字段；其他实体使用 ID、VersionID、CreatedAt 等大写开头字段。</p><p>histories 包含 Before / After 用例快照和 SourceVersionID；records 包含 Result、Note（Markdown 文本）、Submitted 和 TaskID。日期为 RFC 3339 字符串。</p><p>pendingCases 是需求管理"用例评审"页的临时草稿区，字段与 cases 类似，另有 Review（空 / passed / rejected）、ReviewedBy、ReviewedAt；不属于任何版本，导入成功后会被清空。</p></section>
+}</code></pre><p>上例仅展示响应结构。versions 使用 id、name、mainline、baseMainRevision、createdBy、createdAt 等小写开头字段；其他实体使用 ID、VersionID、CreatedAt 等大写开头字段。</p><p>histories 包含 Before / After 用例快照和 SourceVersionID；records 包含 Result、Note（Markdown 文本）、Submitted 和 TaskID。日期为 RFC 3339 字符串。</p><p>pendingCases 是需求管理"用例评审"页的临时草稿区，字段与 cases 类似，另有 Review（空 / passed / rejected）、ReviewedBy、ReviewedAt；不属于任何版本。导入（见 importPendingCases）默认整体清空该区，也可通过 CaseIDs 只导入并移除部分用例。</p></section>
 <section class="card" id="action"><h2>POST <code>/api/action</code></h2><p>请求头：<code>Content-Type: application/json</code>。请求体上限为 1 MiB。Type 指定操作，Author 可选，默认“本地用户”。除创建版本外，以下操作均针对非主线 VersionID。</p><p>展开下方操作可查看请求示例。示例中的版本、文件夹和用例 ID 需替换为当前状态中的实际值。</p></section>
 <details class="card" id="createVersion"><summary><code>createVersion</code> · 创建测试版本</summary><p>完整复制主线目录和用例，版本名称不能为空或重复。</p><pre><code>{
   &quot;Type&quot;: &quot;createVersion&quot;,
@@ -119,10 +119,11 @@
   &quot;Author&quot;: &quot;本地用户&quot;,
   &quot;CaseID&quot;: &quot;CASE-ABCDEF&quot;,
   &quot;Review&quot;: &quot;passed&quot;
-}</code></pre></details><details class="card" id="importPendingCases"><summary><code>importPendingCases</code> · 导入已评审用例</summary><p>VersionID 必须是非主线的测试版本。要求待评审区非空且全部用例评审通过，否则返回 400 并列出未通过的用例。按目录结构合并进目标版本：同名目录复用，用例按标题在对应目录下查重，任意冲突则整体导入失败、不写入任何内容。成功后待评审区会被清空。</p><pre><code>{
+}</code></pre></details><details class="card" id="importPendingCases"><summary><code>importPendingCases</code> · 导入已评审用例</summary><p>VersionID 必须是非主线的测试版本。CaseIDs 可选：省略或为空时导入整个待评审区，成功后该区会被清空并重置为空的 pending-root；指定时只导入这些用例（用于按目录或单条用例导入），成功后只移除这些用例，其余待评审用例和目录结构保持不变。要求范围内用例非空且全部评审通过，否则返回 400 并列出未通过的用例。按目录结构合并进目标版本：同名目录复用，用例按标题在对应目录下查重，范围内任意冲突则本次导入整体失败、不写入任何内容。</p><pre><code>{
   &quot;Type&quot;: &quot;importPendingCases&quot;,
   &quot;Author&quot;: &quot;本地用户&quot;,
-  &quot;VersionID&quot;: &quot;版本ID&quot;
+  &quot;VersionID&quot;: &quot;版本ID&quot;,
+  &quot;CaseIDs&quot;: [&quot;待评审用例ID&quot;]
 }</code></pre></details>
 <section class="card" id="planner"><h2>AI 设计代理 <code>/api/planner/*</code></h2><p>需求管理页"AI 设计"抽屉使用的透明反向代理，转发到 auto-test 仓库的 planner HTTP 服务（<code>server/planner/</code>），路径 <code>/api/planner/xxx</code> 会被重写为该服务的 <code>/v1/planner/xxx</code>，直接转发，无需鉴权 Token。完整的任务提交/进度/结果契约见该服务自己的 OpenAPI 文档，这里不重复。</p><p><code>GET /api/planner/status</code> 是 CaseHub 本地接口（不经过代理），返回 <code>{"enabled": bool}</code> 表示 planner 代理是否启用。默认连接 <code>http://localhost:4501</code>，可通过 <code>CASEHUB_PLANNER_URL</code> 修改。</p></section>
 <section class="card" id="errors"><h2>响应与错误</h2><p>成功返回 HTTP 200：</p><pre><code>{ "state": { "mainRevision": 1, "versions": [], "folders": [], "cases": [], "histories": [], "records": [], "tasks": [] }, "warnings": ["可选的提示信息"] }</code></pre><p>warnings 和 conflicts 为空时省略。客户端保存成功后应采用返回的完整 state 刷新页面。</p><table><thead><tr><th>状态码</th><th>含义</th></tr></thead><tbody><tr><td>400</td><td>无效 JSON、未知操作或业务校验失败；操作接口存储错误也返回 400。</td></tr><tr><td>409</td><td>主线文本已更新，需处理冲突。</td></tr><tr><td>500</td><td>读取状态时存储异常。</td></tr></tbody></table><pre><code>{ "error": "主线已有更新，需要先同步并处理冲突", "conflicts": ["CASE-0001"] }</code></pre><p>错误响应包含 error；操作错误还包含 conflicts（可能为 null）。编辑用例、保存或提交记录时，人工确认后可使用 Force: true；合并操作不会通过 Force 跳过冲突。保存记录时 Submitted: true 也会生成已提交记录。</p></section>

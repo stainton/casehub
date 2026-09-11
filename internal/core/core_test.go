@@ -244,3 +244,64 @@ func TestPendingCaseReviewAndImport(t *testing.T) {
 		t.Fatal("imported case missing from target version")
 	}
 }
+
+func TestScopedImportLeavesRestOfReviewAreaAlone(t *testing.T) {
+	svc := core.NewService(store.NewMemory())
+	state := apply(t, svc, core.Action{Type: "createPendingFolder", ParentID: "pending-root", Name: "支付", Author: "alice"})
+	var payFolderID string
+	for _, f := range state.PendingFolders {
+		if f.Name == "支付" {
+			payFolderID = f.ID
+		}
+	}
+	state = apply(t, svc, core.Action{Type: "createPendingCase", FolderID: payFolderID, Title: "退款成功", Priority: "P1", Author: "alice"})
+	state = apply(t, svc, core.Action{Type: "createPendingCase", FolderID: payFolderID, Title: "退款失败", Priority: "P1", Author: "alice"})
+	var toImport, keep core.PendingCase
+	for _, c := range state.PendingCases {
+		switch c.Title {
+		case "退款成功":
+			toImport = c
+		case "退款失败":
+			keep = c
+		}
+	}
+	apply(t, svc, core.Action{Type: "reviewPendingCase", CaseID: toImport.ID, Review: "passed", Author: "bob"})
+	// keep is deliberately left unreviewed to prove it doesn't block a scoped import of toImport.
+
+	branch := branchID(t, apply(t, svc, core.Action{Type: "createVersion", Name: "迭代 B", Author: "alice"}), "迭代 B")
+	if _, err := svc.Apply(context.Background(), core.Action{Type: "importPendingCases", VersionID: branch, CaseIDs: []string{keep.ID}}); err == nil {
+		t.Fatal("importing an unreviewed case must fail even when scoped")
+	}
+	state = apply(t, svc, core.Action{Type: "importPendingCases", VersionID: branch, CaseIDs: []string{toImport.ID}, Author: "bob"})
+
+	if len(state.PendingCases) != 1 || state.PendingCases[0].ID != keep.ID {
+		t.Fatalf("scoped import must only remove the imported case: %+v", state.PendingCases)
+	}
+	stillHasFolder := false
+	for _, f := range state.PendingFolders {
+		if f.ID == payFolderID {
+			stillHasFolder = true
+		}
+	}
+	if !stillHasFolder {
+		t.Fatal("scoped import must not reset the pending-review folder tree")
+	}
+	found := false
+	for _, c := range state.Cases {
+		if c.VersionID == branch && c.ID == toImport.ID {
+			found = true
+			var inFolder *core.Folder
+			for i, f := range state.Folders {
+				if f.VersionID == branch && f.ID == c.FolderID {
+					inFolder = &state.Folders[i]
+				}
+			}
+			if inFolder == nil || inFolder.Name != "支付" {
+				t.Fatalf("scoped import landed in wrong folder: %+v", c)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("scoped import did not land the case in the target version")
+	}
+}

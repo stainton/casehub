@@ -40,15 +40,15 @@ table{border-collapse:collapse;width:100%}th,td{text-align:left;vertical-align:t
 #req-workspace.sidebar-collapsed #req-content{padding-left:44px}
 #req-empty p{max-width:440px;line-height:1.8}#req-empty-expand{justify-self:center;margin-top:12px}
 
-/* App switcher in the top-left corner. */
-.app-switch{position:relative}
-.app-switch .brand{background:transparent;border:0;padding:6px 8px;border-radius:8px;cursor:pointer;display:flex;align-items:center;gap:11px;color:inherit;text-align:left}
-.app-switch .brand:hover{background:#ffffff15}
-.switch-caret{color:#aeb8ca;font-size:11px;margin-left:2px}
-.app-menu{position:absolute;top:calc(100% + 6px);left:0;width:210px;background:var(--surface);color:var(--text);border:1px solid var(--line);border-radius:9px;box-shadow:0 12px 35px #0003;padding:5px;z-index:40}
-.app-menu button{display:flex;align-items:center;gap:8px;width:100%;text-align:left;background:transparent;color:var(--text);padding:9px 10px;border-radius:6px}
-.app-menu button:hover{background:var(--surface2)}
-.app-menu button.active{background:var(--brand-soft);color:var(--brand);font-weight:600}
+/* Page tab bar between the topbar and the main content (用例管理 / 需求管理). */
+:root{--tabs-h:42px}
+.page-tabs{height:var(--tabs-h);display:flex;align-items:flex-end;gap:4px;background:#172033;padding:0 18px;border-bottom:1px solid var(--line)}
+.dark .page-tabs{background:#0b1120}
+.page-tab{background:transparent;border:0;border-radius:8px 8px 0 0;padding:9px 16px;cursor:pointer;color:#aeb8ca;font-size:13px;display:flex;align-items:center;gap:6px}
+.page-tab:hover{background:#ffffff15;color:#fff}
+.page-tab.active{background:var(--bg);color:var(--text);font-weight:600}
+#workspace,#req-workspace{height:calc(100vh - 60px - var(--tabs-h))}
+.drawer{top:calc(60px + var(--tabs-h))}
 
 /* AI design drawer (auto-test planner integration). */
 .ai-drawer-body{padding:20px}
