@@ -13,7 +13,7 @@ import (
 )
 
 func TestDisabledWithoutBaseURL(t *testing.T) {
-	handler, enabled := planner.New("", "")
+	handler, enabled := planner.New("")
 	if enabled {
 		t.Fatal("expected disabled proxy")
 	}
@@ -31,8 +31,7 @@ func TestDisabledWithoutBaseURL(t *testing.T) {
 	}
 }
 
-func TestForwardsAuthAndRewritesPath(t *testing.T) {
-	const token = "secret-token"
+func TestForwardsWithoutTokenAndRewritesPath(t *testing.T) {
 	var gotPath, gotAuth string
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotPath = r.URL.Path
@@ -42,20 +41,19 @@ func TestForwardsAuthAndRewritesPath(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	handler, enabled := planner.New(upstream.URL, token)
+	handler, enabled := planner.New(upstream.URL)
 	if !enabled {
 		t.Fatal("expected enabled proxy")
 	}
 	req := httptest.NewRequest(http.MethodPost, "/api/planner/jobs", nil)
-	req.Header.Set("Authorization", "Bearer client-supplied-token")
 	w := httptest.NewRecorder()
 	handler.ServeHTTP(w, req)
 
 	if gotPath != "/v1/planner/jobs" {
 		t.Fatalf("upstream path = %q, want /v1/planner/jobs", gotPath)
 	}
-	if gotAuth != "Bearer "+token {
-		t.Fatalf("upstream Authorization = %q, want the server token, not the client-supplied one", gotAuth)
+	if gotAuth != "" {
+		t.Fatalf("unexpected upstream Authorization = %q", gotAuth)
 	}
 	if w.Code != http.StatusCreated || w.Body.String() != `{"ok":true}` {
 		t.Fatalf("response not proxied through: status=%d body=%s", w.Code, w.Body.String())
@@ -78,7 +76,7 @@ func TestStreamsSSEWithoutBuffering(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	handler, _ := planner.New(upstream.URL, "tok")
+	handler, _ := planner.New(upstream.URL)
 	proxyServer := httptest.NewServer(handler)
 	defer proxyServer.Close()
 
@@ -102,7 +100,7 @@ func TestStreamsSSEWithoutBuffering(t *testing.T) {
 }
 
 func TestUnreachableUpstreamReturnsStructuredError(t *testing.T) {
-	handler, enabled := planner.New("http://127.0.0.1:1", "tok")
+	handler, enabled := planner.New("http://127.0.0.1:1")
 	if !enabled {
 		t.Fatal("expected enabled")
 	}

@@ -6,8 +6,7 @@ COPY . .
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /casehub .
 
 FROM alpine:3.22
-RUN adduser -D -u 10001 casehub && mkdir -p /app/data && chown casehub:casehub /app/data
-USER casehub
+RUN mkdir -p /app/data
 WORKDIR /app
 COPY --from=build /casehub /app/casehub
 EXPOSE 8080

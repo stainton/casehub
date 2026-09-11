@@ -5,6 +5,9 @@ services:
       CASEHUB_STORE: postgres
       DATABASE_URL: postgres://casehub:casehub@db:5432/casehub?sslmode=disable
       PORT: "8080"
+      CASEHUB_PLANNER_URL: ${CASEHUB_PLANNER_URL:-http://host.docker.internal:4501}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     ports:
       - "8080:8080"
     depends_on:

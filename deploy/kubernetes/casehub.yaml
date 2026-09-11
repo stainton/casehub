@@ -14,11 +14,6 @@ spec:
       labels:
         app: casehub
     spec:
-      securityContext:
-        runAsNonRoot: true
-        runAsUser: 10001
-        runAsGroup: 10001
-        fsGroup: 10001
       containers:
         - name: casehub
           # Replace with the actual image before deploying.
@@ -33,11 +28,10 @@ spec:
             - name: CASEHUB_DATA
               value: /app/data/casehub.json
             - name: DATABASE_URL
-              valueFrom:
-                secretKeyRef:
-                  name: casehub-db
-                  key: DATABASE_URL
-                  optional: true
+              # Set a PostgreSQL URL here, or leave empty for local file storage.
+              value: ""
+            - name: CASEHUB_PLANNER_URL
+              value: http://planner:4501
           volumeMounts:
             - name: data
               mountPath: /app/data

@@ -1,7 +1,6 @@
 // Package planner reverse-proxies CaseHub's requirement-management "AI 设计"
 // drawer to the auto-test planner HTTP service. CaseHub does not understand
-// job/SSE semantics here; it only injects the service bearer token so the
-// browser never holds it, as the planner service's own README requires.
+// job/SSE semantics here; it forwards requests and streamed progress directly.
 package planner
 
 import (
@@ -16,7 +15,7 @@ import (
 // feature is disabled and every request gets a 503 in the same Error shape
 // the planner service itself uses, so the frontend has one error format to
 // handle regardless of which side rejected the request.
-func New(baseURL, token string) (http.Handler, bool) {
+func New(baseURL string) (http.Handler, bool) {
 	if strings.TrimSpace(baseURL) == "" {
 		return http.HandlerFunc(disabled), false
 	}
@@ -30,11 +29,6 @@ func New(baseURL, token string) (http.Handler, bool) {
 			req.URL.Host = target.Host
 			req.Host = target.Host
 			req.URL.Path = "/v1/planner" + strings.TrimPrefix(req.URL.Path, "/api/planner")
-			if token != "" {
-				req.Header.Set("Authorization", "Bearer "+token)
-			} else {
-				req.Header.Del("Authorization")
-			}
 		},
 		FlushInterval: -1,
 		ErrorHandler:  unreachable,

@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"flag"
-	"io"
 	"log"
 	"net/http"
 	"os"
@@ -37,7 +36,7 @@ func (a *api) state(w http.ResponseWriter, r *http.Request) {
 }
 func (a *api) action(w http.ResponseWriter, r *http.Request) {
 	var in core.Action
-	if e := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&in); e != nil {
+	if e := json.NewDecoder(r.Body).Decode(&in); e != nil {
 		jsonOut(w, 400, map[string]string{"error": "无效的 JSON 请求"})
 		return
 	}
@@ -71,7 +70,17 @@ func routes(a *api, plannerProxy http.Handler, plannerEnabled bool) http.Handler
 		}
 		fs.ServeHTTP(w, r)
 	})
-	return m
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Last-Event-ID")
+		w.Header().Set("Access-Control-Expose-Headers", "Location")
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		m.ServeHTTP(w, r)
+	})
 }
 func main() {
 	databaseURL := flag.String("database-url", os.Getenv("DATABASE_URL"), "PostgreSQL connection URL (defaults to DATABASE_URL)")
@@ -99,7 +108,7 @@ func main() {
 		defer closeDB()
 	}
 	port := env("PORT", "8080")
-	plannerProxy, plannerEnabled := planner.New(os.Getenv("CASEHUB_PLANNER_URL"), os.Getenv("CASEHUB_PLANNER_TOKEN"))
+	plannerProxy, plannerEnabled := planner.New(env("CASEHUB_PLANNER_URL", "http://localhost:4501"))
 	log.Printf("CaseHub listening on :%s (store=%s, planner=%v)", port, kind, plannerEnabled)
 	log.Fatal(http.ListenAndServe(":"+port, routes(&api{service: core.NewService(repo)}, plannerProxy, plannerEnabled)))
 }

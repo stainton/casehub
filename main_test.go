@@ -30,7 +30,7 @@ func TestStorageKind(t *testing.T) {
 }
 
 func TestFrontendAssetsAndMarkdownRecord(t *testing.T) {
-	plannerProxy, plannerEnabled := planner.New("", "")
+	plannerProxy, plannerEnabled := planner.New("")
 	handler := routes(&api{service: core.NewService(store.NewMemory())}, plannerProxy, plannerEnabled)
 	for _, path := range []string{"/", "/web/api.html", "/web/api.js", "/web/vendor/toastui-editor-all.min.js", "/web/vendor/toastui-editor.min.css", "/web/vendor/toastui-editor-dark.min.css", "/web/vendor/zh-cn.js"} {
 		w := httptest.NewRecorder()
@@ -68,5 +68,26 @@ func TestFrontendAssetsAndMarkdownRecord(t *testing.T) {
 	handler.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/state", nil))
 	if !strings.Contains(w.Body.String(), "执行环境") {
 		t.Fatal("saved Markdown missing from state")
+	}
+}
+
+func TestCrossOriginRequests(t *testing.T) {
+	proxy, enabled := planner.New("")
+	handler := routes(&api{service: core.NewService(store.NewMemory())}, proxy, enabled)
+	for _, method := range []string{http.MethodOptions, http.MethodGet} {
+		r := httptest.NewRequest(method, "/api/state", nil)
+		r.Header.Set("Origin", "http://localhost:4501")
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, r)
+		if w.Header().Get("Access-Control-Allow-Origin") != "*" {
+			t.Fatal("cross-origin access was not enabled")
+		}
+		want := http.StatusOK
+		if method == http.MethodOptions {
+			want = http.StatusNoContent
+		}
+		if w.Code != want {
+			t.Fatalf("%s returned %d, want %d", method, w.Code, want)
+		}
 	}
 }
