@@ -168,6 +168,13 @@ async function saveReqDoc(doc){
   renderReqFocus();
   toast('需求文档已保存');
 }
+function currentReqFolderTarget(){
+  if(reqFocus?.type==='folder')return reqFocus.id;
+  if(reqFocus?.type==='doc'){const d=state.reqDocs.find(x=>x.ID===reqFocus.id);if(d)return d.FolderID}
+  return reqRoots()[0]?.ID||'';
+}
+$('#create-req-folder').onclick=()=>reqFolderModal(currentReqFolderTarget());
+$('#create-req-doc').onclick=()=>reqDocModal(currentReqFolderTarget());
 function reqFolderMenu(id){return [['查看详情',()=>setReqFocus({type:'folder',id})],['新建文件夹',()=>reqFolderModal(id)],['新增需求文档',()=>reqDocModal(id)],['重命名文件夹',()=>renameReqFolderModal(id)]]}
 function reqDocMenu(id){const doc=state.reqDocs.find(x=>x.ID===id);return [['查看详情',()=>setReqFocus({type:'doc',id})],['重命名',()=>renameReqDocModal(doc)],['AI 设计',()=>openAiDrawer(doc)]]}
 function reqFolderModal(parent){showModal('新建文件夹',`<label>文件夹名称<input name="Name" required></label>`,x=>act('createReqFolder',{...x,ParentID:parent}))}
