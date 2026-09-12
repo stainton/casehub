@@ -6,7 +6,7 @@ CaseHub 是按版本管理测试用例、测试任务和执行记录的本地系
 
 ```sh
 sh build.sh
-./build/casehub
+./output/casehub
 ```
 
 访问 `http://localhost:8080`。默认使用 `data/casehub.json` 持久化；测试时可设置 `CASEHUB_STORE=memory`。
@@ -15,7 +15,7 @@ Windows 使用：
 
 ```powershell
 ./build.ps1
-./build/casehub.exe
+./output/casehub.exe
 ```
 
 ## 容器运行（独立 PostgreSQL）

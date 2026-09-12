@@ -404,5 +404,204 @@
       ],
       "CreatedAt": "2026-09-04T09:41:43.763Z"
     }
+  ],
+  "reqFolders": [
+    {
+      "ID": "207a8bccf8f987c2",
+      "ParentID": "",
+      "Name": "需求测试",
+      "CreatedBy": "本地用户",
+      "CreatedAt": "2026-09-12T14:09:32.896Z"
+    }
+  ],
+  "reqDocs": [
+    {
+      "ID": "REQ-D08750",
+      "FolderID": "207a8bccf8f987c2",
+      "Title": "微信开发文档",
+      "Content": "页面布局：页面顶部有“开发”、“介绍”、“设计”、“运营”、“数据”这几个板块",
+      "CreatedBy": "本地用户",
+      "UpdatedBy": "本地用户",
+      "CreatedAt": "2026-09-12T14:09:45.167Z",
+      "UpdatedAt": "2026-09-12T14:11:29.623Z"
+    }
+  ],
+  "pendingFolders": [
+    {
+      "ID": "pending-root",
+      "ParentID": "",
+      "Name": "待评审用例",
+      "CreatedBy": "system",
+      "CreatedAt": "2026-09-12T14:09:32.896Z"
+    },
+    {
+      "ID": "1dec948287ebfce2",
+      "ParentID": "pending-root",
+      "Name": "REQ-D08750 · 微信开发文档",
+      "CreatedBy": "本地用户",
+      "CreatedAt": "2026-09-12T15:04:44.275Z"
+    }
+  ],
+  "pendingCases": [
+    {
+      "ID": "CASE-839F14",
+      "FolderID": "1dec948287ebfce2",
+      "Title": "验证页面顶部包含所有必需的导航板块",
+      "Preconditions": "浏览器访问 https://developers.weixin.qq.com/miniprogram/dev/reference/ 页面，页面完全加载",
+      "Steps": "1. 访问微信开发文档页面\n2. 查找页面顶部的导航栏\n3. 验证导航栏中是否存在开发、介绍、设计、运营、数据5个板块\n4. 验证5个板块在导航栏中的顺序是否为：开发 -\u003e 介绍 -\u003e 设计 -\u003e 运营 -\u003e 数据\n5. 确认每个板块在视口中都可见",
+      "Expected": "1. 页面加载成功，URL为 https://developers.weixin.qq.com/miniprogram/dev/reference/\n2. 页面顶部存在导航栏元素\n3. 导航栏中包含开发、介绍、设计、运营、数据5个元素\n4. 5个板块按正确顺序排列：开发 -\u003e 介绍 -\u003e 设计 -\u003e 运营 -\u003e 数据\n5. 所有5个板块在视口中可见且未被隐藏",
+      "Priority": "P0",
+      "Review": "",
+      "CreatedBy": "本地用户",
+      "UpdatedBy": "本地用户",
+      "ReviewedBy": "",
+      "CreatedAt": "2026-09-12T15:04:44.289Z",
+      "UpdatedAt": "2026-09-12T15:04:44.289Z",
+      "ReviewedAt": "0001-01-01T00:00:00Z"
+    },
+    {
+      "ID": "CASE-2EE8A5",
+      "FolderID": "1dec948287ebfce2",
+      "Title": "验证开发板块的可访问性和导航功能",
+      "Preconditions": "浏览器访问 https://developers.weixin.qq.com/miniprogram/dev/reference/ 页面，页面完全加载，导航栏可见",
+      "Steps": "1. 定位页面顶部导航栏中的开发板块\n2. 验证开发板块是可点击元素\n3. 点击开发板块\n4. 等待页面加载完成\n5. 验证导航到的URL和页面内容",
+      "Expected": "1. 开发板块在导航栏中可见\n2. 开发板块具有可点击的光标样式\n3. 页面成功导航到新的URL\n4. 页面加载完成\n5. 页面URL为 /miniprogram/dev/framework/ 或类似的开发相关路径",
+      "Priority": "P0",
+      "Review": "",
+      "CreatedBy": "本地用户",
+      "UpdatedBy": "本地用户",
+      "ReviewedBy": "",
+      "CreatedAt": "2026-09-12T15:04:44.296Z",
+      "UpdatedAt": "2026-09-12T15:04:44.296Z",
+      "ReviewedAt": "0001-01-01T00:00:00Z"
+    },
+    {
+      "ID": "CASE-8B47B9",
+      "FolderID": "1dec948287ebfce2",
+      "Title": "验证介绍板块的可访问性和导航功能",
+      "Preconditions": "浏览器访问 https://developers.weixin.qq.com/miniprogram/dev/reference/ 页面，页面完全加载，导航栏可见",
+      "Steps": "1. 定位页面顶部导航栏中的介绍板块\n2. 验证介绍板块是可点击元素\n3. 点击介绍板块\n4. 等待页面加载完成\n5. 验证导航到的URL和页面内容",
+      "Expected": "1. 介绍板块在导航栏中可见\n2. 介绍板块具有可点击的光标样式\n3. 页面成功导航到新的URL\n4. 页面加载完成\n5. 页面URL为 /miniprogram/introduction/ 或类似的介绍相关路径",
+      "Priority": "P0",
+      "Review": "",
+      "CreatedBy": "本地用户",
+      "UpdatedBy": "本地用户",
+      "ReviewedBy": "",
+      "CreatedAt": "2026-09-12T15:04:44.307Z",
+      "UpdatedAt": "2026-09-12T15:04:44.307Z",
+      "ReviewedAt": "0001-01-01T00:00:00Z"
+    },
+    {
+      "ID": "CASE-F81923",
+      "FolderID": "1dec948287ebfce2",
+      "Title": "验证设计板块的可访问性和导航功能",
+      "Preconditions": "浏览器访问 https://developers.weixin.qq.com/miniprogram/dev/reference/ 页面，页面完全加载，导航栏可见",
+      "Steps": "1. 定位页面顶部导航栏中的设计板块\n2. 验证设计板块是可点击元素\n3. 点击设计板块\n4. 等待页面加载完成\n5. 验证导航到的URL和页面内容",
+      "Expected": "1. 设计板块在导航栏中可见\n2. 设计板块具有可点击的光标样式\n3. 页面成功导航到新的URL\n4. 页面加载完成\n5. 页面URL为 /miniprogram/design/ 或类似的设计相关路径",
+      "Priority": "P0",
+      "Review": "",
+      "CreatedBy": "本地用户",
+      "UpdatedBy": "本地用户",
+      "ReviewedBy": "",
+      "CreatedAt": "2026-09-12T15:04:44.313Z",
+      "UpdatedAt": "2026-09-12T15:04:44.313Z",
+      "ReviewedAt": "0001-01-01T00:00:00Z"
+    },
+    {
+      "ID": "CASE-43096C",
+      "FolderID": "1dec948287ebfce2",
+      "Title": "验证运营板块的可访问性和导航功能",
+      "Preconditions": "浏览器访问 https://developers.weixin.qq.com/miniprogram/dev/reference/ 页面，页面完全加载，导航栏可见",
+      "Steps": "1. 定位页面顶部导航栏中的运营板块\n2. 验证运营板块是可点击元素\n3. 点击运营板块\n4. 等待页面加载完成\n5. 验证导航到的URL和页面内容",
+      "Expected": "1. 运营板块在导航栏中可见\n2. 运营板块具有可点击的光标样式\n3. 页面成功导航到新的URL\n4. 页面加载完成\n5. 页面URL为 /miniprogram/product/ 或类似的运营相关路径",
+      "Priority": "P0",
+      "Review": "",
+      "CreatedBy": "本地用户",
+      "UpdatedBy": "本地用户",
+      "ReviewedBy": "",
+      "CreatedAt": "2026-09-12T15:04:44.319Z",
+      "UpdatedAt": "2026-09-12T15:04:44.319Z",
+      "ReviewedAt": "0001-01-01T00:00:00Z"
+    },
+    {
+      "ID": "CASE-E3C677",
+      "FolderID": "1dec948287ebfce2",
+      "Title": "验证数据板块的可访问性和导航功能",
+      "Preconditions": "浏览器访问 https://developers.weixin.qq.com/miniprogram/dev/reference/ 页面，页面完全加载，导航栏可见",
+      "Steps": "1. 定位页面顶部导航栏中的数据板块\n2. 验证数据板块是可点击元素\n3. 点击数据板块\n4. 等待页面加载完成\n5. 验证导航到的URL和页面内容",
+      "Expected": "1. 数据板块在导航栏中可见\n2. 数据板块具有可点击的光标样式\n3. 页面成功导航到新的URL\n4. 页面加载完成\n5. 页面URL为 /miniprogram/analysis/ 或类似的数据相关路径",
+      "Priority": "P0",
+      "Review": "",
+      "CreatedBy": "本地用户",
+      "UpdatedBy": "本地用户",
+      "ReviewedBy": "",
+      "CreatedAt": "2026-09-12T15:04:44.325Z",
+      "UpdatedAt": "2026-09-12T15:04:44.325Z",
+      "ReviewedAt": "0001-01-01T00:00:00Z"
+    },
+    {
+      "ID": "CASE-6E2E67",
+      "FolderID": "1dec948287ebfce2",
+      "Title": "验证导航栏不会因页面刷新而消失",
+      "Preconditions": "浏览器访问 https://developers.weixin.qq.com/miniprogram/dev/reference/ 页面，页面完全加载，导航栏可见",
+      "Steps": "1. 验证初始状态下导航栏中的5个板块都可见\n2. 刷新页面\n3. 等待页面加载完成\n4. 验证刷新后导航栏中的5个板块是否仍然可见",
+      "Expected": "1. 初始加载时，5个板块都可见\n2. 页面成功刷新\n3. 页面加载完成\n4. 刷新后，导航栏中的5个板块仍然可见且位置未改变",
+      "Priority": "P1",
+      "Review": "",
+      "CreatedBy": "本地用户",
+      "UpdatedBy": "本地用户",
+      "ReviewedBy": "",
+      "CreatedAt": "2026-09-12T15:04:44.33Z",
+      "UpdatedAt": "2026-09-12T15:04:44.33Z",
+      "ReviewedAt": "0001-01-01T00:00:00Z"
+    },
+    {
+      "ID": "CASE-BA51AC",
+      "FolderID": "1dec948287ebfce2",
+      "Title": "验证导航栏的视觉可用性",
+      "Preconditions": "浏览器访问 https://developers.weixin.qq.com/miniprogram/dev/reference/ 页面，页面完全加载，导航栏可见",
+      "Steps": "1. 定位页面顶部的导航栏\n2. 检查导航栏中的5个板块是否都可见且布局清晰\n3. 验证每个板块的文字大小和颜色是否清晰易读\n4. 检查各板块之间的间距是否合理",
+      "Expected": "1. 导航栏位于页面顶部显眼位置\n2. 5个板块都完全可见且未被遮挡\n3. 文字具有良好的对比度和可读性\n4. 各板块之间有适当的间距，易于识别和点击",
+      "Priority": "P1",
+      "Review": "",
+      "CreatedBy": "本地用户",
+      "UpdatedBy": "本地用户",
+      "ReviewedBy": "",
+      "CreatedAt": "2026-09-12T15:04:44.336Z",
+      "UpdatedAt": "2026-09-12T15:04:44.336Z",
+      "ReviewedAt": "0001-01-01T00:00:00Z"
+    },
+    {
+      "ID": "CASE-CF2D2E",
+      "FolderID": "1dec948287ebfce2",
+      "Title": "验证从不同导航板块返回时导航栏保持一致",
+      "Preconditions": "浏览器访问 https://developers.weixin.qq.com/miniprogram/dev/reference/ 页面，页面完全加载，导航栏可见",
+      "Steps": "1. 记录初始页面的导航栏状态\n2. 点击开发板块进行导航\n3. 验证导航后的导航栏状态\n4. 点击介绍板块进行导航\n5. 验证导航后的导航栏状态是否与初始状态一致",
+      "Expected": "1. 初始导航栏中5个板块都可见\n2. 开发页面加载成功\n3. 开发页面的导航栏与初始导航栏布局一致\n4. 介绍页面加载成功\n5. 介绍页面的导航栏与初始导航栏布局一致，所有5个板块仍然可见",
+      "Priority": "P1",
+      "Review": "",
+      "CreatedBy": "本地用户",
+      "UpdatedBy": "本地用户",
+      "ReviewedBy": "",
+      "CreatedAt": "2026-09-12T15:04:44.341Z",
+      "UpdatedAt": "2026-09-12T15:04:44.341Z",
+      "ReviewedAt": "0001-01-01T00:00:00Z"
+    },
+    {
+      "ID": "CASE-96FACA",
+      "FolderID": "1dec948287ebfce2",
+      "Title": "验证导航栏不会因页面滚动而消失（粘性导航栏）",
+      "Preconditions": "浏览器访问 https://developers.weixin.qq.com/miniprogram/dev/reference/ 页面，页面完全加载，导航栏可见，页面内容足以支持滚动",
+      "Steps": "1. 验证初始状态下导航栏可见\n2. 向下滚动页面\n3. 检查导航栏是否仍然可见\n4. 继续向下滚动\n5. 验证导航栏中的5个板块是否仍然可用",
+      "Expected": "1. 初始状态下导航栏可见\n2. 页面成功向下滚动\n3. 滚动后导航栏仍然可见于页面顶部\n4. 继续滚动后导航栏仍然可见\n5. 导航栏中的5个板块仍然可点击且可用",
+      "Priority": "P2",
+      "Review": "",
+      "CreatedBy": "本地用户",
+      "UpdatedBy": "本地用户",
+      "ReviewedBy": "",
+      "CreatedAt": "2026-09-12T15:04:44.347Z",
+      "UpdatedAt": "2026-09-12T15:04:44.347Z",
+      "ReviewedAt": "0001-01-01T00:00:00Z"
+    }
   ]
 }

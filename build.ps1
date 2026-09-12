@@ -1,4 +1,4 @@
 $ErrorActionPreference = "Stop"
-New-Item -ItemType Directory -Force -Path build | Out-Null
-go build -o build/casehub.exe .
-Write-Host "Built build/casehub.exe"
+New-Item -ItemType Directory -Force -Path output | Out-Null
+go build -o output/casehub.exe .
+Write-Host "Built output/casehub.exe"

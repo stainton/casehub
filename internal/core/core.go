@@ -318,6 +318,8 @@ func (s *Service) Apply(ctx context.Context, a Action) (Result, error) {
 		err = createPendingFolder(&st, a)
 	case "renamePendingFolder":
 		err = renamePendingFolder(&st, a)
+	case "deletePendingFolder":
+		err = deletePendingFolder(&st, a)
 	case "createPendingCase":
 		err = createPendingCase(&st, a)
 	case "editPendingCase":
@@ -727,6 +729,27 @@ func renamePendingFolder(s *State, a Action) error {
 		return errors.New("文件夹名称不能为空")
 	}
 	f.Name = strings.TrimSpace(a.Name)
+	return nil
+}
+func deletePendingFolder(s *State, a Action) error {
+	f, i := pendingFolderAt(s, a.FolderID)
+	if f == nil {
+		return errors.New("文件夹不存在")
+	}
+	if f.ID == "pending-root" {
+		return errors.New("不能删除根目录")
+	}
+	for _, x := range s.PendingFolders {
+		if x.ParentID == f.ID {
+			return errors.New("只能删除空文件夹")
+		}
+	}
+	for _, x := range s.PendingCases {
+		if x.FolderID == f.ID {
+			return errors.New("只能删除空文件夹")
+		}
+	}
+	s.PendingFolders = append(s.PendingFolders[:i], s.PendingFolders[i+1:]...)
 	return nil
 }
 func createPendingCase(s *State, a Action) error {
