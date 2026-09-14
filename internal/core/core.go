@@ -107,6 +107,7 @@ type Action struct {
 	Submitted, Force                                    bool
 	DocID, Content                                      string
 	Review                                              string
+	TargetFolderID                                      string
 }
 
 type Result struct {
@@ -346,6 +347,26 @@ func (s *Service) Apply(ctx context.Context, a Action) (Result, error) {
 		if len(conflicts) > 0 {
 			return Result{State: st, Conflicts: conflicts}, ConflictError{Cases: conflicts}
 		}
+	case "mergeFolder":
+		var conflicts []string
+		conflicts, err = mergeFolder(&st, a)
+		if len(conflicts) > 0 {
+			return Result{State: st, Conflicts: conflicts}, ConflictError{Cases: conflicts}
+		}
+	case "mergeCases":
+		var conflicts []string
+		var merged int
+		conflicts, merged, err = mergeCases(&st, a)
+		if len(conflicts) > 0 {
+			return Result{State: st, Conflicts: conflicts}, ConflictError{Cases: conflicts}
+		}
+		if err == nil && merged == 0 {
+			warnings = append(warnings, "没有可合并的变更")
+		}
+	case "deleteFolder":
+		err = deleteFolder(&st, a)
+	case "moveCases":
+		err = moveCases(&st, a)
 	default:
 		err = fmt.Errorf("unknown action %q", a.Type)
 	}
@@ -632,26 +653,241 @@ func mergeVersion(s *State, a Action) ([]string, error) {
 		}
 	}
 	for _, c := range branchCases {
-		m, _ := caseAt(s, "main", c.ID)
-		n := c
-		n.VersionID = "main"
-		n.Result = ""
-		n.Dirty = false
-		n.BaseRevision = 0
-		n.Revision = s.MainRevision
-		n.UpdatedAt = now()
-		if m == nil {
-			s.Cases = append(s.Cases, n)
-		} else {
-			*m = n
-		}
-		s.Histories = append(s.Histories, History{ID: ID(), CaseID: c.ID, VersionID: "main", SourceVersionID: v.ID, Action: "merge", Author: a.Author, After: &n, CreatedAt: now()})
-		bc, _ := caseAt(s, v.ID, c.ID)
-		bc.BaseRevision = s.MainRevision
-		bc.Dirty = false
+		mergeCaseInto(s, c, s.MainRevision, c.FolderID, a.Author)
 	}
 	v.BaseMainRevision = s.MainRevision
 	return nil, nil
+}
+
+// mergeCaseInto upserts a branch case into mainline at the given revision and
+// folder, records the merge in history, and marks the source branch case as
+// caught up. Shared by mergeVersion (folderID stays whatever the branch case
+// already has), mergeFolder (same, scoped to a folder subtree) and mergeCases
+// (folderID is forced to the chosen target, flattening structure).
+func mergeCaseInto(s *State, c TestCase, revision int64, folderID string, author string) {
+	m, _ := caseAt(s, "main", c.ID)
+	n := c
+	n.VersionID = "main"
+	n.FolderID = folderID
+	n.Result = ""
+	n.Dirty = false
+	n.BaseRevision = 0
+	n.Revision = revision
+	n.UpdatedAt = now()
+	if m == nil {
+		s.Cases = append(s.Cases, n)
+	} else {
+		*m = n
+	}
+	s.Histories = append(s.Histories, History{ID: ID(), CaseID: c.ID, VersionID: "main", SourceVersionID: c.VersionID, Action: "merge", Author: author, After: &n, CreatedAt: now()})
+	bc, _ := caseAt(s, c.VersionID, c.ID)
+	bc.BaseRevision = revision
+	bc.Dirty = false
+}
+
+func descendantFolderIDs(s *State, versionID, folderID string) []string {
+	var out []string
+	var walk func(id string)
+	walk = func(id string) {
+		for _, f := range s.Folders {
+			if f.VersionID == versionID && f.ParentID == id {
+				out = append(out, f.ID)
+				walk(f.ID)
+			}
+		}
+	}
+	walk(folderID)
+	return out
+}
+
+// mergeFolder merges one branch folder's subtree into mainline, preserving
+// its internal structure, grafted under a chosen mainline parent folder. It
+// only handles folders new to mainline (an already-merged folder cannot be
+// re-grafted elsewhere) and aborts entirely, without writing anything, if the
+// target parent already has a same-named child folder.
+func mergeFolder(s *State, a Action) ([]string, error) {
+	v, err := requireBranch(s, a.VersionID)
+	if err != nil {
+		return nil, err
+	}
+	f, _ := folderAt(s, v.ID, a.FolderID)
+	if f == nil {
+		return nil, errors.New("文件夹不存在")
+	}
+	if a.TargetFolderID == "" {
+		return nil, errors.New("请选择目标文件夹")
+	}
+	target, _ := folderAt(s, "main", a.TargetFolderID)
+	if target == nil {
+		return nil, errors.New("主线目标文件夹不存在")
+	}
+	if mf, _ := folderAt(s, "main", f.ID); mf != nil {
+		return nil, errors.New("该文件夹已在主线中，无法重复合并")
+	}
+	for _, x := range s.Folders {
+		if x.VersionID == "main" && x.ParentID == target.ID && x.Name == f.Name {
+			return nil, fmt.Errorf("主线目标目录下已存在同名文件夹，合并已取消：%s", f.Name)
+		}
+	}
+	subtree := append([]string{f.ID}, descendantFolderIDs(s, v.ID, f.ID)...)
+	inSubtree := map[string]bool{}
+	for _, id := range subtree {
+		inSubtree[id] = true
+	}
+	conflicts := []string{}
+	for _, c := range s.Cases {
+		if c.VersionID != v.ID || !c.Dirty || !inSubtree[c.FolderID] {
+			continue
+		}
+		m, _ := caseAt(s, "main", c.ID)
+		if m != nil && m.Revision > c.BaseRevision {
+			conflicts = append(conflicts, c.ID)
+		}
+	}
+	if len(conflicts) > 0 {
+		return conflicts, nil
+	}
+	s.MainRevision++
+	branchFolders := append([]Folder(nil), s.Folders...)
+	for _, bf := range branchFolders {
+		if bf.VersionID != v.ID || !inSubtree[bf.ID] {
+			continue
+		}
+		n := bf
+		n.VersionID = "main"
+		if n.ID == f.ID {
+			n.ParentID = target.ID
+		}
+		s.Folders = append(s.Folders, n)
+	}
+	branchCases := []TestCase{}
+	for _, c := range s.Cases {
+		if c.VersionID == v.ID && c.Dirty && inSubtree[c.FolderID] {
+			branchCases = append(branchCases, c)
+		}
+	}
+	for _, c := range branchCases {
+		mergeCaseInto(s, c, s.MainRevision, c.FolderID, a.Author)
+	}
+	return nil, nil
+}
+
+// mergeCases merges an explicit, possibly cross-folder set of branch cases
+// into a single chosen mainline folder, flattening structure. Cases with no
+// pending change (not Dirty) are silently skipped rather than treated as an
+// error; the caller surfaces a warning when nothing ended up merged.
+func mergeCases(s *State, a Action) ([]string, int, error) {
+	v, err := requireBranch(s, a.VersionID)
+	if err != nil {
+		return nil, 0, err
+	}
+	if len(a.CaseIDs) == 0 {
+		return nil, 0, errors.New("请选择用例")
+	}
+	if a.TargetFolderID == "" {
+		return nil, 0, errors.New("请选择目标文件夹")
+	}
+	target, _ := folderAt(s, "main", a.TargetFolderID)
+	if target == nil {
+		return nil, 0, errors.New("主线目标文件夹不存在")
+	}
+	var toMerge []TestCase
+	conflicts := []string{}
+	for _, id := range a.CaseIDs {
+		c, _ := caseAt(s, v.ID, id)
+		if c == nil {
+			return nil, 0, fmt.Errorf("用例 %s 不属于当前版本", id)
+		}
+		if !c.Dirty {
+			continue
+		}
+		m, _ := caseAt(s, "main", c.ID)
+		if m != nil && m.Revision > c.BaseRevision {
+			conflicts = append(conflicts, c.ID)
+			continue
+		}
+		toMerge = append(toMerge, *c)
+	}
+	if len(conflicts) > 0 {
+		return conflicts, 0, nil
+	}
+	if len(toMerge) == 0 {
+		return nil, 0, nil
+	}
+	s.MainRevision++
+	for _, c := range toMerge {
+		mergeCaseInto(s, c, s.MainRevision, target.ID, a.Author)
+	}
+	return nil, len(toMerge), nil
+}
+
+// deleteFolder removes an empty branch folder. Mirrors deleteReqFolder /
+// deletePendingFolder's empty-folder guard for the case-tree folders.
+func deleteFolder(s *State, a Action) error {
+	v, err := requireBranch(s, a.VersionID)
+	if err != nil {
+		return err
+	}
+	f, i := folderAt(s, v.ID, a.FolderID)
+	if f == nil {
+		return errors.New("文件夹不存在")
+	}
+	if f.ID == "root" {
+		return errors.New("不能删除根目录")
+	}
+	for _, x := range s.Folders {
+		if x.VersionID == v.ID && x.ParentID == f.ID {
+			return errors.New("只能删除空文件夹")
+		}
+	}
+	for _, x := range s.Cases {
+		if x.VersionID == v.ID && x.FolderID == f.ID {
+			return errors.New("只能删除空文件夹")
+		}
+	}
+	s.Folders = append(s.Folders[:i], s.Folders[i+1:]...)
+	return nil
+}
+
+// moveCases relocates a set of branch cases into a different folder within
+// the same branch, marking them Dirty so a later merge picks up the move.
+func moveCases(s *State, a Action) error {
+	v, err := requireBranch(s, a.VersionID)
+	if err != nil {
+		return err
+	}
+	if len(a.CaseIDs) == 0 {
+		return errors.New("请选择用例")
+	}
+	if a.TargetFolderID == "" {
+		return errors.New("请选择目标文件夹")
+	}
+	target, _ := folderAt(s, v.ID, a.TargetFolderID)
+	if target == nil {
+		return errors.New("目标文件夹不存在")
+	}
+	var toMove []*TestCase
+	for _, id := range a.CaseIDs {
+		c, _ := caseAt(s, v.ID, id)
+		if c == nil {
+			return fmt.Errorf("用例 %s 不属于当前版本", id)
+		}
+		toMove = append(toMove, c)
+	}
+	t := now()
+	for _, c := range toMove {
+		if c.FolderID == target.ID {
+			continue
+		}
+		before := *c
+		c.FolderID = target.ID
+		c.Dirty = true
+		c.UpdatedBy = a.Author
+		c.UpdatedAt = t
+		after := *c
+		s.Histories = append(s.Histories, History{ID: ID(), CaseID: c.ID, VersionID: v.ID, SourceVersionID: v.ID, Action: "move", Author: a.Author, Before: &before, After: &after, CreatedAt: t})
+	}
+	return nil
 }
 func createReqFolder(s *State, a Action) error {
 	if strings.TrimSpace(a.Name) == "" {

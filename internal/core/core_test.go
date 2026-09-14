@@ -31,6 +31,28 @@ func branchID(t *testing.T, state core.State, name string) string {
 	return ""
 }
 
+func folderID(t *testing.T, state core.State, versionID, name string) string {
+	t.Helper()
+	for _, f := range state.Folders {
+		if f.VersionID == versionID && f.Name == name {
+			return f.ID
+		}
+	}
+	t.Fatalf("folder %q not found in version %q", name, versionID)
+	return ""
+}
+
+func caseIDByTitle(t *testing.T, state core.State, versionID, title string) string {
+	t.Helper()
+	for _, c := range state.Cases {
+		if c.VersionID == versionID && c.Title == title {
+			return c.ID
+		}
+	}
+	t.Fatalf("case %q not found in version %q", title, versionID)
+	return ""
+}
+
 func TestCompleteBranchWorkflow(t *testing.T) {
 	svc := core.NewService(store.NewMemory())
 	state := apply(t, svc, core.Action{Type: "createVersion", Name: "迭代 A", Author: "alice"})
@@ -89,6 +111,223 @@ func TestMainlineIsReadOnly(t *testing.T) {
 	_, err := svc.Apply(context.Background(), core.Action{Type: "createCase", VersionID: "main", FolderID: "auth", Title: "forbidden"})
 	if err == nil {
 		t.Fatal("mainline mutation must fail")
+	}
+}
+
+func TestMergeFolderPreservesStructureUnderChosenTarget(t *testing.T) {
+	svc := core.NewService(store.NewMemory())
+	state := apply(t, svc, core.Action{Type: "createVersion", Name: "迭代 A", Author: "alice"})
+	branch := branchID(t, state, "迭代 A")
+	state = apply(t, svc, core.Action{Type: "createFolder", VersionID: branch, ParentID: "root", Name: "支付", Author: "alice"})
+	payFolder := folderID(t, state, branch, "支付")
+	state = apply(t, svc, core.Action{Type: "createFolder", VersionID: branch, ParentID: payFolder, Name: "退款", Author: "alice"})
+	refundFolder := folderID(t, state, branch, "退款")
+	state = apply(t, svc, core.Action{Type: "createCase", VersionID: branch, FolderID: refundFolder, Title: "退款成功", Priority: "P1", Author: "alice"})
+	caseID := caseIDByTitle(t, state, branch, "退款成功")
+
+	state = apply(t, svc, core.Action{Type: "mergeFolder", VersionID: branch, FolderID: payFolder, TargetFolderID: "auth", Author: "alice"})
+
+	var mainPay, mainRefund *core.Folder
+	for i := range state.Folders {
+		f := &state.Folders[i]
+		if f.VersionID != "main" {
+			continue
+		}
+		if f.ID == payFolder {
+			mainPay = f
+		}
+		if f.ID == refundFolder {
+			mainRefund = f
+		}
+	}
+	if mainPay == nil || mainPay.ParentID != "auth" {
+		t.Fatalf("payment folder not grafted under chosen target: %+v", mainPay)
+	}
+	if mainRefund == nil || mainRefund.ParentID != payFolder {
+		t.Fatalf("nested folder structure not preserved: %+v", mainRefund)
+	}
+	var mainCase *core.TestCase
+	for i := range state.Cases {
+		if state.Cases[i].VersionID == "main" && state.Cases[i].ID == caseID {
+			mainCase = &state.Cases[i]
+		}
+	}
+	if mainCase == nil || mainCase.FolderID != refundFolder || mainCase.Dirty {
+		t.Fatalf("case not merged into mainline correctly: %+v", mainCase)
+	}
+}
+
+func TestMergeFolderRejectsNameCollisionAtTarget(t *testing.T) {
+	svc := core.NewService(store.NewMemory())
+	// Both branches fork before either merges, so neither's "支付" folder is
+	// the same one the other created — a genuine two-branch name collision.
+	state := apply(t, svc, core.Action{Type: "createVersion", Name: "A"})
+	a := branchID(t, state, "A")
+	state = apply(t, svc, core.Action{Type: "createVersion", Name: "B"})
+	b := branchID(t, state, "B")
+	state = apply(t, svc, core.Action{Type: "createFolder", VersionID: a, ParentID: "root", Name: "支付", Author: "alice"})
+	payA := folderID(t, state, a, "支付")
+	state = apply(t, svc, core.Action{Type: "createFolder", VersionID: b, ParentID: "root", Name: "支付", Author: "bob"})
+	payB := folderID(t, state, b, "支付")
+	apply(t, svc, core.Action{Type: "mergeFolder", VersionID: a, FolderID: payA, TargetFolderID: "auth", Author: "alice"})
+
+	_, err := svc.Apply(context.Background(), core.Action{Type: "mergeFolder", VersionID: b, FolderID: payB, TargetFolderID: "auth", Author: "bob"})
+	if err == nil || !strings.Contains(err.Error(), "同名") {
+		t.Fatalf("expected name-collision error, got %v", err)
+	}
+}
+
+func TestMergeFolderRejectsFolderAlreadyInMainline(t *testing.T) {
+	svc := core.NewService(store.NewMemory())
+	state := apply(t, svc, core.Action{Type: "createVersion", Name: "A"})
+	a := branchID(t, state, "A")
+	state = apply(t, svc, core.Action{Type: "createFolder", VersionID: a, ParentID: "root", Name: "支付", Author: "alice"})
+	pay := folderID(t, state, a, "支付")
+	apply(t, svc, core.Action{Type: "mergeFolder", VersionID: a, FolderID: pay, TargetFolderID: "auth", Author: "alice"})
+
+	_, err := svc.Apply(context.Background(), core.Action{Type: "mergeFolder", VersionID: a, FolderID: pay, TargetFolderID: "auth", Author: "alice"})
+	if err == nil || !strings.Contains(err.Error(), "已在主线中") {
+		t.Fatalf("expected already-merged error, got %v", err)
+	}
+}
+
+func TestMergeFolderDetectsStaleCaseInSubtree(t *testing.T) {
+	svc := core.NewService(store.NewMemory())
+	state := apply(t, svc, core.Action{Type: "createVersion", Name: "D"})
+	d := branchID(t, state, "D")
+	state = apply(t, svc, core.Action{Type: "createFolder", VersionID: d, ParentID: "root", Name: "历史记录", Author: "dana"})
+	history := folderID(t, state, d, "历史记录")
+	apply(t, svc, core.Action{Type: "moveCases", VersionID: d, CaseIDs: []string{"CASE-0001"}, TargetFolderID: history, Author: "dana"})
+
+	state = apply(t, svc, core.Action{Type: "createVersion", Name: "E"})
+	e := branchID(t, state, "E")
+	apply(t, svc, core.Action{Type: "editCase", VersionID: e, CaseID: "CASE-0001", Title: "E 修改", Priority: "P0", Author: "erin"})
+	apply(t, svc, core.Action{Type: "merge", VersionID: e, Author: "erin"})
+
+	_, err := svc.Apply(context.Background(), core.Action{Type: "mergeFolder", VersionID: d, FolderID: history, TargetFolderID: "auth", Author: "dana"})
+	var conflict core.ConflictError
+	if !errors.As(err, &conflict) || len(conflict.Cases) != 1 || conflict.Cases[0] != "CASE-0001" {
+		t.Fatalf("expected stale-case conflict, got %v", err)
+	}
+}
+
+func TestMergeCasesFlattensSelectionIntoTargetFolder(t *testing.T) {
+	svc := core.NewService(store.NewMemory())
+	state := apply(t, svc, core.Action{Type: "createVersion", Name: "F"})
+	f := branchID(t, state, "F")
+	state = apply(t, svc, core.Action{Type: "createFolder", VersionID: f, ParentID: "root", Name: "杂项", Author: "frank"})
+	misc := folderID(t, state, f, "杂项")
+	state = apply(t, svc, core.Action{Type: "createCase", VersionID: f, FolderID: misc, Title: "新用例", Priority: "P2", Author: "frank"})
+	newCase := caseIDByTitle(t, state, f, "新用例")
+	apply(t, svc, core.Action{Type: "editCase", VersionID: f, CaseID: "CASE-0002", Title: "错误密码登录失败-改", Priority: "P1", Author: "frank"})
+
+	out, err := svc.Apply(context.Background(), core.Action{Type: "mergeCases", VersionID: f, CaseIDs: []string{newCase, "CASE-0002"}, TargetFolderID: "root", Author: "frank"})
+	if err != nil {
+		t.Fatalf("mergeCases: %v", err)
+	}
+	state = out.State
+	for _, id := range []string{newCase, "CASE-0002"} {
+		var mc *core.TestCase
+		for i := range state.Cases {
+			if state.Cases[i].VersionID == "main" && state.Cases[i].ID == id {
+				mc = &state.Cases[i]
+			}
+		}
+		if mc == nil || mc.FolderID != "root" || mc.Dirty {
+			t.Fatalf("case %s not flattened into target: %+v", id, mc)
+		}
+	}
+}
+
+func TestMergeCasesSkipsUnchangedCasesWithWarning(t *testing.T) {
+	svc := core.NewService(store.NewMemory())
+	state := apply(t, svc, core.Action{Type: "createVersion", Name: "G"})
+	g := branchID(t, state, "G")
+	out, err := svc.Apply(context.Background(), core.Action{Type: "mergeCases", VersionID: g, CaseIDs: []string{"CASE-0001"}, TargetFolderID: "root", Author: "grace"})
+	if err != nil {
+		t.Fatalf("mergeCases: %v", err)
+	}
+	if len(out.Warnings) == 0 {
+		t.Fatal("expected a warning when nothing was merged")
+	}
+	for _, c := range out.State.Cases {
+		if c.VersionID == "main" && c.ID == "CASE-0001" && c.FolderID == "root" {
+			t.Fatal("unchanged case must not be relocated in mainline")
+		}
+	}
+}
+
+func TestMergeCasesDetectsStaleConflict(t *testing.T) {
+	svc := core.NewService(store.NewMemory())
+	state := apply(t, svc, core.Action{Type: "createVersion", Name: "H"})
+	h := branchID(t, state, "H")
+	state = apply(t, svc, core.Action{Type: "createVersion", Name: "I"})
+	i := branchID(t, state, "I")
+	apply(t, svc, core.Action{Type: "editCase", VersionID: h, CaseID: "CASE-0001", Title: "H 修改", Priority: "P0", Author: "henry"})
+	apply(t, svc, core.Action{Type: "editCase", VersionID: i, CaseID: "CASE-0001", Title: "I 修改", Priority: "P0", Author: "iris"})
+	apply(t, svc, core.Action{Type: "mergeCases", VersionID: h, CaseIDs: []string{"CASE-0001"}, TargetFolderID: "auth", Author: "henry"})
+
+	_, err := svc.Apply(context.Background(), core.Action{Type: "mergeCases", VersionID: i, CaseIDs: []string{"CASE-0001"}, TargetFolderID: "auth", Author: "iris"})
+	var conflict core.ConflictError
+	if !errors.As(err, &conflict) || len(conflict.Cases) != 1 {
+		t.Fatalf("expected conflict, got %v", err)
+	}
+}
+
+func TestDeleteFolderRequiresEmptyBranchFolder(t *testing.T) {
+	svc := core.NewService(store.NewMemory())
+	state := apply(t, svc, core.Action{Type: "createVersion", Name: "J"})
+	j := branchID(t, state, "J")
+	state = apply(t, svc, core.Action{Type: "createFolder", VersionID: j, ParentID: "root", Name: "空文件夹", Author: "jack"})
+	empty := folderID(t, state, j, "空文件夹")
+
+	state = apply(t, svc, core.Action{Type: "deleteFolder", VersionID: j, FolderID: empty, Author: "jack"})
+	for _, f := range state.Folders {
+		if f.VersionID == j && f.ID == empty {
+			t.Fatal("empty folder should have been deleted")
+		}
+	}
+
+	if _, err := svc.Apply(context.Background(), core.Action{Type: "deleteFolder", VersionID: j, FolderID: "auth", Author: "jack"}); err == nil || !strings.Contains(err.Error(), "空文件夹") {
+		t.Fatalf("expected non-empty folder rejection, got %v", err)
+	}
+	if _, err := svc.Apply(context.Background(), core.Action{Type: "deleteFolder", VersionID: "main", FolderID: "auth", Author: "jack"}); err == nil {
+		t.Fatal("mainline folder deletion must fail")
+	}
+}
+
+func TestMoveCasesMarksDirtyAndRecordsHistory(t *testing.T) {
+	svc := core.NewService(store.NewMemory())
+	state := apply(t, svc, core.Action{Type: "createVersion", Name: "K"})
+	k := branchID(t, state, "K")
+	state = apply(t, svc, core.Action{Type: "createFolder", VersionID: k, ParentID: "root", Name: "归档", Author: "kate"})
+	archive := folderID(t, state, k, "归档")
+
+	state = apply(t, svc, core.Action{Type: "moveCases", VersionID: k, CaseIDs: []string{"CASE-0001"}, TargetFolderID: archive, Author: "kate"})
+	var moved *core.TestCase
+	for i := range state.Cases {
+		if state.Cases[i].VersionID == k && state.Cases[i].ID == "CASE-0001" {
+			moved = &state.Cases[i]
+		}
+	}
+	if moved == nil || moved.FolderID != archive || !moved.Dirty {
+		t.Fatalf("case was not moved/dirtied: %+v", moved)
+	}
+	found := false
+	for _, hi := range state.Histories {
+		if hi.CaseID == "CASE-0001" && hi.VersionID == k && hi.Action == "move" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("expected a move history entry")
+	}
+
+	state = apply(t, svc, core.Action{Type: "merge", VersionID: k, Author: "kate"})
+	for i := range state.Cases {
+		if state.Cases[i].VersionID == "main" && state.Cases[i].ID == "CASE-0001" && state.Cases[i].FolderID != archive {
+			t.Fatalf("moved case did not land in the merged folder: %+v", state.Cases[i])
+		}
 	}
 }
 

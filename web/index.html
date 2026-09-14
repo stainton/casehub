@@ -24,7 +24,7 @@
         <div class="segmented"><button class="active" data-view="cases">用例树</button><button data-view="tasks">测试任务</button></div>
         <button class="icon-button" id="collapse" title="折叠">‹</button>
       </div>
-      <div id="bulk" class="bulk hidden"><span id="selected-count"></span><button data-bulk="export">导出</button><button data-bulk="task">创建任务</button></div>
+      <div id="bulk" class="bulk hidden"><span id="selected-count"></span><button data-bulk="export">导出</button><button data-bulk="task">创建任务</button><button data-bulk="move">移动到</button><button data-bulk="merge">合并到主线</button></div>
       <div id="case-view"><div id="versions" class="versions"></div><button class="create-version" id="create-version">＋ 创建测试版本</button></div>
       <div id="task-view" class="hidden"><div id="tasks"></div></div>
     </aside>
@@ -32,7 +32,7 @@
     <button id="expand" class="expand hidden" title="展开侧栏" aria-label="展开侧栏" aria-controls="sidebar">›</button>
     <section id="search-panel" class="search-panel hidden">
       <div class="panel-head"><strong>搜索结果</strong><button class="icon-button" id="close-search">×</button></div>
-      <div class="search-form"><input id="search-query" placeholder="标题或 ID"><select id="search-field"><option value="all">全部字段</option><option value="Preconditions">前置条件</option><option value="Steps">步骤</option><option value="Expected">预期结果</option></select><select id="search-mode"><option value="list">平铺</option><option value="tree">目录</option></select><button id="run-search">搜索</button></div>
+      <div class="search-form"><input id="search-query" placeholder="标题或 ID"><select id="search-field"><option value="all">全部字段</option><option value="Preconditions">前置条件</option><option value="Steps">步骤</option><option value="Expected">预期结果</option></select><select id="search-result"><option value="">全部结果</option><option value="none">未执行</option><option value="passed">通过</option><option value="failed">失败</option><option value="blocked">阻塞</option></select><select id="search-mode"><option value="list">平铺</option><option value="tree">目录</option></select><button id="run-search">搜索</button></div>
       <div id="search-results"></div>
     </section>
     <section id="content">
