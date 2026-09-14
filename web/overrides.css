@@ -69,3 +69,7 @@ table{border-collapse:collapse;width:100%}th,td{text-align:left;vertical-align:t
 .ai-log{max-height:320px;overflow:auto;font-family:monospace;font-size:12px;background:var(--surface2);border-radius:8px;padding:10px;margin-top:12px;white-space:pre-wrap}
 .ai-log div+div{margin-top:4px}
 .ai-running{background:#f59e0b;color:#1a1a1a;border-color:#f59e0b}
+
+#feishu-export { width:min(760px,92vw); }
+#feishu-export > p:not(.modal-actions), #feishu-export-preview { margin:16px 20px; }
+#feishu-export-preview { max-height:45vh; overflow:auto; white-space:pre-wrap; padding:12px; background:var(--surface2); border:1px solid var(--line); border-radius:7px; }
