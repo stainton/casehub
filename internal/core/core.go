@@ -314,6 +314,10 @@ func (s *Service) Apply(ctx context.Context, a Action) (Result, error) {
 		err = createReqDoc(&st, a)
 	case "editReqDoc":
 		err = editReqDoc(&st, a)
+	case "deleteReqFolder":
+		err = deleteReqFolder(&st, a)
+	case "deleteReqDoc":
+		err = deleteReqDoc(&st, a)
 	case "createPendingFolder":
 		err = createPendingFolder(&st, a)
 	case "renamePendingFolder":
@@ -696,6 +700,35 @@ func editReqDoc(s *State, a Action) error {
 	d.Content = a.Content
 	d.UpdatedBy = a.Author
 	d.UpdatedAt = now()
+	return nil
+}
+func deleteReqFolder(s *State, a Action) error {
+	f, i := reqFolderAt(s, a.FolderID)
+	if f == nil {
+		return errors.New("文件夹不存在")
+	}
+	if f.ID == "req-root" {
+		return errors.New("不能删除根目录")
+	}
+	for _, x := range s.ReqFolders {
+		if x.ParentID == f.ID {
+			return errors.New("只能删除空文件夹")
+		}
+	}
+	for _, x := range s.ReqDocs {
+		if x.FolderID == f.ID {
+			return errors.New("只能删除空文件夹")
+		}
+	}
+	s.ReqFolders = append(s.ReqFolders[:i], s.ReqFolders[i+1:]...)
+	return nil
+}
+func deleteReqDoc(s *State, a Action) error {
+	d, i := reqDocAt(s, a.DocID)
+	if d == nil {
+		return errors.New("需求文档不存在")
+	}
+	s.ReqDocs = append(s.ReqDocs[:i], s.ReqDocs[i+1:]...)
 	return nil
 }
 func createPendingFolder(s *State, a Action) error {
