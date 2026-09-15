@@ -296,6 +296,79 @@ func TestDeleteFolderRequiresEmptyBranchFolder(t *testing.T) {
 	}
 }
 
+func TestDeleteVersionRemovesEverythingScopedToIt(t *testing.T) {
+	svc := core.NewService(store.NewMemory())
+	state := apply(t, svc, core.Action{Type: "createVersion", Name: "L"})
+	l := branchID(t, state, "L")
+	var caseID string
+	for _, c := range state.Cases {
+		if c.VersionID == l {
+			caseID = c.ID
+			break
+		}
+	}
+	if caseID == "" {
+		t.Fatal("branch should have inherited at least one case from mainline")
+	}
+	state = apply(t, svc, core.Action{Type: "createTask", VersionID: l, Name: "冒烟测试", CaseIDs: []string{caseID}, Author: "leo"})
+	var taskID string
+	for _, tk := range state.Tasks {
+		if tk.VersionID == l {
+			taskID = tk.ID
+		}
+	}
+	state = apply(t, svc, core.Action{Type: "saveRecord", VersionID: l, CaseID: caseID, TaskID: taskID, Result: "passed", Author: "leo"})
+	mainCasesBefore := 0
+	for _, c := range state.Cases {
+		if c.VersionID == "main" {
+			mainCasesBefore++
+		}
+	}
+
+	state = apply(t, svc, core.Action{Type: "deleteVersion", VersionID: l, Author: "leo"})
+	for _, v := range state.Versions {
+		if v.ID == l {
+			t.Fatal("version should have been deleted")
+		}
+	}
+	for _, f := range state.Folders {
+		if f.VersionID == l {
+			t.Fatal("branch folders should have been deleted")
+		}
+	}
+	for _, c := range state.Cases {
+		if c.VersionID == l {
+			t.Fatal("branch cases should have been deleted")
+		}
+	}
+	for _, tk := range state.Tasks {
+		if tk.VersionID == l {
+			t.Fatal("branch tasks should have been deleted")
+		}
+	}
+	for _, r := range state.Records {
+		if r.VersionID == l {
+			t.Fatal("branch records should have been deleted")
+		}
+	}
+	mainCasesAfter := 0
+	for _, c := range state.Cases {
+		if c.VersionID == "main" {
+			mainCasesAfter++
+		}
+	}
+	if mainCasesAfter != mainCasesBefore {
+		t.Fatalf("mainline cases must be untouched: before %d, after %d", mainCasesBefore, mainCasesAfter)
+	}
+
+	if _, err := svc.Apply(context.Background(), core.Action{Type: "deleteVersion", VersionID: "main", Author: "leo"}); err == nil {
+		t.Fatal("mainline deletion must fail")
+	}
+	if _, err := svc.Apply(context.Background(), core.Action{Type: "deleteVersion", VersionID: "does-not-exist", Author: "leo"}); err == nil {
+		t.Fatal("deleting a nonexistent version must fail")
+	}
+}
+
 func TestMoveCasesMarksDirtyAndRecordsHistory(t *testing.T) {
 	svc := core.NewService(store.NewMemory())
 	state := apply(t, svc, core.Action{Type: "createVersion", Name: "K"})

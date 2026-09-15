@@ -363,6 +363,8 @@ func (s *Service) Apply(ctx context.Context, a Action) (Result, error) {
 		if err == nil && merged == 0 {
 			warnings = append(warnings, "没有可合并的变更")
 		}
+	case "deleteVersion":
+		err = deleteVersion(&st, a)
 	case "deleteFolder":
 		err = deleteFolder(&st, a)
 	case "moveCases":
@@ -427,6 +429,60 @@ func createVersion(s *State, a Action) error {
 			s.Cases = append(s.Cases, n)
 		}
 	}
+	return nil
+}
+// deleteVersion removes a non-mainline version and everything scoped to it:
+// its folders, cases, tasks, execution records and local history. History
+// entries recorded on other versions that merely cite this one as a merge
+// source are left untouched — they document what mainline already absorbed.
+func deleteVersion(s *State, a Action) error {
+	v, err := requireBranch(s, a.VersionID)
+	if err != nil {
+		return err
+	}
+	id := v.ID
+	folders := make([]Folder, 0, len(s.Folders))
+	for _, f := range s.Folders {
+		if f.VersionID != id {
+			folders = append(folders, f)
+		}
+	}
+	s.Folders = folders
+	cases := make([]TestCase, 0, len(s.Cases))
+	for _, c := range s.Cases {
+		if c.VersionID != id {
+			cases = append(cases, c)
+		}
+	}
+	s.Cases = cases
+	tasks := make([]Task, 0, len(s.Tasks))
+	for _, t := range s.Tasks {
+		if t.VersionID != id {
+			tasks = append(tasks, t)
+		}
+	}
+	s.Tasks = tasks
+	records := make([]Record, 0, len(s.Records))
+	for _, r := range s.Records {
+		if r.VersionID != id {
+			records = append(records, r)
+		}
+	}
+	s.Records = records
+	histories := make([]History, 0, len(s.Histories))
+	for _, h := range s.Histories {
+		if h.VersionID != id {
+			histories = append(histories, h)
+		}
+	}
+	s.Histories = histories
+	versions := make([]Version, 0, len(s.Versions))
+	for _, x := range s.Versions {
+		if x.ID != id {
+			versions = append(versions, x)
+		}
+	}
+	s.Versions = versions
 	return nil
 }
 func createFolder(s *State, a Action) error {

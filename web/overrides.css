@@ -70,6 +70,10 @@ table{border-collapse:collapse;width:100%}th,td{text-align:left;vertical-align:t
 .ai-log div+div{margin-top:4px}
 .ai-running{background:#f59e0b;color:#1a1a1a;border-color:#f59e0b}
 
+/* 测试任务界面：按版本分组的文件夹式分组头，任务卡片缩进展示在其下（用例平铺，不还原原目录结构）。 */
+#tasks{padding:8px}
+#tasks .task{margin-left:25px}
+
 /* Requirement cross-linking ("引用需求"): picker (reuses #context-menu) + relation chips. */
 .req-link-list{max-height:280px;overflow:auto}
 #context-menu input#req-link-search{display:block;width:100%;margin:2px 2px 6px;border:1px solid var(--line);border-radius:7px;padding:8px;background:var(--surface);color:var(--text)}
