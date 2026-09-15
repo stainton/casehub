@@ -149,6 +149,51 @@ function reqTreeHTML(){
   return reqRoots().map(r=>node(r,0)).join('')||'<p class="meta">暂无需求文档</p>';
 }
 function reqDocRow(d,depth){return `<div class="tree-row case-row" style="padding-left:${8+depth*17}px" data-req-doc="${d.ID}"><span class="label">📄 ${esc(d.Title)}</span></div>`}
+// ---- Requirement cross-linking ("引用需求") ----
+// A doc references another via an ordinary markdown link with a `req:` href
+// (e.g. `[REQ-002 权限管理](req:REQ-002)`), inserted through the 🔗 引用需求
+// picker below or written by hand. reqRefs() is also how the AI 设计 payload
+// (see renderAiForm) pulls referenced docs' content into the planner request.
+function reqRefs(content){const out=[],seen=new Set();const re=/\]\(req:([^)\s]+)\)/g;let m;while(m=re.exec(content||'')){if(!seen.has(m[1])){seen.add(m[1]);out.push(m[1])}}return out}
+function reqBacklinks(id){return state.reqDocs.filter(d=>d.ID!==id&&reqRefs(d.Content).includes(id))}
+// AI 设计 payload: the focused doc plus one level of docs it references (contract.mjs caps requirements at 50).
+function collectReqRefs(doc){
+  const seen=new Set([doc.ID]),out=[doc];
+  for(const id of reqRefs(doc.Content)){
+    if(seen.has(id)||out.length>=50)continue;
+    const d=state.reqDocs.find(x=>x.ID===id);
+    if(!d)continue;
+    seen.add(id);out.push(d);
+  }
+  return out;
+}
+const REQ_LINK_SEARCH_THRESHOLD=7;
+function openReqLinkPicker(e,doc){
+  e.stopPropagation();
+  const others=state.reqDocs.filter(d=>d.ID!==doc.ID);
+  const showSearch=others.length>REQ_LINK_SEARCH_THRESHOLD;
+  const m=$('#context-menu');
+  m.innerHTML=(showSearch?'<input id="req-link-search" placeholder="搜索需求 id / 标题…">':'')+'<div id="req-link-list" class="req-link-list"></div>';
+  m.style.left=Math.min(e.clientX,innerWidth-245)+'px';
+  m.style.top=Math.min(e.clientY,innerHeight-320)+'px';
+  m.classList.remove('hidden');
+  function renderItems(q){
+    const list=$('#req-link-list'),query=(q||'').trim().toLowerCase();
+    if(!others.length){list.innerHTML='<p class="meta req-link-empty">项目里没有其他需求文档，先新增一份再引用。</p>';return}
+    const matches=!query?others:others.filter(d=>`${d.ID} ${d.Title}`.toLowerCase().includes(query));
+    if(!matches.length){list.innerHTML='<p class="meta req-link-empty">没有匹配的需求文档。</p>';return}
+    list.innerHTML=matches.map(d=>`<button type="button" data-id="${esc(d.ID)}"><span class="req-link-id">${esc(d.ID)}</span>${esc(d.Title)}</button>`).join('');
+    list.querySelectorAll('button').forEach(b=>b.onclick=()=>{insertReqLink(state.reqDocs.find(d=>d.ID===b.dataset.id));m.classList.add('hidden')});
+  }
+  renderItems('');
+  if(showSearch){const inp=$('#req-link-search');inp.oninput=()=>renderItems(inp.value);inp.focus()}
+}
+function insertReqLink(target){
+  if(!target||!reqEditor)return;
+  const label=`${target.ID} ${target.Title}`;
+  reqEditor.exec('addLink',{linkUrl:`req:${target.ID}`,linkText:label});
+  toast(`已插入「${label}」的引用，记得保存`);
+}
 function renderReqTree(){const box=$('#req-tree');box.innerHTML=reqTreeHTML();bindReqTree(box)}
 function bindReqTree(root){
   root.querySelectorAll('[data-req-folder]').forEach(e=>{let key=e.dataset.reqFolder;if(closedReqFolders.has(key))e.classList.add('closed');e.querySelector('.chev').onclick=x=>{x.stopPropagation();let closed=e.classList.toggle('closed');closed?closedReqFolders.add(key):closedReqFolders.delete(key)};e.onclick=()=>setReqFocus({type:'folder',id:e.dataset.reqFolder});e.oncontextmenu=x=>menu(x,reqFolderMenu(e.dataset.reqFolder))});
@@ -190,11 +235,16 @@ function renderReqFocus(){
   }
   const doc=state.reqDocs.find(x=>x.ID===reqFocus.id);
   if(!doc){reqFocus=null;return renderReqFocus()}
-  d.innerHTML=`<div class="detail-head"><div><div class="eyebrow">${esc(doc.ID)}</div><h1>${esc(doc.Title)}</h1></div><div class="detail-actions"><button type="button" id="req-ai-design" class="secondary${isAiActive(doc)?' ai-running':''}">${isAiActive(doc)?'AI 设计中':'AI 设计'}</button><button type="button" id="save-req-doc">保存</button></div></div><div class="card meta-grid"><span>创建者 <b>${esc(doc.CreatedBy)}</b></span><span>创建时间 <b>${fmt(doc.CreatedAt)}</b></span><span>更新者 <b>${esc(doc.UpdatedBy)}</b></span><span>更新时间 <b>${fmt(doc.UpdatedAt)}</b></span></div><div class="card"><div id="req-editor"></div></div>`;
+  const outRefs=reqRefs(doc.Content).map(id=>state.reqDocs.find(x=>x.ID===id)).filter(Boolean);
+  const inRefs=reqBacklinks(doc.ID);
+  const relHTML=(outRefs.length||inRefs.length)?`<div class="card req-rel"><h4>关联需求</h4><div class="req-rel-list">${outRefs.map(r=>`<button type="button" class="req-rel-chip" data-req-doc="${esc(r.ID)}">→ ${esc(r.ID)} ${esc(r.Title)}</button>`).join('')}${inRefs.map(r=>`<button type="button" class="req-rel-chip" data-req-doc="${esc(r.ID)}">← ${esc(r.ID)} ${esc(r.Title)}</button>`).join('')}</div></div>`:'';
+  d.innerHTML=`<div class="detail-head"><div><div class="eyebrow">${esc(doc.ID)}</div><h1>${esc(doc.Title)}</h1></div><div class="detail-actions"><button type="button" id="req-link-btn" class="secondary">🔗 引用需求</button><button type="button" id="req-ai-design" class="secondary${isAiActive(doc)?' ai-running':''}">${isAiActive(doc)?'AI 设计中':'AI 设计'}</button><button type="button" id="save-req-doc">保存</button></div></div><div class="card meta-grid"><span>创建者 <b>${esc(doc.CreatedBy)}</b></span><span>创建时间 <b>${fmt(doc.CreatedAt)}</b></span><span>更新者 <b>${esc(doc.UpdatedBy)}</b></span><span>更新时间 <b>${fmt(doc.UpdatedAt)}</b></span></div>${relHTML}<div class="card"><div id="req-editor"></div></div>`;
   reqEditor?.destroy();
   reqEditor=new toastui.Editor({el:$('#req-editor'),height:'520px',initialEditType:'wysiwyg',previewStyle:'tab',initialValue:doc.Content||'',language:'zh-CN',theme:document.documentElement.classList.contains('dark')?'dark':'light',usageStatistics:false});
   $('#save-req-doc').onclick=()=>saveReqDoc(doc).catch(()=>{});
   $('#req-ai-design').onclick=()=>openAiDrawer(doc);
+  $('#req-link-btn').onclick=e=>openReqLinkPicker(e,doc);
+  d.querySelectorAll('.req-rel-chip').forEach(b=>b.onclick=()=>setReqFocus({type:'doc',id:b.dataset.reqDoc}));
   if(localStorage.getItem(aiJobKey(doc))&&!isAiActive(doc))checkAiJob(doc).catch(()=>{});
 }
 async function saveReqDoc(doc){
@@ -282,7 +332,7 @@ function renderAiForm(doc,notice){
   $('#ai-form').onsubmit=async e=>{
     e.preventDefault();
     const x=Object.fromEntries(new FormData(e.target));
-    const payload={requirements:[{id:doc.ID,title:doc.Title,content:doc.Content||''}],target:{baseUrl:x.baseUrl},context:{instructions:x.instructions||''}};
+    const payload={requirements:collectReqRefs(doc).map(d=>({id:d.ID,title:d.Title,content:d.Content||''})),target:{baseUrl:x.baseUrl},context:{instructions:x.instructions||''}};
     if(x.username||x.password)payload.context.testData={username:x.username||'',password:x.password||''};
     const btn=e.target.querySelector('button');btn.disabled=true;
     try{

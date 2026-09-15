@@ -70,6 +70,17 @@ table{border-collapse:collapse;width:100%}th,td{text-align:left;vertical-align:t
 .ai-log div+div{margin-top:4px}
 .ai-running{background:#f59e0b;color:#1a1a1a;border-color:#f59e0b}
 
+/* Requirement cross-linking ("引用需求"): picker (reuses #context-menu) + relation chips. */
+.req-link-list{max-height:280px;overflow:auto}
+#context-menu input#req-link-search{display:block;width:100%;margin:2px 2px 6px;border:1px solid var(--line);border-radius:7px;padding:8px;background:var(--surface);color:var(--text)}
+.req-link-list button{white-space:normal;line-height:1.4}
+.req-link-id{display:block;color:var(--brand);font-weight:700;font-size:11px}
+.req-link-empty{padding:8px}
+.req-rel h4{margin:0 0 10px;color:var(--muted);font-size:12px;font-weight:600}
+.req-rel-list{display:flex;flex-wrap:wrap;gap:8px}
+.req-rel-chip{background:var(--brand-soft);color:var(--brand);border:1px solid transparent;border-radius:99px;padding:6px 12px;font-size:12px;font-weight:600}
+.req-rel-chip:hover{filter:brightness(.96)}
+
 #feishu-export { width:min(760px,92vw); }
 #feishu-export > p:not(.modal-actions), #feishu-export-preview { margin:16px 20px; }
 #feishu-export-preview { max-height:45vh; overflow:auto; white-space:pre-wrap; padding:12px; background:var(--surface2); border:1px solid var(--line); border-radius:7px; }
