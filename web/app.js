@@ -360,13 +360,19 @@ async function checkAiJob(doc){
   }
 }
 function renderAiForm(doc,notice){
-  $('#ai-drawer-body').innerHTML=`${notice?`<p class="meta">${esc(notice)}</p>`:''}<form id="ai-form"><label>被测系统 URL<input name="baseUrl" required placeholder="https://test.example.com/login"></label><label>补充说明（可选）<textarea name="instructions" placeholder="覆盖范围、登录方式等"></textarea></label><label>测试账号 · 用户名（可选）<input name="username"></label><label>测试账号 · 密码（可选）<input name="password" type="password"></label><p class="drawer-actions"><button type="submit">开始设计</button></p></form>`;
+  // 用例字段特意不叫 name="username"/"password"，且密码框用 type="text" +
+  // -webkit-text-security 伪装遮罩：这些只是被测系统的测试账号，不是本机
+  // 登录凭据，但字段名/类型撞上 Chrome 的登录表单识别规则后，提交时会触发
+  // 它的"密码遭遇数据泄露"弹窗（表单没有真正提交/跳转也会触发，JS 端
+  // preventDefault 拦不住）。换掉字段名和输入类型可以让 Chrome 从一开始就不
+  // 把这当成登录密码框，从根上避免弹窗，同时视觉上仍然是圆点遮罩。
+  $('#ai-drawer-body').innerHTML=`${notice?`<p class="meta">${esc(notice)}</p>`:''}<form id="ai-form" autocomplete="off"><label>被测系统 URL<input name="baseUrl" required placeholder="https://test.example.com/login" autocomplete="off"></label><label>补充说明（可选）<textarea name="instructions" placeholder="覆盖范围、登录方式等"></textarea></label><label>测试账号 · 用户名（可选）<input name="testAccount" autocomplete="off"></label><label>测试账号 · 密码（可选）<input name="testSecret" type="text" class="fake-password" autocomplete="off" spellcheck="false"></label><p class="drawer-actions"><button type="submit">开始设计</button></p></form>`;
   $('#ai-form').onsubmit=async e=>{
     e.preventDefault();
     const x=Object.fromEntries(new FormData(e.target));
     const instructions=[x.instructions||'',reqRefContext(doc)].filter(Boolean).join('\n\n');
     const payload={requirements:[{id:doc.ID,title:doc.Title,content:doc.Content||''}],target:{baseUrl:x.baseUrl},context:{instructions}};
-    if(x.username||x.password)payload.context.testData={username:x.username||'',password:x.password||''};
+    if(x.testAccount||x.testSecret)payload.context.testData={username:x.testAccount||'',password:x.testSecret||''};
     const btn=e.target.querySelector('button');btn.disabled=true;
     try{
       const job=await plannerRequest('/api/planner/jobs',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});

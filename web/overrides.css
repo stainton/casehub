@@ -66,6 +66,8 @@ table{border-collapse:collapse;width:100%}th,td{text-align:left;vertical-align:t
 /* AI design drawer (auto-test planner integration). */
 .ai-drawer-body{padding:20px}
 .ai-drawer-body input{width:100%}
+/* type="text" avoids Chrome's password-manager / leak-check heuristics (see web/app.js renderAiForm); keep the dot mask visually. */
+.fake-password{-webkit-text-security:disc;-moz-text-security:disc}
 .ai-log{max-height:320px;overflow:auto;font-family:monospace;font-size:12px;background:var(--surface2);border-radius:8px;padding:10px;margin-top:12px;white-space:pre-wrap}
 .ai-log div+div{margin-top:4px}
 .ai-running{background:#f59e0b;color:#1a1a1a;border-color:#f59e0b}
