@@ -11,6 +11,13 @@ a.history-row:hover{background:var(--brand-soft)}
 a:focus-visible,button:focus-visible{outline:2px solid var(--brand);outline-offset:3px}
 .history-snapshot{overflow:auto}.history-snapshot table{table-layout:fixed}.history-snapshot th:first-child{width:100px}
 .case-meta{flex-wrap:wrap;align-items:center}
+
+/* 用例详情：Planner 原始内容 / 阅读友好版 切换。 */
+.case-view-toggle{margin:16px 0 0;width:fit-content}
+.case-simplify-prompt{margin-top:14px;padding:14px;border:1px dashed var(--line);border-radius:10px;display:flex;flex-direction:column;gap:10px;align-items:flex-start}
+.case-simplify-prompt .meta{margin:0}
+.case-simplify-meta{margin-top:10px;display:flex;align-items:center;flex-wrap:wrap;gap:10px;font-size:12px}
+.case-simplify-meta button{padding:4px 10px;font-size:12px}
 .link-button.version-toggle{background:transparent;color:var(--text);border:0;padding:0;display:flex;gap:6px;align-items:center;cursor:pointer;font:inherit}
 .link-button.version-toggle:hover{color:var(--brand)}
 .link-button.version-toggle small{color:var(--brand);font-weight:600}

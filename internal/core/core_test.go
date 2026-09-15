@@ -516,6 +516,100 @@ func TestDeleteCasesLeavesMergedMainlineCopyAndRecordsAlone(t *testing.T) {
 	}
 }
 
+func TestSimplifyCasePersistsAndDetectsStaleness(t *testing.T) {
+	svc := core.NewService(store.NewMemory())
+
+	// Mainline is normally read-only for content edits, but simplification is
+	// a cached reading aid, not a content edit, so it must work there too.
+	state := apply(t, svc, core.Action{Type: "simplifyCase", VersionID: "main", CaseID: "CASE-0001",
+		SimplifiedPreconditions: "账号已启用", SimplifiedSteps: "1. 打开登录页\n2. 输入账号密码\n3. 登录", SimplifiedExpected: "进入首页", Author: "sam"})
+	mainCase, _ := findBranchCase(state, "main", "CASE-0001")
+	if mainCase == nil || mainCase.SimplifiedSteps == "" || mainCase.SimplifiedAt.IsZero() {
+		t.Fatalf("simplified content was not persisted on the mainline case: %+v", mainCase)
+	}
+	if mainCase.SimplifiedFromPreconditions != mainCase.Preconditions || mainCase.SimplifiedFromSteps != mainCase.Steps || mainCase.SimplifiedFromExpected != mainCase.Expected {
+		t.Fatalf("snapshot of source text must match the case's current fields right after simplifying: %+v", mainCase)
+	}
+	snapshotSteps := mainCase.SimplifiedFromSteps
+
+	// A branch created afterwards inherits the cached simplification (and its
+	// snapshot) unchanged, still matching the case's current (unedited) fields.
+	state = apply(t, svc, core.Action{Type: "createVersion", Name: "P"})
+	p := branchID(t, state, "P")
+	branchCase, _ := findBranchCase(state, p, "CASE-0001")
+	if branchCase == nil || branchCase.SimplifiedSteps == "" || branchCase.SimplifiedFromSteps != snapshotSteps {
+		t.Fatalf("branch case should have inherited the cached simplification: %+v", branchCase)
+	}
+	if branchCase.SimplifiedFromSteps != branchCase.Steps {
+		t.Fatal("freshly branched case's simplification must not already read as stale")
+	}
+
+	// Editing the branch case's real content does not touch the cached text or
+	// its snapshot, so the two now disagree with the case's live Steps — exactly
+	// the plain string comparison the frontend uses to detect staleness.
+	state = apply(t, svc, core.Action{Type: "editCase", VersionID: p, CaseID: "CASE-0001", Title: "改过的标题", Steps: "1. 新步骤", Priority: "P0", Author: "sam"})
+	branchCase, _ = findBranchCase(state, p, "CASE-0001")
+	if branchCase.SimplifiedSteps == "" {
+		t.Fatal("editing content must not silently wipe the cached simplified text")
+	}
+	if branchCase.SimplifiedFromSteps == branchCase.Steps {
+		t.Fatal("cached simplification should now read as stale: snapshot must no longer match the edited Steps")
+	}
+
+	if _, err := svc.Apply(context.Background(), core.Action{Type: "simplifyCase", VersionID: "main", CaseID: "CASE-0001", SimplifiedSteps: "  ", Author: "sam"}); err == nil {
+		t.Fatal("empty simplified steps must be rejected")
+	}
+	if _, err := svc.Apply(context.Background(), core.Action{Type: "simplifyCase", VersionID: "main", CaseID: "no-such-case", SimplifiedSteps: "1. x", Author: "sam"}); err == nil {
+		t.Fatal("simplifying a nonexistent case must fail")
+	}
+}
+
+func findBranchCase(state core.State, versionID, caseID string) (*core.TestCase, bool) {
+	for i := range state.Cases {
+		if state.Cases[i].VersionID == versionID && state.Cases[i].ID == caseID {
+			return &state.Cases[i], true
+		}
+	}
+	return nil, false
+}
+
+func TestSimplifyPendingCasePersistsAndDetectsStaleness(t *testing.T) {
+	svc := core.NewService(store.NewMemory())
+	state := apply(t, svc, core.Action{Type: "createPendingCase", FolderID: "pending-root", Title: "新用例",
+		Preconditions: "无", Steps: "1. 打开页面", Expected: "看到页面", Priority: "P2", Author: "pat"})
+	var pc *core.PendingCase
+	for i := range state.PendingCases {
+		pc = &state.PendingCases[i]
+	}
+	if pc == nil {
+		t.Fatal("pending case was not created")
+	}
+	state = apply(t, svc, core.Action{Type: "simplifyPendingCase", CaseID: pc.ID,
+		SimplifiedPreconditions: "无", SimplifiedSteps: "1. 打开页面", SimplifiedExpected: "看到页面", Author: "pat"})
+	for i := range state.PendingCases {
+		if state.PendingCases[i].ID == pc.ID {
+			pc = &state.PendingCases[i]
+		}
+	}
+	if pc.SimplifiedSteps == "" || pc.SimplifiedFromSteps != pc.Steps {
+		t.Fatalf("simplified content was not persisted on the pending case: %+v", pc)
+	}
+
+	state = apply(t, svc, core.Action{Type: "editPendingCase", CaseID: pc.ID, Title: "新用例", Preconditions: "无",
+		Steps: "1. 打开页面\n2. 等待加载", Expected: "看到页面", Priority: "P2", Author: "pat"})
+	for i := range state.PendingCases {
+		if state.PendingCases[i].ID == pc.ID {
+			pc = &state.PendingCases[i]
+		}
+	}
+	if pc.SimplifiedSteps == "" {
+		t.Fatal("editing content must not silently wipe the cached simplified text")
+	}
+	if pc.SimplifiedFromSteps == pc.Steps {
+		t.Fatal("cached simplification should now read as stale after the edit")
+	}
+}
+
 func TestMoveCasesMarksDirtyAndRecordsHistory(t *testing.T) {
 	svc := core.NewService(store.NewMemory())
 	state := apply(t, svc, core.Action{Type: "createVersion", Name: "K"})

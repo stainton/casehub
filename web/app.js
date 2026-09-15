@@ -3,6 +3,7 @@ let state=null, focus=null, selected=new Map(), view='cases', modalSave=null, re
 let openTasks=new Set(), closedTaskVersions=new Set(), closedFolders=new Set(), closedReqFolders=new Set(), closedReviewFolders=new Set(), closedVersions=new Set();
 let page='cases', reqFocus=null, reqEditor=null, reqSidebarWidth=null, aiDoc=null, reqPage='docs';
 let aiSource=null, aiPlannerEnabled=null;
+let caseViewMode='friendly'; // 'friendly' | 'raw' — applies to whichever case detail is currently shown
 const esc=s=>String(s??'').replace(/[&<>'"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]));
 const fmt=s=>s?new Date(s).toLocaleString():'—';
 const version=id=>state.versions.find(v=>v.id===id), folders=id=>state.folders.filter(f=>f.VersionID===id), cases=id=>state.cases.filter(c=>c.VersionID===id);
@@ -19,7 +20,45 @@ function updateFolderChecks(root=document){root.querySelectorAll('.folder-row').
 function toggleFolderSelect(vid,folderId,checked){let f=state.folders.find(x=>x.VersionID===vid&&x.ID===folderId);if(!f)return;let subIDs=[f.ID,...descendantFolders(f)];if(!selected.has(vid))selected.set(vid,new Set());let s=selected.get(vid);cases(vid).filter(c=>subIDs.includes(c.FolderID)).forEach(c=>checked?s.add(c.ID):s.delete(c.ID));updateBulk();renderVersions()}
 function setFocus(x){if(!$('#drawer').classList.contains('hidden')&&!(x.type==='case'&&recordCase?.ID===x.id))closeRecordDrawer();if(location.hash)history.replaceState(null,'',location.pathname+location.search);focus=x;recordTask=x.taskID||'';renderVersions();renderFocus()}
 function closeRecordDrawer(){$('#record-form').reset();recordEditor?.setMarkdown('');$('#drawer').classList.add('hidden')}
-function renderFocus(){if(!focus){updateEmptyHint();$('#empty').classList.remove('hidden');$('#detail').classList.add('hidden');return}$('#empty').classList.add('hidden');let d=$('#detail');d.classList.remove('hidden');if(focus.type==='folder'){let f=state.folders.find(x=>x.VersionID===focus.versionID&&x.ID===focus.id);if(!f){focus=null;return renderFocus()}let descendants=descendantFolders(f),count=cases(f.VersionID).filter(c=>c.FolderID===f.ID||descendants.includes(c.FolderID)).length;d.innerHTML=`<div class="detail-head"><div><div class="eyebrow">文件夹 · ${esc(version(f.VersionID).name)}</div><h1>📁 ${esc(f.Name)}</h1></div></div><div class="card meta-grid"><span>用例 <b>${count}</b></span><span>子文件夹 <b>${descendants.length}</b></span><span>创建者 <b>${esc(f.CreatedBy)}</b></span><span>创建时间 <b>${fmt(f.CreatedAt)}</b></span></div>`;return}let c=state.cases.find(x=>x.VersionID===focus.versionID&&x.ID===focus.id);if(!c){focus=null;return renderFocus()}let branch=!version(c.VersionID).mainline,h=state.histories.filter(x=>x.CaseID===c.ID&&x.VersionID===c.VersionID).slice().reverse();d.innerHTML=`<div class="detail-head"><div><div class="eyebrow">${esc(c.ID)} · ${esc(version(c.VersionID).name)} ${c.Dirty?'· 未合并':''}</div><h1>${esc(c.Title)}</h1></div><div class="detail-actions">${branch?'<button id="edit-case" class="secondary">编辑</button>':''}<button id="open-record">测试记录</button></div></div><div class="card case-detail"><div class="meta-grid case-meta"><span>优先级 <b>${esc(c.Priority||'未设置')}</b></span><span>当前结果 <b>${resultName(c.Result)}</b></span><span>更新者 <b>${esc(c.UpdatedBy)}</b></span><span>更新时间 <b>${fmt(c.UpdatedAt)}</b></span><span>基线版本 <b>r${c.BaseRevision||c.Revision}</b></span><button type="button" class="link-button version-toggle" id="case-version-toggle" aria-expanded="false"${h.length?'':' disabled'}>用例版本 <b>${esc(version(c.VersionID).name)}</b><small>${h.length?`${h.length} 条编辑历史 ▾`:'暂无编辑历史'}</small></button></div><div class="case-lines"><div class="field-line"><h4>前置条件</h4><p>${esc(c.Preconditions||'—')}</p></div><div class="field-line"><h4>执行步骤</h4><p>${esc(c.Steps||'—')}</p></div><div class="field-line"><h4>预期结果</h4><p>${esc(c.Expected||'—')}</p></div></div>${h.length?`<div class="history-list hidden" id="case-history-list">${h.map(x=>`<a class="history-row" href="#history=${encodeURIComponent(x.ID)}&amp;version=${encodeURIComponent(c.VersionID)}"><b>${historyAction(x.Action)}</b> · ${esc(x.Author)} <small>${fmt(x.CreatedAt)}${x.SourceVersionID?` · 来源 ${esc(version(x.SourceVersionID)?.name||x.SourceVersionID)}`:''}</small></a>`).join('')}</div>`:''}</div>`;if(branch)$('#edit-case').onclick=()=>caseModal(c);$('#open-record').onclick=()=>openRecords(c);if(h.length)$('#case-version-toggle').onclick=()=>{let hidden=$('#case-history-list').classList.toggle('hidden');$('#case-version-toggle').setAttribute('aria-expanded',String(!hidden))}}
+// ---- 用例详情：Planner 原始内容 / 阅读友好版 切换 ----------------------------
+// Planner 生成的用例是给 generator 用的，步骤/预期结果信息密度很高，人读起来负担大。
+// 阅读友好版由 auto-test 的 /v1/planner/simplify 改写生成，和用例一样持久化在
+// State 里（不是浏览器缓存）；SimplifiedFrom* 是生成时源文本的快照，用来判断
+// 用例后续被编辑后阅读友好版是否已经过时。
+function caseHasSimplified(c){return !!(c&&c.SimplifiedSteps)}
+function caseSimplifiedStale(c){return c.SimplifiedFromPreconditions!==(c.Preconditions||'')||c.SimplifiedFromSteps!==(c.Steps||'')||c.SimplifiedFromExpected!==(c.Expected||'')}
+function caseViewToggleHTML(){return `<div class="segmented case-view-toggle"><button type="button" data-case-view="friendly" class="${caseViewMode==='friendly'?'active':''}">阅读友好版</button><button type="button" data-case-view="raw" class="${caseViewMode==='raw'?'active':''}">Planner 原始内容</button></div>`}
+function caseFieldLinesHTML(preconditions,steps,expected){return `<div class="case-lines"><div class="field-line"><h4>前置条件</h4><p>${esc(preconditions||'—')}</p></div><div class="field-line"><h4>执行步骤</h4><p>${esc(steps||'—')}</p></div><div class="field-line"><h4>预期结果</h4><p>${esc(expected||'—')}</p></div></div>`}
+function caseDetailBodyHTML(c){
+  const toggle=caseViewToggleHTML();
+  if(caseViewMode!=='friendly')return `${toggle}${caseFieldLinesHTML(c.Preconditions,c.Steps,c.Expected)}`;
+  const has=caseHasSimplified(c),stale=has&&caseSimplifiedStale(c);
+  if(!has||stale){
+    const hint=stale?'用例内容已更改，之前生成的阅读友好版本已过时。':'还没有阅读友好版本 —— 这份用例的步骤/预期结果是给 Planner/生成器看的原始内容，信息密度较高，供人阅读负担较大。';
+    return `${toggle}<div class="case-simplify-prompt"><p class="meta">${hint}</p><button type="button" id="case-simplify-btn">${has?'重新生成阅读友好版本':'生成阅读友好版本'}</button></div>`;
+  }
+  return `${toggle}${caseFieldLinesHTML(c.SimplifiedPreconditions,c.SimplifiedSteps,c.SimplifiedExpected)}<p class="meta case-simplify-meta">阅读友好版 · 生成于 ${fmt(c.SimplifiedAt)} <button type="button" class="secondary" id="case-simplify-btn">重新生成</button></p>`;
+}
+function bindCaseDetailBody(root,c,isPending,rerender){
+  root.querySelectorAll('[data-case-view]').forEach(b=>b.onclick=()=>{caseViewMode=b.dataset.caseView;rerender()});
+  const btn=root.querySelector('#case-simplify-btn');
+  if(btn)btn.onclick=()=>runSimplify(c,isPending,rerender);
+}
+async function runSimplify(c,isPending,rerender){
+  const btn=$('#case-simplify-btn');
+  if(btn){btn.disabled=true;btn.textContent='生成中…'}
+  let friendly;
+  try{
+    friendly=await plannerRequest('/api/planner/simplify',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({title:c.Title||'',preconditions:c.Preconditions||'',steps:c.Steps||'',expected:c.Expected||''})});
+  }catch(e){toast(e.message,true);rerender();return}
+  const payload={CaseID:c.ID,SimplifiedPreconditions:friendly.preconditions||'',SimplifiedSteps:friendly.steps||'',SimplifiedExpected:friendly.expected||''};
+  if(!isPending)payload.VersionID=c.VersionID;
+  try{await (isPending?actReview:act)(isPending?'simplifyPendingCase':'simplifyCase',payload);toast('已生成阅读友好版本')}
+  catch{rerender()}
+}
+
+function renderFocus(){if(!focus){updateEmptyHint();$('#empty').classList.remove('hidden');$('#detail').classList.add('hidden');return}$('#empty').classList.add('hidden');let d=$('#detail');d.classList.remove('hidden');if(focus.type==='folder'){let f=state.folders.find(x=>x.VersionID===focus.versionID&&x.ID===focus.id);if(!f){focus=null;return renderFocus()}let descendants=descendantFolders(f),count=cases(f.VersionID).filter(c=>c.FolderID===f.ID||descendants.includes(c.FolderID)).length;d.innerHTML=`<div class="detail-head"><div><div class="eyebrow">文件夹 · ${esc(version(f.VersionID).name)}</div><h1>📁 ${esc(f.Name)}</h1></div></div><div class="card meta-grid"><span>用例 <b>${count}</b></span><span>子文件夹 <b>${descendants.length}</b></span><span>创建者 <b>${esc(f.CreatedBy)}</b></span><span>创建时间 <b>${fmt(f.CreatedAt)}</b></span></div>`;return}let c=state.cases.find(x=>x.VersionID===focus.versionID&&x.ID===focus.id);if(!c){focus=null;return renderFocus()}let branch=!version(c.VersionID).mainline,h=state.histories.filter(x=>x.CaseID===c.ID&&x.VersionID===c.VersionID).slice().reverse();d.innerHTML=`<div class="detail-head"><div><div class="eyebrow">${esc(c.ID)} · ${esc(version(c.VersionID).name)} ${c.Dirty?'· 未合并':''}</div><h1>${esc(c.Title)}</h1></div><div class="detail-actions">${branch?'<button id="edit-case" class="secondary">编辑</button>':''}<button id="open-record">测试记录</button></div></div><div class="card case-detail"><div class="meta-grid case-meta"><span>优先级 <b>${esc(c.Priority||'未设置')}</b></span><span>当前结果 <b>${resultName(c.Result)}</b></span><span>更新者 <b>${esc(c.UpdatedBy)}</b></span><span>更新时间 <b>${fmt(c.UpdatedAt)}</b></span><span>基线版本 <b>r${c.BaseRevision||c.Revision}</b></span><button type="button" class="link-button version-toggle" id="case-version-toggle" aria-expanded="false"${h.length?'':' disabled'}>用例版本 <b>${esc(version(c.VersionID).name)}</b><small>${h.length?`${h.length} 条编辑历史 ▾`:'暂无编辑历史'}</small></button></div>${caseDetailBodyHTML(c)}${h.length?`<div class="history-list hidden" id="case-history-list">${h.map(x=>`<a class="history-row" href="#history=${encodeURIComponent(x.ID)}&amp;version=${encodeURIComponent(c.VersionID)}"><b>${historyAction(x.Action)}</b> · ${esc(x.Author)} <small>${fmt(x.CreatedAt)}${x.SourceVersionID?` · 来源 ${esc(version(x.SourceVersionID)?.name||x.SourceVersionID)}`:''}</small></a>`).join('')}</div>`:''}</div>`;if(branch)$('#edit-case').onclick=()=>caseModal(c);$('#open-record').onclick=()=>openRecords(c);if(h.length)$('#case-version-toggle').onclick=()=>{let hidden=$('#case-history-list').classList.toggle('hidden');$('#case-version-toggle').setAttribute('aria-expanded',String(!hidden))};bindCaseDetailBody(d,c,false,renderFocus)}
 function descendantFolders(f){let out=[];function walk(id){state.folders.filter(x=>x.VersionID===f.VersionID&&x.ParentID===id).forEach(x=>{out.push(x.ID);walk(x.ID)})}walk(f.ID);return out}
 function toggleSelect(v,id,on){if(!selected.has(v))selected.set(v,new Set());on?selected.get(v).add(id):selected.get(v).delete(id);updateBulk();updateFolderChecks()}
 function updateBulk(){let entries=[...selected.entries()].filter(([,s])=>s.size);let n=entries.reduce((x,[,s])=>x+s.size,0);$('#bulk').classList.toggle('hidden',!n);$('#selected-count').textContent=`已选 ${n} 项`;}
@@ -257,12 +296,13 @@ function renderReqFocus(){
     if(!c){reqFocus=null;return renderReqFocus()}
     reqEditor?.destroy();reqEditor=null;
     const reviewLabel=({passed:'已通过',rejected:'未通过'})[c.Review]||'待评审';
-    d.innerHTML=`<div class="detail-head"><div><div class="eyebrow">${esc(c.ID)} · <span class="badge">${reviewLabel}</span></div><h1>${esc(c.Title)}</h1></div><div class="detail-actions"><button id="edit-review-case" class="secondary">编辑</button><button id="delete-review-case" class="secondary">删除</button><button id="reject-review-case" class="secondary">评审不通过</button><button id="approve-review-case">评审通过</button><button id="import-review-case" class="secondary">导入到版本…</button></div></div><div class="card case-detail"><div class="meta-grid case-meta"><span>优先级 <b>${esc(c.Priority||'未设置')}</b></span><span>评审状态 <b>${reviewLabel}</b></span><span>创建者 <b>${esc(c.CreatedBy)}</b></span><span>更新者 <b>${esc(c.UpdatedBy)}</b></span><span>更新时间 <b>${fmt(c.UpdatedAt)}</b></span>${c.ReviewedBy?`<span>评审人 <b>${esc(c.ReviewedBy)}</b></span><span>评审时间 <b>${fmt(c.ReviewedAt)}</b></span>`:''}</div><div class="case-lines"><div class="field-line"><h4>前置条件</h4><p>${esc(c.Preconditions||'—')}</p></div><div class="field-line"><h4>执行步骤</h4><p>${esc(c.Steps||'—')}</p></div><div class="field-line"><h4>预期结果</h4><p>${esc(c.Expected||'—')}</p></div></div></div>`;
+    d.innerHTML=`<div class="detail-head"><div><div class="eyebrow">${esc(c.ID)} · <span class="badge">${reviewLabel}</span></div><h1>${esc(c.Title)}</h1></div><div class="detail-actions"><button id="edit-review-case" class="secondary">编辑</button><button id="delete-review-case" class="secondary">删除</button><button id="reject-review-case" class="secondary">评审不通过</button><button id="approve-review-case">评审通过</button><button id="import-review-case" class="secondary">导入到版本…</button></div></div><div class="card case-detail"><div class="meta-grid case-meta"><span>优先级 <b>${esc(c.Priority||'未设置')}</b></span><span>评审状态 <b>${reviewLabel}</b></span><span>创建者 <b>${esc(c.CreatedBy)}</b></span><span>更新者 <b>${esc(c.UpdatedBy)}</b></span><span>更新时间 <b>${fmt(c.UpdatedAt)}</b></span>${c.ReviewedBy?`<span>评审人 <b>${esc(c.ReviewedBy)}</b></span><span>评审时间 <b>${fmt(c.ReviewedAt)}</b></span>`:''}</div>${caseDetailBodyHTML(c)}</div>`;
     $('#edit-review-case').onclick=()=>pendingCaseModal(c);
     $('#delete-review-case').onclick=()=>{if(confirm('确定删除这条待评审用例？'))actReview('deletePendingCase',{CaseID:c.ID})};
     $('#approve-review-case').onclick=()=>actReview('reviewPendingCase',{CaseID:c.ID,Review:'passed'});
     $('#reject-review-case').onclick=()=>actReview('reviewPendingCase',{CaseID:c.ID,Review:'rejected'});
     $('#import-review-case').onclick=()=>importReviewModal([c.ID]);
+    bindCaseDetailBody(d,c,true,renderReqFocus);
     return;
   }
   const doc=state.reqDocs.find(x=>x.ID===reqFocus.id);

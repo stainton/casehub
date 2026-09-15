@@ -64,6 +64,8 @@ http://<可访问的节点 IP>:30080
 - 分支内空文件夹删除、勾选用例批量移动、整个测试版本删除（主线除外）、单条/批量删除分支用例（主线除外）
 - 测试任务界面按版本分组（一个版本一个文件夹），任务作为其下唯一一级子文件夹，任务内用例平铺展示，不还原原目录结构
 - 可拖动/折叠用例树、文件夹与用例右键菜单、测试记录抽屉、主题切换
+- 所有用例详情页（用例树、测试任务、用例评审）都可切换「阅读友好版」与「Planner 原始内容」；阅读友好版由 auto-test 的
+  `/v1/planner/simplify` 改写生成，和用例本身一样持久化存储（非浏览器缓存），用例内容变更后会自动判定为过时并提示重新生成
 - JSON 导出、Linux/Windows 构建脚本及容器部署
 
 ## 配置
@@ -80,7 +82,7 @@ http://<可访问的节点 IP>:30080
 
 ## 与 auto-test 对接
 
-先在 auto-test 中准备 `build/planner/setting.json` 并运行 `node server/planner/main.mjs`，再启动 CaseHub，即可从需求管理的「AI 设计」抽屉调用 planner。本机使用默认地址，无需 Token；分开部署时只设置 `CASEHUB_PLANNER_URL`。两个服务均支持浏览器跨域调用。
+先在 auto-test 中准备 `build/planner/setting.json` 并运行 `node server/planner/main.mjs`，再启动 CaseHub，即可从需求管理的「AI 设计」抽屉调用 planner，以及在任意用例详情页生成「阅读友好版」（调用同一服务的 `/v1/planner/simplify`）。本机使用默认地址，无需 Token；分开部署时只设置 `CASEHUB_PLANNER_URL`。两个服务均支持浏览器跨域调用。
 
 容器中的 localhost 指容器自身；如果 planner 运行在另一容器或主机上，将 `CASEHUB_PLANNER_URL` 配置为容器可访问的地址。
 
