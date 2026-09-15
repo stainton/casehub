@@ -49,6 +49,7 @@ type History struct {
 }
 
 type Record struct {
+	SourceVersionID, SourceVersionName                  string
 	ID, CaseID, VersionID, TaskID, Result, Note, Author string
 	Submitted                                           bool
 	CreatedAt, UpdatedAt                                time.Time
@@ -433,6 +434,7 @@ func createVersion(s *State, a Action) error {
 	}
 	return nil
 }
+
 // deleteVersion removes a non-mainline version and everything scoped to it:
 // its folders, cases, tasks, execution records and local history. History
 // entries recorded on other versions that merely cite this one as a merge
@@ -713,6 +715,11 @@ func mergeVersion(s *State, a Action) ([]string, error) {
 	for _, c := range branchCases {
 		mergeCaseInto(s, c, s.MainRevision, c.FolderID, a.Author)
 	}
+	for _, c := range s.Cases {
+		if c.VersionID == v.ID {
+			archiveCaseActivity(s, c)
+		}
+	}
 	v.BaseMainRevision = s.MainRevision
 	return nil, nil
 }
@@ -722,7 +729,50 @@ func mergeVersion(s *State, a Action) ([]string, error) {
 // caught up. Shared by mergeVersion (folderID stays whatever the branch case
 // already has), mergeFolder (same, scoped to a folder subtree) and mergeCases
 // (folderID is forced to the chosen target, flattening structure).
+// archiveCaseActivity snapshots branch activity on mainline. Stable archive IDs
+// make repeated merges idempotent without sharing records with branch deletion.
+func archiveCaseActivity(s *State, c TestCase) int {
+	added := 0
+	seen := map[string]bool{}
+	for _, h := range s.Histories {
+		seen[h.ID] = true
+	}
+	for _, r := range s.Records {
+		seen[r.ID] = true
+	}
+	prefix := "archive:" + c.VersionID + ":"
+	for _, h := range s.Histories {
+		if h.VersionID != c.VersionID || h.CaseID != c.ID || seen[prefix+h.ID] {
+			continue
+		}
+		h.ID = prefix + h.ID
+		h.VersionID = "main"
+		h.SourceVersionID = c.VersionID
+		s.Histories = append(s.Histories, h)
+		seen[h.ID] = true
+		added++
+	}
+	for _, r := range s.Records {
+		if r.VersionID != c.VersionID || r.CaseID != c.ID || seen[prefix+r.ID] {
+			continue
+		}
+		r.ID = prefix + r.ID
+		r.VersionID = "main"
+		r.SourceVersionID = c.VersionID
+		for _, v := range s.Versions {
+			if v.ID == c.VersionID {
+				r.SourceVersionName = v.Name
+			}
+		}
+		s.Records = append(s.Records, r)
+		seen[r.ID] = true
+		added++
+	}
+	return added
+}
+
 func mergeCaseInto(s *State, c TestCase, revision int64, folderID string, author string) {
+	archiveCaseActivity(s, c)
 	m, _ := caseAt(s, "main", c.ID)
 	n := c
 	n.VersionID = "main"
@@ -832,8 +882,8 @@ func mergeFolder(s *State, a Action) ([]string, error) {
 
 // mergeCases merges an explicit, possibly cross-folder set of branch cases
 // into a single chosen mainline folder, flattening structure. Cases with no
-// pending change (not Dirty) are silently skipped rather than treated as an
-// error; the caller surfaces a warning when nothing ended up merged.
+// pending text change still archive new activity without overwriting mainline
+// content; the caller surfaces a warning when neither content nor activity changed.
 func mergeCases(s *State, a Action) ([]string, int, error) {
 	v, err := requireBranch(s, a.VersionID)
 	if err != nil {
@@ -869,14 +919,23 @@ func mergeCases(s *State, a Action) ([]string, int, error) {
 	if len(conflicts) > 0 {
 		return conflicts, 0, nil
 	}
+	archivedCases := 0
+	for _, id := range a.CaseIDs {
+		c, _ := caseAt(s, v.ID, id)
+		if !c.Dirty {
+			if m, _ := caseAt(s, "main", id); m != nil && archiveCaseActivity(s, *c) > 0 {
+				archivedCases++
+			}
+		}
+	}
 	if len(toMerge) == 0 {
-		return nil, 0, nil
+		return nil, archivedCases, nil
 	}
 	s.MainRevision++
 	for _, c := range toMerge {
 		mergeCaseInto(s, c, s.MainRevision, target.ID, a.Author)
 	}
-	return nil, len(toMerge), nil
+	return nil, len(toMerge) + archivedCases, nil
 }
 
 // deleteCases removes one or more branch cases (single-row delete and bulk

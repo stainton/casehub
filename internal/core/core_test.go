@@ -449,6 +449,73 @@ func TestDeleteCasesRemovesRecordsHistoryAndTaskRefs(t *testing.T) {
 	}
 }
 
+func TestDeleteCasesLeavesMergedMainlineCopyAndRecordsAlone(t *testing.T) {
+	svc := core.NewService(store.NewMemory())
+	state := apply(t, svc, core.Action{Type: "createVersion", Name: "N"})
+	n := branchID(t, state, "N")
+	state = apply(t, svc, core.Action{Type: "createCase", VersionID: n, FolderID: "root", Title: "待合并用例", Priority: "P1", Author: "nina"})
+	caseID := caseIDByTitle(t, state, n, "待合并用例")
+	state = apply(t, svc, core.Action{Type: "createTask", VersionID: n, Name: "回归任务", CaseIDs: []string{caseID}, Author: "nina"})
+	var taskID string
+	for _, tk := range state.Tasks {
+		if tk.VersionID == n {
+			taskID = tk.ID
+		}
+	}
+	state = apply(t, svc, core.Action{Type: "saveRecord", VersionID: n, CaseID: caseID, TaskID: taskID, Result: "passed", Author: "nina"})
+
+	state = apply(t, svc, core.Action{Type: "mergeCases", VersionID: n, CaseIDs: []string{caseID}, TargetFolderID: "root", Author: "nina"})
+	var mainCaseBefore *core.TestCase
+	mainHistoriesBefore := 0
+	for i := range state.Cases {
+		if state.Cases[i].VersionID == "main" && state.Cases[i].ID == caseID {
+			mainCaseBefore = &state.Cases[i]
+		}
+	}
+	for _, h := range state.Histories {
+		if h.VersionID == "main" && h.CaseID == caseID {
+			mainHistoriesBefore++
+		}
+	}
+	if mainCaseBefore == nil {
+		t.Fatal("case should have been merged into mainline")
+	}
+	if mainHistoriesBefore == 0 {
+		t.Fatal("merge should have recorded a mainline history entry")
+	}
+
+	state = apply(t, svc, core.Action{Type: "deleteCases", VersionID: n, CaseIDs: []string{caseID}, Author: "nina"})
+
+	var mainCaseAfter *core.TestCase
+	mainHistoriesAfter := 0
+	for i := range state.Cases {
+		if state.Cases[i].VersionID == "main" && state.Cases[i].ID == caseID {
+			mainCaseAfter = &state.Cases[i]
+		}
+	}
+	for _, h := range state.Histories {
+		if h.VersionID == "main" && h.CaseID == caseID {
+			mainHistoriesAfter++
+		}
+	}
+	if mainCaseAfter == nil {
+		t.Fatal("deleting the branch case must not remove the merged mainline copy")
+	}
+	if mainHistoriesAfter != mainHistoriesBefore {
+		t.Fatalf("mainline history for the merged case must be untouched: before %d, after %d", mainHistoriesBefore, mainHistoriesAfter)
+	}
+	for _, c := range state.Cases {
+		if c.VersionID == n && c.ID == caseID {
+			t.Fatal("branch copy should have been deleted")
+		}
+	}
+	for _, r := range state.Records {
+		if r.CaseID == caseID && r.VersionID == n {
+			t.Fatal("the branch record must be gone while its mainline archive survives")
+		}
+	}
+}
+
 func TestMoveCasesMarksDirtyAndRecordsHistory(t *testing.T) {
 	svc := core.NewService(store.NewMemory())
 	state := apply(t, svc, core.Action{Type: "createVersion", Name: "K"})
