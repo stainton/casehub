@@ -152,20 +152,29 @@ function reqDocRow(d,depth){return `<div class="tree-row case-row" style="paddin
 // ---- Requirement cross-linking ("引用需求") ----
 // A doc references another via an ordinary markdown link with a `req:` href
 // (e.g. `[REQ-002 权限管理](req:REQ-002)`), inserted through the 🔗 引用需求
-// picker below or written by hand. reqRefs() is also how the AI 设计 payload
-// (see renderAiForm) pulls referenced docs' content into the planner request.
+// picker below or written by hand. Referenced docs are background/context for
+// the doc being designed — informational only, never a source of their own
+// test cases — so the AI 设计 payload (see renderAiForm) folds their content
+// into context.instructions rather than adding them to requirements[].
 function reqRefs(content){const out=[],seen=new Set();const re=/\]\(req:([^)\s]+)\)/g;let m;while(m=re.exec(content||'')){if(!seen.has(m[1])){seen.add(m[1]);out.push(m[1])}}return out}
 function reqBacklinks(id){return state.reqDocs.filter(d=>d.ID!==id&&reqRefs(d.Content).includes(id))}
-// AI 设计 payload: the focused doc plus one level of docs it references (contract.mjs caps requirements at 50).
-function collectReqRefs(doc){
-  const seen=new Set([doc.ID]),out=[doc];
+// One level of docs `doc` references, resolved to their current title/content.
+function reqRefDocs(doc){
+  const seen=new Set([doc.ID]),out=[];
   for(const id of reqRefs(doc.Content)){
-    if(seen.has(id)||out.length>=50)continue;
+    if(seen.has(id))continue;
     const d=state.reqDocs.find(x=>x.ID===id);
     if(!d)continue;
     seen.add(id);out.push(d);
   }
   return out;
+}
+// Referenced docs rendered as labelled background text for context.instructions —
+// clearly marked as reference-only so the planner never designs cases against them.
+function reqRefContext(doc){
+  const refs=reqRefDocs(doc);
+  if(!refs.length)return '';
+  return refs.map(d=>`【关联需求 ${d.ID} ${d.Title} —— 仅供背景参考，不要据此设计独立用例】\n${d.Content||''}`).join('\n\n');
 }
 const REQ_LINK_SEARCH_THRESHOLD=7;
 function openReqLinkPicker(e,doc){
@@ -332,7 +341,8 @@ function renderAiForm(doc,notice){
   $('#ai-form').onsubmit=async e=>{
     e.preventDefault();
     const x=Object.fromEntries(new FormData(e.target));
-    const payload={requirements:collectReqRefs(doc).map(d=>({id:d.ID,title:d.Title,content:d.Content||''})),target:{baseUrl:x.baseUrl},context:{instructions:x.instructions||''}};
+    const instructions=[x.instructions||'',reqRefContext(doc)].filter(Boolean).join('\n\n');
+    const payload={requirements:[{id:doc.ID,title:doc.Title,content:doc.Content||''}],target:{baseUrl:x.baseUrl},context:{instructions}};
     if(x.username||x.password)payload.context.testData={username:x.username||'',password:x.password||''};
     const btn=e.target.querySelector('button');btn.disabled=true;
     try{
