@@ -365,6 +365,8 @@ func (s *Service) Apply(ctx context.Context, a Action) (Result, error) {
 		}
 	case "deleteVersion":
 		err = deleteVersion(&st, a)
+	case "deleteCases":
+		err = deleteCases(&st, a)
 	case "deleteFolder":
 		err = deleteFolder(&st, a)
 	case "moveCases":
@@ -875,6 +877,67 @@ func mergeCases(s *State, a Action) ([]string, int, error) {
 		mergeCaseInto(s, c, s.MainRevision, target.ID, a.Author)
 	}
 	return nil, len(toMerge), nil
+}
+
+// deleteCases removes one or more branch cases (single-row delete and bulk
+// delete both call this with a.CaseIDs of length 1 or more). Their execution
+// records and history are removed with them, and they're pruned from any
+// task's CaseIDs so task case counts stay accurate; the folders that held
+// them are left in place even if now empty.
+func deleteCases(s *State, a Action) error {
+	v, err := requireBranch(s, a.VersionID)
+	if err != nil {
+		return err
+	}
+	if len(a.CaseIDs) == 0 {
+		return errors.New("请选择用例")
+	}
+	ids := make(map[string]bool, len(a.CaseIDs))
+	for _, id := range a.CaseIDs {
+		ids[id] = true
+	}
+	cases := make([]TestCase, 0, len(s.Cases))
+	removed := 0
+	for _, c := range s.Cases {
+		if c.VersionID == v.ID && ids[c.ID] {
+			removed++
+			continue
+		}
+		cases = append(cases, c)
+	}
+	if removed == 0 {
+		return errors.New("用例不存在")
+	}
+	s.Cases = cases
+	records := make([]Record, 0, len(s.Records))
+	for _, r := range s.Records {
+		if r.VersionID == v.ID && ids[r.CaseID] {
+			continue
+		}
+		records = append(records, r)
+	}
+	s.Records = records
+	histories := make([]History, 0, len(s.Histories))
+	for _, h := range s.Histories {
+		if h.VersionID == v.ID && ids[h.CaseID] {
+			continue
+		}
+		histories = append(histories, h)
+	}
+	s.Histories = histories
+	for i := range s.Tasks {
+		if s.Tasks[i].VersionID != v.ID {
+			continue
+		}
+		kept := make([]string, 0, len(s.Tasks[i].CaseIDs))
+		for _, id := range s.Tasks[i].CaseIDs {
+			if !ids[id] {
+				kept = append(kept, id)
+			}
+		}
+		s.Tasks[i].CaseIDs = kept
+	}
+	return nil
 }
 
 // deleteFolder removes an empty branch folder. Mirrors deleteReqFolder /

@@ -369,6 +369,86 @@ func TestDeleteVersionRemovesEverythingScopedToIt(t *testing.T) {
 	}
 }
 
+func TestDeleteCasesRemovesRecordsHistoryAndTaskRefs(t *testing.T) {
+	svc := core.NewService(store.NewMemory())
+	state := apply(t, svc, core.Action{Type: "createVersion", Name: "M"})
+	m := branchID(t, state, "M")
+	var caseA, caseB string
+	for _, c := range state.Cases {
+		if c.VersionID != m {
+			continue
+		}
+		if caseA == "" {
+			caseA = c.ID
+		} else if caseB == "" {
+			caseB = c.ID
+			break
+		}
+	}
+	if caseA == "" || caseB == "" {
+		t.Fatal("branch should have inherited at least two cases from mainline")
+	}
+	state = apply(t, svc, core.Action{Type: "createTask", VersionID: m, Name: "回归任务", CaseIDs: []string{caseA, caseB}, Author: "mia"})
+	var taskID string
+	for _, tk := range state.Tasks {
+		if tk.VersionID == m {
+			taskID = tk.ID
+		}
+	}
+	state = apply(t, svc, core.Action{Type: "saveRecord", VersionID: m, CaseID: caseA, TaskID: taskID, Result: "passed", Author: "mia"})
+	state = apply(t, svc, core.Action{Type: "editCase", VersionID: m, CaseID: caseA, Title: "改过的标题", Author: "mia"})
+
+	state = apply(t, svc, core.Action{Type: "deleteCases", VersionID: m, CaseIDs: []string{caseA}, Author: "mia"})
+	foundA, foundB := false, false
+	for _, c := range state.Cases {
+		if c.VersionID != m {
+			continue
+		}
+		if c.ID == caseA {
+			foundA = true
+		}
+		if c.ID == caseB {
+			foundB = true
+		}
+	}
+	if foundA {
+		t.Fatal("deleted case should be gone")
+	}
+	if !foundB {
+		t.Fatal("only the targeted case should be removed, case B must remain")
+	}
+	for _, r := range state.Records {
+		if r.VersionID == m && r.CaseID == caseA {
+			t.Fatal("records for the deleted case should be gone")
+		}
+	}
+	for _, h := range state.Histories {
+		if h.VersionID == m && h.CaseID == caseA {
+			t.Fatal("history for the deleted case should be gone")
+		}
+	}
+	for _, tk := range state.Tasks {
+		if tk.ID != taskID {
+			continue
+		}
+		for _, id := range tk.CaseIDs {
+			if id == caseA {
+				t.Fatal("deleted case should be pruned from task.CaseIDs")
+			}
+		}
+		if len(tk.CaseIDs) != 1 || tk.CaseIDs[0] != caseB {
+			t.Fatalf("task should retain only case B, got %v", tk.CaseIDs)
+		}
+	}
+
+	if _, err := svc.Apply(context.Background(), core.Action{Type: "deleteCases", VersionID: "main", CaseIDs: []string{"CASE-0001"}, Author: "mia"}); err == nil {
+		t.Fatal("mainline case deletion must fail")
+	}
+	if _, err := svc.Apply(context.Background(), core.Action{Type: "deleteCases", VersionID: m, CaseIDs: []string{}, Author: "mia"}); err == nil {
+		t.Fatal("deleting with no case ids must fail")
+	}
+}
+
 func TestMoveCasesMarksDirtyAndRecordsHistory(t *testing.T) {
 	svc := core.NewService(store.NewMemory())
 	state := apply(t, svc, core.Action{Type: "createVersion", Name: "K"})
