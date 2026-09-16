@@ -42,27 +42,54 @@ function caseDetailBodyHTML(c){
 function bindCaseDetailBody(root,c,isPending,rerender){
   root.querySelectorAll('[data-case-view]').forEach(b=>b.onclick=()=>{caseViewMode=b.dataset.caseView;rerender()});
   const btn=root.querySelector('#case-simplify-btn');
-  if(btn)btn.onclick=()=>runSimplify(c,isPending,rerender);
+  if(!btn)return;
+  btn.dataset.simplifyKey=simplifyKey(c,isPending);
+  btn.onclick=()=>runSimplify(c,isPending,rerender);
+  syncSimplifyButtons(btn.dataset.simplifyKey);
+}
+// 正在生成阅读友好版的用例：key -> 开始时间。忙碌态记在模块级而不是按钮 DOM 上——
+// 生成期间任何重渲染（render()/renderReqFocus()）重新画出的按钮仍是禁用+计时态，
+// 结束或超时前都不能再次点击。按钮也不能用 $('#case-simplify-btn') 取：用例管理
+// (#detail) 和需求评审 (#req-detail) 两个面板里可能各有一个同 id 的按钮，
+// querySelector 会命中隐藏面板里那个，导致可见按钮没有立刻变成禁用态。
+const simplifyInFlight=new Map();
+const SIMPLIFY_CLIENT_TIMEOUT_MS=75000; // 服务端改写上限 60 秒，额外留出代理/网络余量
+const simplifyKey=(c,isPending)=>`${isPending?'pending':c.VersionID}:${c.ID}`;
+function syncSimplifyButtons(key){
+  const startedAt=simplifyInFlight.get(key);
+  if(startedAt===undefined)return;
+  const seconds=Math.floor((Date.now()-startedAt)/1000);
+  document.querySelectorAll('#case-simplify-btn').forEach(b=>{
+    if(b.dataset.simplifyKey!==key)return;
+    b.disabled=true;
+    b.textContent=seconds?`生成中…（已等待 ${seconds} 秒，最长约 60 秒）`:'生成中…';
+  });
 }
 async function runSimplify(c,isPending,rerender){
-  const btn=$('#case-simplify-btn');
+  const key=simplifyKey(c,isPending);
+  if(simplifyInFlight.has(key))return;
+  simplifyInFlight.set(key,Date.now());
+  syncSimplifyButtons(key);
   // The rewrite runs a real model call (up to 60s server-side) — a static "生成中…" label looks
   // frozen for that long, so tick elapsed seconds to show it is still working, not stuck.
-  let seconds=0,timer;
-  if(btn){
-    btn.disabled=true;btn.textContent='生成中…';
-    timer=setInterval(()=>{seconds++;if(btn.isConnected)btn.textContent=`生成中…（已等待 ${seconds} 秒，最长约 60 秒）`;else clearInterval(timer)},1000);
-  }
-  let friendly;
+  const ticker=setInterval(()=>syncSimplifyButtons(key),1000);
+  const controller=new AbortController(),abortTimer=setTimeout(()=>controller.abort(),SIMPLIFY_CLIENT_TIMEOUT_MS);
   try{
-    friendly=await plannerRequest('/api/planner/simplify',{method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({title:c.Title||'',preconditions:c.Preconditions||'',steps:c.Steps||'',expected:c.Expected||''})});
-  }catch(e){clearInterval(timer);toast(`生成失败：${e.message}`,true);rerender();return}
-  clearInterval(timer);
-  const payload={CaseID:c.ID,SimplifiedPreconditions:friendly.preconditions||'',SimplifiedSteps:friendly.steps||'',SimplifiedExpected:friendly.expected||''};
-  if(!isPending)payload.VersionID=c.VersionID;
-  try{await (isPending?actReview:act)(isPending?'simplifyPendingCase':'simplifyCase',payload);toast('已生成阅读友好版本')}
-  catch{rerender()}
+    let friendly;
+    try{
+      friendly=await plannerRequest('/api/planner/simplify',{method:'POST',headers:{'Content-Type':'application/json'},signal:controller.signal,
+        body:JSON.stringify({title:c.Title||'',preconditions:c.Preconditions||'',steps:c.Steps||'',expected:c.Expected||''})});
+    }catch(e){toast(controller.signal.aborted?'生成超时，请稍后重试':`生成失败：${e.message}`,true);return}
+    clearTimeout(abortTimer);
+    const payload={CaseID:c.ID,SimplifiedPreconditions:friendly.preconditions||'',SimplifiedSteps:friendly.steps||'',SimplifiedExpected:friendly.expected||''};
+    if(!isPending)payload.VersionID=c.VersionID;
+    try{await (isPending?actReview:act)(isPending?'simplifyPendingCase':'simplifyCase',payload);toast('已生成阅读友好版本')}
+    catch{}
+  }finally{
+    clearTimeout(abortTimer);clearInterval(ticker);
+    simplifyInFlight.delete(key);
+    rerender();
+  }
 }
 
 function renderFocus(){if(!focus){updateEmptyHint();$('#empty').classList.remove('hidden');$('#detail').classList.add('hidden');return}$('#empty').classList.add('hidden');let d=$('#detail');d.classList.remove('hidden');if(focus.type==='folder'){let f=state.folders.find(x=>x.VersionID===focus.versionID&&x.ID===focus.id);if(!f){focus=null;return renderFocus()}let descendants=descendantFolders(f),count=cases(f.VersionID).filter(c=>c.FolderID===f.ID||descendants.includes(c.FolderID)).length;d.innerHTML=`<div class="detail-head"><div><div class="eyebrow">文件夹 · ${esc(version(f.VersionID).name)}</div><h1>📁 ${esc(f.Name)}</h1></div></div><div class="card meta-grid"><span>用例 <b>${count}</b></span><span>子文件夹 <b>${descendants.length}</b></span><span>创建者 <b>${esc(f.CreatedBy)}</b></span><span>创建时间 <b>${fmt(f.CreatedAt)}</b></span></div>`;return}let c=state.cases.find(x=>x.VersionID===focus.versionID&&x.ID===focus.id);if(!c){focus=null;return renderFocus()}let branch=!version(c.VersionID).mainline,h=state.histories.filter(x=>x.CaseID===c.ID&&x.VersionID===c.VersionID).slice().reverse();d.innerHTML=`<div class="detail-head"><div><div class="eyebrow">${esc(c.ID)} · ${esc(version(c.VersionID).name)} ${c.Dirty?'· 未合并':''}</div><h1>${esc(c.Title)}</h1></div><div class="detail-actions">${branch?'<button id="edit-case" class="secondary">编辑</button>':''}<button id="open-record">测试记录</button></div></div><div class="card case-detail"><div class="meta-grid case-meta"><span>优先级 <b>${esc(c.Priority||'未设置')}</b></span><span>当前结果 <b>${resultName(c.Result)}</b></span><span>更新者 <b>${esc(c.UpdatedBy)}</b></span><span>更新时间 <b>${fmt(c.UpdatedAt)}</b></span><span>基线版本 <b>r${c.BaseRevision||c.Revision}</b></span><button type="button" class="link-button version-toggle" id="case-version-toggle" aria-expanded="false"${h.length?'':' disabled'}>用例版本 <b>${esc(version(c.VersionID).name)}</b><small>${h.length?`${h.length} 条编辑历史 ▾`:'暂无编辑历史'}</small></button></div>${caseDetailBodyHTML(c)}${h.length?`<div class="history-list hidden" id="case-history-list">${h.map(x=>`<a class="history-row" href="#history=${encodeURIComponent(x.ID)}&amp;version=${encodeURIComponent(c.VersionID)}"><b>${historyAction(x.Action)}</b> · ${esc(x.Author)} <small>${fmt(x.CreatedAt)}${x.SourceVersionID?` · 来源 ${esc(version(x.SourceVersionID)?.name||x.SourceVersionID)}`:''}</small></a>`).join('')}</div>`:''}</div>`;if(branch)$('#edit-case').onclick=()=>caseModal(c);$('#open-record').onclick=()=>openRecords(c);if(h.length)$('#case-version-toggle').onclick=()=>{let hidden=$('#case-history-list').classList.toggle('hidden');$('#case-version-toggle').setAttribute('aria-expanded',String(!hidden))};bindCaseDetailBody(d,c,false,renderFocus)}
