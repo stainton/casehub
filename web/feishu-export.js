@@ -4,7 +4,17 @@ function buildFeishuMindmap(versions, allFolders, allCases, scopes) {
   let nextID=0, count=0;
   const node=(text,children=[])=>({id:`casehub-${++nextID}`,text:[{type:1,text:String(text??''),style:{}}],children});
   const field=(label,value)=>node(label,[node(value||'未填写')]);
-  const caseNode=c=>{count++;return node(`TC：${c.Title}`,[field('优先级',c.Priority),field('前置条件',c.Preconditions),field('执行步骤',c.Steps),field('预期结果',c.Expected)])};
+  // Prefer the reader-friendly rewrite (see app.js's caseHasSimplified/caseSimplifiedStale) when one
+  // exists and still matches the case's current content — a stale rewrite would show text that no
+  // longer reflects the case, which is worse for a reviewer than the raw planner content.
+  const caseNode=c=>{
+    count++;
+    const friendly=caseHasSimplified(c)&&!caseSimplifiedStale(c);
+    const preconditions=friendly?c.SimplifiedPreconditions:c.Preconditions;
+    const steps=friendly?c.SimplifiedSteps:c.Steps;
+    const expected=friendly?c.SimplifiedExpected:c.Expected;
+    return node(`TC：${c.Title}`,[field('优先级',c.Priority),field('前置条件',preconditions),field('执行步骤',steps),field('预期结果',expected)]);
+  };
   const roots=scopes.map(scope=>{
     const version=versions.find(v=>v.id===scope.versionID);
     const fs=allFolders.filter(f=>f.VersionID===scope.versionID), fm=new Map(fs.map(f=>[f.ID,f]));
