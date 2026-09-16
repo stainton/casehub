@@ -46,12 +46,19 @@ function bindCaseDetailBody(root,c,isPending,rerender){
 }
 async function runSimplify(c,isPending,rerender){
   const btn=$('#case-simplify-btn');
-  if(btn){btn.disabled=true;btn.textContent='生成中…'}
+  // The rewrite runs a real model call (up to 60s server-side) — a static "生成中…" label looks
+  // frozen for that long, so tick elapsed seconds to show it is still working, not stuck.
+  let seconds=0,timer;
+  if(btn){
+    btn.disabled=true;btn.textContent='生成中…';
+    timer=setInterval(()=>{seconds++;if(btn.isConnected)btn.textContent=`生成中…（已等待 ${seconds} 秒，最长约 60 秒）`;else clearInterval(timer)},1000);
+  }
   let friendly;
   try{
     friendly=await plannerRequest('/api/planner/simplify',{method:'POST',headers:{'Content-Type':'application/json'},
       body:JSON.stringify({title:c.Title||'',preconditions:c.Preconditions||'',steps:c.Steps||'',expected:c.Expected||''})});
-  }catch(e){toast(e.message,true);rerender();return}
+  }catch(e){clearInterval(timer);toast(`生成失败：${e.message}`,true);rerender();return}
+  clearInterval(timer);
   const payload={CaseID:c.ID,SimplifiedPreconditions:friendly.preconditions||'',SimplifiedSteps:friendly.steps||'',SimplifiedExpected:friendly.expected||''};
   if(!isPending)payload.VersionID=c.VersionID;
   try{await (isPending?actReview:act)(isPending?'simplifyPendingCase':'simplifyCase',payload);toast('已生成阅读友好版本')}
