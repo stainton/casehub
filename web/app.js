@@ -348,6 +348,10 @@ function renameReqDocModal(doc){showModal('重命名需求文档',`<label>标题
 // 假定同一时刻只有一个 AI 设计任务在跑（多任务并发不在此处理），
 // 因此用全局变量记录"当前活跃任务属于哪个需求"即可驱动按钮态与抽屉重新打开。
 const aiJobKey=doc=>`casehub-ai-job-${doc.ID}`;
+// 设计完成后的结果摘要（导入条数 + 遗留问题）持久保存，关闭抽屉/刷新页面后仍展示，
+// 直到用户点击"重新设计"才清除。
+const aiResultKey=doc=>`casehub-ai-result-${doc.ID}`;
+function loadAiResult(doc){try{return JSON.parse(localStorage.getItem(aiResultKey(doc)))}catch{return null}}
 let aiActiveDocId=null, aiSourceJobId=null, aiHandlingJobId=null;
 function isAiActive(doc){return aiActiveDocId===doc.ID}
 function setAiActive(doc){aiActiveDocId=doc.ID;syncAiButton()}
@@ -394,7 +398,7 @@ async function checkAiJob(doc){
   const jobId=localStorage.getItem(aiJobKey(doc));
   if(!jobId){
     clearAiActive(doc);
-    if(isAiDrawerOpen(doc))renderAiForm(doc);
+    if(isAiDrawerOpen(doc)){const summary=loadAiResult(doc);summary?renderAiResult(doc,summary):renderAiForm(doc)}
     return;
   }
   try{
@@ -505,12 +509,11 @@ async function handleAiSuccess(doc,job){
   try{
     const result=await plannerRequest(`/api/planner/jobs/${job.id}/result`);
     await importAiResult(doc,result);
+    const summary={count:result.cases.length,limitations:result.limitations||[]};
+    localStorage.setItem(aiResultKey(doc),JSON.stringify(summary));
     localStorage.removeItem(aiJobKey(doc));
     toast(`AI 设计已完成，已自动导入 ${result.cases.length} 条用例到"用例评审"`);
-    if(isAiDrawerOpen(doc)){
-      $('#ai-drawer-body').innerHTML=`<div class="card meta-grid"><span>已导入用例 <b>${result.cases.length}</b></span></div>${result.limitations?.length?`<div class="card"><h3>未验证/受限范围</h3><ul>${result.limitations.map(l=>`<li>${esc(l)}</li>`).join('')}</ul></div>`:''}<p class="meta">已自动创建目录并导入到"用例评审"，请前往评审。</p><p class="drawer-actions"><button type="button" class="secondary" id="ai-restart">重新设计</button></p>`;
-      $('#ai-restart').onclick=()=>renderAiForm(doc);
-    }
+    if(isAiDrawerOpen(doc))renderAiResult(doc,summary);
   }catch(e){
     toast(`AI 设计结果自动导入失败：${e.message}`,true);
     if(isAiDrawerOpen(doc)){
@@ -520,6 +523,10 @@ async function handleAiSuccess(doc,job){
   }finally{
     if(aiHandlingJobId===job.id)aiHandlingJobId=null;
   }
+}
+function renderAiResult(doc,summary){
+  $('#ai-drawer-body').innerHTML=`<div class="card meta-grid"><span>已导入用例 <b>${summary.count}</b></span></div>${summary.limitations?.length?`<div class="card"><h3>未验证/受限范围</h3><ul>${summary.limitations.map(l=>`<li>${esc(l)}</li>`).join('')}</ul></div>`:''}<p class="meta">已自动创建目录并导入到"用例评审"，请前往评审。</p><p class="drawer-actions"><button type="button" class="secondary" id="ai-restart">重新设计</button></p>`;
+  $('#ai-restart').onclick=()=>{localStorage.removeItem(aiResultKey(doc));renderAiForm(doc)};
 }
 async function importAiResult(doc,result){
   const folderName=`${doc.ID} · ${doc.Title}`;
