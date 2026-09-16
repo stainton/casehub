@@ -776,6 +776,12 @@ func TestPendingCaseReviewAndImport(t *testing.T) {
 	apply(t, svc, core.Action{Type: "reviewPendingCase", CaseID: second.ID, Review: "passed", Author: "bob"})
 	state = apply(t, svc, core.Action{Type: "simplifyPendingCase", CaseID: second.ID,
 		SimplifiedPreconditions: "无", SimplifiedSteps: "退款失败时提示原因", SimplifiedExpected: "看到失败提示", Author: "bob"})
+	state = apply(t, svc, core.Action{Type: "describePendingCase", CaseID: second.ID, Description: "  覆盖退款失败的提示  ", Author: "bob"})
+	for _, c := range state.PendingCases {
+		if c.ID == second.ID && (c.Description != "覆盖退款失败的提示" || c.Review != "passed") {
+			t.Fatalf("describing a pending case must store the trimmed summary and keep its review verdict: %+v", c)
+		}
+	}
 	state = apply(t, svc, core.Action{Type: "importPendingCases", VersionID: branch, Author: "bob"})
 	if len(state.PendingFolders) != 1 || len(state.PendingCases) != 0 {
 		t.Fatalf("pending-review area must be cleared after import: %+v", state)
@@ -792,6 +798,9 @@ func TestPendingCaseReviewAndImport(t *testing.T) {
 			}
 			if inFolder == nil || inFolder.Name != "支付" {
 				t.Fatalf("imported case landed in wrong folder: %+v", c)
+			}
+			if c.Description != "覆盖退款失败的提示" {
+				t.Fatalf("import must carry the reviewer-written description: %+v", c)
 			}
 			if c.SimplifiedSteps != "退款失败时提示原因" || c.SimplifiedFromSteps != c.Steps {
 				t.Fatalf("import must carry the pending case's simplified reading version along, it is part of the case: %+v", c)

@@ -40,6 +40,10 @@ type TestCase struct {
 	CreatedAt, UpdatedAt                            time.Time
 	BaseRevision, Revision                          int64
 	Dirty                                           bool
+	// Description is the case summary written by a person during review (the
+	// review initiator, after reading the case). It is deliberately never filled
+	// by the AI planner — see describePendingCase.
+	Description string
 	// Cached human-readable rewrite of Preconditions/Steps/Expected (see simplifyCase).
 	// SimplifiedFrom* snapshots the exact source text it was generated from, so the
 	// frontend can tell a stale cache from a fresh one with a plain string
@@ -89,6 +93,7 @@ type PendingCase struct {
 	ID, FolderID                                    string
 	Title, Preconditions, Steps, Expected, Priority string
 	Review                                          string
+	Description                                     string // see TestCase.Description
 	CreatedBy, UpdatedBy, ReviewedBy                string
 	CreatedAt, UpdatedAt, ReviewedAt                time.Time
 	// See TestCase's identical fields.
@@ -114,6 +119,7 @@ type State struct {
 type Action struct {
 	Type, VersionID, FolderID, ParentID, CaseID, TaskID string
 	Name, Title, Preconditions, Steps, Expected         string
+	Description                                         string
 	Priority, Result, Note, Author                      string
 	CaseIDs                                             []string
 	Submitted, Force                                    bool
@@ -321,6 +327,8 @@ func (s *Service) Apply(ctx context.Context, a Action) (Result, error) {
 		err = simplifyCase(&st, a)
 	case "simplifyPendingCase":
 		err = simplifyPendingCase(&st, a)
+	case "describePendingCase":
+		err = describePendingCase(&st, a)
 	case "saveRecord", "submitRecord":
 		warnings, err = recordCase(&st, a)
 	case "createTask":
@@ -563,7 +571,7 @@ func createCase(s *State, a Action) error {
 		return errors.New("当前版本已存在相同用例 ID")
 	}
 	t := now()
-	c := TestCase{ID: id, VersionID: a.VersionID, FolderID: a.FolderID, Title: strings.TrimSpace(a.Title), Preconditions: a.Preconditions, Steps: a.Steps, Expected: a.Expected, Priority: a.Priority, CreatedBy: a.Author, UpdatedBy: a.Author, CreatedAt: t, UpdatedAt: t, Dirty: true}
+	c := TestCase{ID: id, VersionID: a.VersionID, FolderID: a.FolderID, Title: strings.TrimSpace(a.Title), Preconditions: a.Preconditions, Steps: a.Steps, Expected: a.Expected, Description: a.Description, Priority: a.Priority, CreatedBy: a.Author, UpdatedBy: a.Author, CreatedAt: t, UpdatedAt: t, Dirty: true}
 	s.Cases = append(s.Cases, c)
 	after := c
 	s.Histories = append(s.Histories, History{ID: ID(), CaseID: id, VersionID: a.VersionID, SourceVersionID: a.VersionID, Action: "create", Author: a.Author, After: &after, CreatedAt: t})
@@ -596,6 +604,7 @@ func editCase(s *State, a Action) ([]string, error) {
 	c.Preconditions = a.Preconditions
 	c.Steps = a.Steps
 	c.Expected = a.Expected
+	c.Description = a.Description
 	c.Priority = a.Priority
 	c.UpdatedBy = a.Author
 	c.UpdatedAt = now()
@@ -651,6 +660,20 @@ func simplifyPendingCase(s *State, a Action) error {
 	c.SimplifiedFromSteps = c.Steps
 	c.SimplifiedFromExpected = c.Expected
 	c.SimplifiedAt = now()
+	return nil
+}
+
+// describePendingCase sets only the reviewer-written Description of a pending
+// case. Unlike editPendingCase it keeps the review verdict: the summary
+// describes the case, it doesn't change what reviewers approved.
+func describePendingCase(s *State, a Action) error {
+	c, _ := pendingCaseAt(s, a.CaseID)
+	if c == nil {
+		return errors.New("用例不存在")
+	}
+	c.Description = strings.TrimSpace(a.Description)
+	c.UpdatedBy = a.Author
+	c.UpdatedAt = now()
 	return nil
 }
 
@@ -1274,7 +1297,7 @@ func createPendingCase(s *State, a Action) error {
 		return errors.New("用例标题不能为空")
 	}
 	t := now()
-	c := PendingCase{ID: "CASE-" + strings.ToUpper(ID()[:6]), FolderID: a.FolderID, Title: strings.TrimSpace(a.Title), Preconditions: a.Preconditions, Steps: a.Steps, Expected: a.Expected, Priority: a.Priority, CreatedBy: a.Author, UpdatedBy: a.Author, CreatedAt: t, UpdatedAt: t}
+	c := PendingCase{ID: "CASE-" + strings.ToUpper(ID()[:6]), FolderID: a.FolderID, Title: strings.TrimSpace(a.Title), Preconditions: a.Preconditions, Steps: a.Steps, Expected: a.Expected, Description: a.Description, Priority: a.Priority, CreatedBy: a.Author, UpdatedBy: a.Author, CreatedAt: t, UpdatedAt: t}
 	s.PendingCases = append(s.PendingCases, c)
 	return nil
 }
@@ -1291,6 +1314,7 @@ func editPendingCase(s *State, a Action) error {
 	c.Preconditions = a.Preconditions
 	c.Steps = a.Steps
 	c.Expected = a.Expected
+	c.Description = a.Description
 	c.Priority = a.Priority
 	c.UpdatedBy = a.Author
 	c.UpdatedAt = now()
@@ -1426,7 +1450,7 @@ func importPendingCases(s *State, a Action) error {
 		if !ok {
 			folderID = "root"
 		}
-		c := TestCase{ID: pc.ID, VersionID: v.ID, FolderID: folderID, Title: pc.Title, Preconditions: pc.Preconditions, Steps: pc.Steps, Expected: pc.Expected, Priority: pc.Priority, CreatedBy: a.Author, UpdatedBy: a.Author, CreatedAt: t, UpdatedAt: t, Dirty: true,
+		c := TestCase{ID: pc.ID, VersionID: v.ID, FolderID: folderID, Title: pc.Title, Preconditions: pc.Preconditions, Steps: pc.Steps, Expected: pc.Expected, Description: pc.Description, Priority: pc.Priority, CreatedBy: a.Author, UpdatedBy: a.Author, CreatedAt: t, UpdatedAt: t, Dirty: true,
 			SimplifiedPreconditions: pc.SimplifiedPreconditions, SimplifiedSteps: pc.SimplifiedSteps, SimplifiedExpected: pc.SimplifiedExpected,
 			SimplifiedFromPreconditions: pc.SimplifiedFromPreconditions, SimplifiedFromSteps: pc.SimplifiedFromSteps, SimplifiedFromExpected: pc.SimplifiedFromExpected,
 			SimplifiedAt: pc.SimplifiedAt}
