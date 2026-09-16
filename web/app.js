@@ -35,17 +35,26 @@ function caseDetailBodyHTML(c){
   const has=caseHasSimplified(c),stale=has&&caseSimplifiedStale(c);
   if(!has||stale){
     const hint=stale?'用例内容已更改，之前生成的阅读友好版本已过时。':'还没有阅读友好版本 —— 这份用例的步骤/预期结果是给 Planner/生成器看的原始内容，信息密度较高，供人阅读负担较大。';
-    return `${toggle}<div class="case-simplify-prompt"><p class="meta">${hint}</p><button type="button" id="case-simplify-btn">${has?'重新生成阅读友好版本':'生成阅读友好版本'}</button></div>`;
+    return `${toggle}<div class="case-simplify-prompt"><p class="meta">${hint}</p><div class="case-simplify-actions"><button type="button" id="case-simplify-btn">${has?'重新生成阅读友好版本':'生成阅读友好版本'}</button>${has?'<button type="button" class="secondary" id="case-simplify-edit-btn">编辑旧版本</button>':''}</div></div>`;
   }
-  return `${toggle}${caseFieldLinesHTML(c.SimplifiedPreconditions,c.SimplifiedSteps,c.SimplifiedExpected)}<p class="meta case-simplify-meta">阅读友好版 · 生成于 ${fmt(c.SimplifiedAt)} <button type="button" class="secondary" id="case-simplify-btn">重新生成</button></p>`;
+  return `${toggle}${caseFieldLinesHTML(c.SimplifiedPreconditions,c.SimplifiedSteps,c.SimplifiedExpected)}<p class="meta case-simplify-meta">阅读友好版 · 更新于 ${fmt(c.SimplifiedAt)} <button type="button" class="secondary" id="case-simplify-edit-btn">编辑</button><button type="button" class="secondary" id="case-simplify-btn">重新生成</button></p>`;
 }
 function bindCaseDetailBody(root,c,isPending,rerender){
   root.querySelectorAll('[data-case-view]').forEach(b=>b.onclick=()=>{caseViewMode=b.dataset.caseView;rerender()});
-  const btn=root.querySelector('#case-simplify-btn');
-  if(!btn)return;
-  btn.dataset.simplifyKey=simplifyKey(c,isPending);
-  btn.onclick=()=>runSimplify(c,isPending,rerender);
-  syncSimplifyButtons(btn.dataset.simplifyKey);
+  const key=simplifyKey(c,isPending),btn=root.querySelector('#case-simplify-btn'),editBtn=root.querySelector('#case-simplify-edit-btn');
+  if(btn){btn.dataset.simplifyKey=key;btn.onclick=()=>runSimplify(c,isPending,rerender)}
+  if(editBtn){editBtn.dataset.simplifyKey=key;editBtn.onclick=()=>simplifiedEditModal(c,isPending)}
+  syncSimplifyButtons(key);
+}
+// 人工修改阅读友好版：复用 simplifyCase/simplifyPendingCase 持久化（服务端同时把
+// SimplifiedFrom* 更新为用例当前内容，所以编辑"已过时"的旧版本保存后即不再过时）。
+function simplifiedEditModal(c,isPending){
+  if(simplifyInFlight.has(simplifyKey(c,isPending)))return;
+  showModal('编辑阅读友好版本',`<label>前置条件<textarea name="SimplifiedPreconditions">${esc(c.SimplifiedPreconditions||'')}</textarea></label><label>执行步骤<textarea name="SimplifiedSteps" required>${esc(c.SimplifiedSteps||'')}</textarea></label><label>预期结果<textarea name="SimplifiedExpected">${esc(c.SimplifiedExpected||'')}</textarea></label>`,x=>{
+    const payload={CaseID:c.ID,SimplifiedPreconditions:x.SimplifiedPreconditions,SimplifiedSteps:x.SimplifiedSteps,SimplifiedExpected:x.SimplifiedExpected};
+    if(!isPending)payload.VersionID=c.VersionID;
+    return (isPending?actReview:act)(isPending?'simplifyPendingCase':'simplifyCase',payload).then(()=>toast('阅读友好版本已保存'));
+  });
 }
 // 正在生成阅读友好版的用例：key -> 开始时间。忙碌态记在模块级而不是按钮 DOM 上——
 // 生成期间任何重渲染（render()/renderReqFocus()）重新画出的按钮仍是禁用+计时态，
@@ -59,10 +68,10 @@ function syncSimplifyButtons(key){
   const startedAt=simplifyInFlight.get(key);
   if(startedAt===undefined)return;
   const seconds=Math.floor((Date.now()-startedAt)/1000);
-  document.querySelectorAll('#case-simplify-btn').forEach(b=>{
+  document.querySelectorAll('#case-simplify-btn,#case-simplify-edit-btn').forEach(b=>{
     if(b.dataset.simplifyKey!==key)return;
-    b.disabled=true;
-    b.textContent=seconds?`生成中…（已等待 ${seconds} 秒，最长约 60 秒）`:'生成中…';
+    b.disabled=true; // 生成结果会覆盖人工修改，生成期间编辑按钮一并锁住
+    if(b.id==='case-simplify-btn')b.textContent=seconds?`生成中…（已等待 ${seconds} 秒，最长约 60 秒）`:'生成中…';
   });
 }
 async function runSimplify(c,isPending,rerender){
