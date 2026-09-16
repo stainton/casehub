@@ -463,6 +463,21 @@ async function checkAiJob(doc){
     if(isAiDrawerOpen(doc))renderAiForm(doc,'读取任务状态失败，请重新开始。');
   }
 }
+// "建议覆盖用例数量"两步流程：开始分析 → 先调 /api/planner/estimate 评估并预填 → 用户可修改 →
+// 确认后才提交完整 planner 任务（caseCount=该值，planner 输出 [caseCount-5, caseCount] 条用例）。
+// 评估状态按需求保存在内存里（含已填表单），关闭抽屉再打开不会丢失评估中/评估结果。
+const aiEstimates=new Map(); // docID -> {status:'running'|'done', startedAt, count, rationale, notice, values}
+const AI_DEFAULT_CASE_COUNT=10, AI_MAX_CASE_COUNT=500, AI_CASE_COUNT_SLACK=5;
+const AI_ESTIMATE_CLIENT_TIMEOUT_MS=135000; // 服务端评估上限 120 秒，额外留出代理/网络余量
+const aiCaseRange=n=>`${Math.max(1,n-AI_CASE_COUNT_SLACK)}–${n}`;
+function aiFormValues(form){const x=Object.fromEntries(new FormData(form));delete x.caseCount;return x}
+function aiRequirementPayload(doc,values){
+  return {requirements:[{id:doc.ID,title:doc.Title,content:doc.Content||''}],instructions:[values.instructions||'',reqRefContext(doc)].filter(Boolean).join('\n\n')};
+}
+function aiEstimateStatusText(est){
+  const seconds=Math.floor((Date.now()-est.startedAt)/1000);
+  return `正在评估这份需求至少需要多少条用例覆盖…${seconds?`（已等待 ${seconds} 秒，最长约 120 秒）`:''}`;
+}
 function renderAiForm(doc,notice){
   // 用例字段特意不叫 name="username"/"password"，且密码框用 type="text" +
   // -webkit-text-security 伪装遮罩：这些只是被测系统的测试账号，不是本机
@@ -470,20 +485,64 @@ function renderAiForm(doc,notice){
   // 它的"密码遭遇数据泄露"弹窗（表单没有真正提交/跳转也会触发，JS 端
   // preventDefault 拦不住）。换掉字段名和输入类型可以让 Chrome 从一开始就不
   // 把这当成登录密码框，从根上避免弹窗，同时视觉上仍然是圆点遮罩。
-  $('#ai-drawer-body').innerHTML=`${notice?`<p class="meta">${esc(notice)}</p>`:''}<form id="ai-form" autocomplete="off"><label>被测系统 URL<input name="baseUrl" required placeholder="https://test.example.com/login" autocomplete="off"></label><label>补充说明（可选）<textarea name="instructions" placeholder="覆盖范围、登录方式等"></textarea></label><label>测试账号 · 用户名（可选）<input name="testAccount" autocomplete="off"></label><label>测试账号 · 密码（可选）<input name="testSecret" type="text" class="fake-password" autocomplete="off" spellcheck="false"></label><p class="drawer-actions"><button type="submit">开始设计</button></p></form>`;
-  $('#ai-form').onsubmit=async e=>{
+  const est=aiEstimates.get(doc.ID),v=est?.values||{},done=est?.status==='done',running=est?.status==='running';
+  const countField=done
+    ?`<input name="caseCount" type="number" min="1" max="${AI_MAX_CASE_COUNT}" step="1" required value="${est.count}">`
+    :`<input name="caseCount" type="number" disabled placeholder="点击“开始分析”后由 AI 评估">`;
+  const estimateInfo=running?`<p class="meta" id="ai-estimate-status">${aiEstimateStatusText(est)}</p>`
+    :done?`${est.notice?`<p class="meta">${esc(est.notice)}</p>`:''}${est.rationale?`<p class="meta ai-estimate-rationale">${esc(est.rationale)}</p>`:''}<p class="meta" id="ai-case-range">AI 将输出 ${aiCaseRange(est.count)} 条用例</p>`:'';
+  const actions=done?`<button type="button" class="secondary" id="ai-reestimate">重新评估</button><button type="submit">确认并开始设计</button>`
+    :`<button type="submit"${running?' disabled':''}>${running?'评估中…':'开始分析'}</button>`;
+  $('#ai-drawer-body').innerHTML=`${notice?`<p class="meta">${esc(notice)}</p>`:''}<form id="ai-form" autocomplete="off"><label>被测系统 URL<input name="baseUrl" required placeholder="https://test.example.com/login" autocomplete="off" value="${esc(v.baseUrl||'')}"></label><label>补充说明（可选）<textarea name="instructions" placeholder="覆盖范围、登录方式等">${esc(v.instructions||'')}</textarea></label><label>测试账号 · 用户名（可选）<input name="testAccount" autocomplete="off" value="${esc(v.testAccount||'')}"></label><label>测试账号 · 密码（可选）<input name="testSecret" type="text" class="fake-password" autocomplete="off" spellcheck="false" value="${esc(v.testSecret||'')}"></label><label>建议覆盖用例数量${countField}</label>${estimateInfo}<p class="drawer-actions">${actions}</p></form>`;
+  const form=$('#ai-form');
+  // 评估期间/评估后继续编辑的表单内容同步进状态，重新渲染（关闭再打开抽屉）时保留。
+  form.oninput=()=>{
+    const cur=aiEstimates.get(doc.ID);
+    if(cur)cur.values=aiFormValues(form);
+    const n=Number(form.elements.caseCount.value),range=$('#ai-case-range');
+    if(range)range.textContent=Number.isInteger(n)&&n>=1&&n<=AI_MAX_CASE_COUNT?`AI 将输出 ${aiCaseRange(n)} 条用例`:`请输入 1–${AI_MAX_CASE_COUNT} 的整数`;
+    if(cur&&cur.status==='done'&&Number.isInteger(n))cur.count=n;
+  };
+  if(done)$('#ai-reestimate').onclick=()=>runAiEstimate(doc,aiFormValues(form));
+  form.onsubmit=async e=>{
     e.preventDefault();
-    const x=Object.fromEntries(new FormData(e.target));
-    const instructions=[x.instructions||'',reqRefContext(doc)].filter(Boolean).join('\n\n');
-    const payload={requirements:[{id:doc.ID,title:doc.Title,content:doc.Content||''}],target:{baseUrl:x.baseUrl},context:{instructions}};
-    if(x.testAccount||x.testSecret)payload.context.testData={username:x.testAccount||'',password:x.testSecret||''};
-    const btn=e.target.querySelector('button');btn.disabled=true;
+    const values=aiFormValues(form);
+    if(!done)return runAiEstimate(doc,values);
+    const caseCount=Number(form.elements.caseCount.value);
+    if(!Number.isInteger(caseCount)||caseCount<1||caseCount>AI_MAX_CASE_COUNT){toast(`建议覆盖用例数量需为 1–${AI_MAX_CASE_COUNT} 的整数`,true);return}
+    const {requirements,instructions}=aiRequirementPayload(doc,values);
+    const payload={requirements,target:{baseUrl:values.baseUrl},context:{instructions},caseCount};
+    if(values.testAccount||values.testSecret)payload.context.testData={username:values.testAccount||'',password:values.testSecret||''};
+    const btn=form.querySelector('button[type="submit"]');btn.disabled=true;
     try{
       const job=await plannerRequest('/api/planner/jobs',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+      aiEstimates.delete(doc.ID);
       localStorage.setItem(aiJobKey(doc),job.id);
       routeAiJob(doc,job);
     }catch(err){toast(err.message,true);btn.disabled=false}
   };
+}
+async function runAiEstimate(doc,values){
+  if(aiEstimates.get(doc.ID)?.status==='running')return;
+  const est={status:'running',startedAt:Date.now(),values};
+  aiEstimates.set(doc.ID,est);
+  if(isAiDrawerOpen(doc))renderAiForm(doc);
+  const ticker=setInterval(()=>{const el=$('#ai-estimate-status');if(el&&isAiDrawerOpen(doc)&&aiEstimates.get(doc.ID)===est)el.textContent=aiEstimateStatusText(est)},1000);
+  const controller=new AbortController(),abortTimer=setTimeout(()=>controller.abort(),AI_ESTIMATE_CLIENT_TIMEOUT_MS);
+  let next;
+  try{
+    const {requirements,instructions}=aiRequirementPayload(doc,values);
+    const r=await plannerRequest('/api/planner/estimate',{method:'POST',headers:{'Content-Type':'application/json'},signal:controller.signal,
+      body:JSON.stringify({requirements,context:{instructions}})});
+    next={count:r.suggestedCaseCount,rationale:r.rationale||''};
+  }catch(e){
+    const reason=controller.signal.aborted?'评估超时':`评估失败：${e.message}`;
+    toast(reason,true);
+    next={count:AI_DEFAULT_CASE_COUNT,rationale:'',notice:`${reason}，已填入默认值 ${AI_DEFAULT_CASE_COUNT}，可修改后确认。`};
+  }finally{clearTimeout(abortTimer);clearInterval(ticker)}
+  if(aiEstimates.get(doc.ID)!==est)return; // superseded (e.g. a job was started elsewhere)
+  aiEstimates.set(doc.ID,{status:'done',...next,values:est.values});
+  if(isAiDrawerOpen(doc)&&!isAiActive(doc)&&!localStorage.getItem(aiJobKey(doc)))renderAiForm(doc);
 }
 function aiStageLabel(job){
   const status={queued:'排队中',running:'进行中',succeeded:'已完成',failed:'失败',cancelled:'已取消'}[job.status]||job.status;
