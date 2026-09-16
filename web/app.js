@@ -4,6 +4,7 @@ let openTasks=new Set(), closedTaskVersions=new Set(), closedFolders=new Set(), 
 let page='cases', reqFocus=null, reqEditor=null, reqSidebarWidth=null, aiDoc=null, reqPage='docs';
 let aiSource=null, aiPlannerEnabled=null;
 let caseViewMode='friendly'; // 'friendly' | 'raw' — applies to whichever case detail is currently shown
+let caseViewFor=null; // simplifyKey of the case caseViewMode was chosen for; opening another case re-picks the default
 const esc=s=>String(s??'').replace(/[&<>'"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]));
 const fmt=s=>s?new Date(s).toLocaleString():'—';
 const version=id=>state.versions.find(v=>v.id===id), folders=id=>state.folders.filter(f=>f.VersionID===id), cases=id=>state.cases.filter(c=>c.VersionID===id);
@@ -40,13 +41,15 @@ function describePendingCaseModal(c){
     x=>actReview('describePendingCase',{CaseID:c.ID,Description:x.Description}).then(()=>toast('用例描述已保存')));
 }
 function caseDetailBodyHTML(c,isPending){
+  const has=caseHasSimplified(c),stale=has&&caseSimplifiedStale(c),fresh=has&&!stale;
+  // 每打开一条用例重新选默认视图：有（未过时的）阅读友好版优先展示，否则展示 Planner 原始内容。
+  // 同一条用例内用户手动切换的视图在重渲染时保持不变。
+  const key=simplifyKey(c,isPending);
+  if(caseViewFor!==key){caseViewFor=key;caseViewMode=fresh?'friendly':'raw'}
   const toggle=caseDescriptionHTML(c,isPending)+caseViewToggleHTML();
-  if(caseViewMode!=='friendly')return `${toggle}${caseFieldLinesHTML(c.Preconditions,c.Steps,c.Expected)}`;
-  const has=caseHasSimplified(c),stale=has&&caseSimplifiedStale(c);
-  if(!has||stale){
-    const hint=stale?'用例内容已更改，之前生成的阅读友好版本已过时。':'还没有阅读友好版本 —— 这份用例的步骤/预期结果是给 Planner/生成器看的原始内容，信息密度较高，供人阅读负担较大。';
-    return `${toggle}<div class="case-simplify-prompt"><p class="meta">${hint}</p><div class="case-simplify-actions"><button type="button" id="case-simplify-btn">${has?'重新生成阅读友好版本':'生成阅读友好版本'}</button>${has?'<button type="button" class="secondary" id="case-simplify-edit-btn">编辑旧版本</button>':''}</div></div>`;
-  }
+  const prompt=fresh?'':`<div class="case-simplify-prompt"><p class="meta">${stale?'用例内容已更改，之前生成的阅读友好版本已过时。':'还没有阅读友好版本 —— 这份用例的步骤/预期结果是给 Planner/生成器看的原始内容，信息密度较高，供人阅读负担较大。'}</p><div class="case-simplify-actions"><button type="button" id="case-simplify-btn">${has?'重新生成阅读友好版本':'生成阅读友好版本'}</button>${has?'<button type="button" class="secondary" id="case-simplify-edit-btn">编辑旧版本</button>':''}</div></div>`;
+  if(caseViewMode!=='friendly')return `${toggle}${caseFieldLinesHTML(c.Preconditions,c.Steps,c.Expected)}${prompt}`;
+  if(!fresh)return `${toggle}${prompt}`;
   return `${toggle}${caseFieldLinesHTML(c.SimplifiedPreconditions,c.SimplifiedSteps,c.SimplifiedExpected)}<p class="meta case-simplify-meta">阅读友好版 · 更新于 ${fmt(c.SimplifiedAt)} <button type="button" class="secondary" id="case-simplify-edit-btn">编辑</button><button type="button" class="secondary" id="case-simplify-btn">重新生成</button></p>`;
 }
 function bindCaseDetailBody(root,c,isPending,rerender){
@@ -65,6 +68,7 @@ function simplifiedEditModal(c,isPending){
   showModal('编辑阅读友好版本',`<label>前置条件<textarea name="SimplifiedPreconditions">${esc(c.SimplifiedPreconditions||'')}</textarea></label><label>执行步骤<textarea name="SimplifiedSteps" required>${esc(c.SimplifiedSteps||'')}</textarea></label><label>预期结果<textarea name="SimplifiedExpected">${esc(c.SimplifiedExpected||'')}</textarea></label>`,x=>{
     const payload={CaseID:c.ID,SimplifiedPreconditions:x.SimplifiedPreconditions,SimplifiedSteps:x.SimplifiedSteps,SimplifiedExpected:x.SimplifiedExpected};
     if(!isPending)payload.VersionID=c.VersionID;
+    if(caseViewFor===simplifyKey(c,isPending))caseViewMode='friendly';
     return (isPending?actReview:act)(isPending?'simplifyPendingCase':'simplifyCase',payload).then(()=>toast('阅读友好版本已保存'));
   });
 }
@@ -104,6 +108,7 @@ async function runSimplify(c,isPending,rerender){
     clearTimeout(abortTimer);
     const payload={CaseID:c.ID,SimplifiedPreconditions:friendly.preconditions||'',SimplifiedSteps:friendly.steps||'',SimplifiedExpected:friendly.expected||''};
     if(!isPending)payload.VersionID=c.VersionID;
+    if(caseViewFor===key)caseViewMode='friendly'; // 刚生成完，直接给用户看结果
     try{await (isPending?actReview:act)(isPending?'simplifyPendingCase':'simplifyCase',payload);toast('已生成阅读友好版本')}
     catch{}
   }finally{
