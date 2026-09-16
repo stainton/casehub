@@ -1425,7 +1425,10 @@ func importPendingCases(s *State, a Action) error {
 		if !ok {
 			folderID = "root"
 		}
-		c := TestCase{ID: pc.ID, VersionID: v.ID, FolderID: folderID, Title: pc.Title, Preconditions: pc.Preconditions, Steps: pc.Steps, Expected: pc.Expected, Priority: pc.Priority, CreatedBy: a.Author, UpdatedBy: a.Author, CreatedAt: t, UpdatedAt: t, Dirty: true}
+		c := TestCase{ID: pc.ID, VersionID: v.ID, FolderID: folderID, Title: pc.Title, Preconditions: pc.Preconditions, Steps: pc.Steps, Expected: pc.Expected, Priority: pc.Priority, CreatedBy: a.Author, UpdatedBy: a.Author, CreatedAt: t, UpdatedAt: t, Dirty: true,
+			SimplifiedPreconditions: pc.SimplifiedPreconditions, SimplifiedSteps: pc.SimplifiedSteps, SimplifiedExpected: pc.SimplifiedExpected,
+			SimplifiedFromPreconditions: pc.SimplifiedFromPreconditions, SimplifiedFromSteps: pc.SimplifiedFromSteps, SimplifiedFromExpected: pc.SimplifiedFromExpected,
+			SimplifiedAt: pc.SimplifiedAt}
 		s.Cases = append(s.Cases, c)
 		after := c
 		s.Histories = append(s.Histories, History{ID: ID(), CaseID: c.ID, VersionID: v.ID, SourceVersionID: v.ID, Action: "create", Author: a.Author, After: &after, CreatedAt: t})
