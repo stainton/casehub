@@ -14,7 +14,7 @@ const assert=require('node:assert/strict');
       const folders=[{VersionID:'a',ID:'root',Name:'根目录'},{VersionID:'a',ID:'sub',ParentID:'root',Name:'登录'},
         {VersionID:'a',ID:'other',ParentID:'root',Name:'不应导出的目录'},{VersionID:'b',ID:'root',Name:'B 根目录'}];
       const special=`中文 🧪 <img src=x onerror=alert(1)> & "单引号'"`;
-      const cases=[{VersionID:'a',ID:'1',FolderID:'sub',Title:special,Priority:'P0',Preconditions:'账号已创建',Steps:'1. 登录\n2. 退出',Expected:'首页\n登录页'},
+      const cases=[{VersionID:'a',ID:'1',FolderID:'sub',Title:special,Priority:'P0',Preconditions:'账号已创建',Steps:'1. 登录\n2. 退出',Expected:'首页\n登录页',Description:'评审描述不应导出'},
         {VersionID:'a',ID:'2',FolderID:'other',Title:'未选择用例'},{VersionID:'b',ID:'1',FolderID:'root',Title:'B 用例'}];
       const out=buildFeishuMindmap(versions,folders,cases,[{versionID:'a',ids:['1']},{versionID:'b',ids:['1']}]);
       const dom=new DOMParser().parseFromString(out.html,'text/html');
@@ -31,7 +31,8 @@ const assert=require('node:assert/strict');
     assert.equal(new Set(fixture.nodes.map(n=>n.id)).size,fixture.nodes.length);
     assert.ok(fixture.nodes.some(n=>n.text[0].text===`TC：${fixture.special}`));
     assert.ok(fixture.nodes.some(n=>n.text[0].text==='1. 登录\n2. 退出'));
-    assert.doesNotMatch(fixture.out.text,/未选择用例|不应导出的目录/);
+    assert.doesNotMatch(fixture.out.text,/未选择用例|不应导出的目录|评审描述不应导出/);
+    assert.doesNotMatch(fixture.out.html,/评审描述不应导出/);
     assert.equal(fixture.hasImage,false);
     assert.equal(fixture.folder.count,1);
     assert.equal(fixture.empty.count,0);
