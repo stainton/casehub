@@ -662,8 +662,16 @@ async function handleAiSuccess(doc,job){
     if(aiHandlingJobId===job.id)aiHandlingJobId=null;
   }
 }
+// planner 给出的未验证/受限范围是 {risk, summary}（已按风险高→低排序）；更早保存的结果是纯文本，照原样显示在最后。
+const AI_RISKS={high:'高',medium:'中',low:'低'};
+function aiLimitationsHTML(list){
+  const items=(list||[]).map((l,i)=>typeof l==='string'?{risk:'',summary:l,i}:{...l,i});
+  const rank=r=>r in AI_RISKS?Object.keys(AI_RISKS).indexOf(r):3;
+  items.sort((a,b)=>rank(a.risk)-rank(b.risk)||a.i-b.i);
+  return `<ul class="ai-limitations">${items.map(l=>`<li>${l.risk in AI_RISKS?`<span class="risk-tag risk-${l.risk}">${AI_RISKS[l.risk]}</span>`:''}<span>${esc(l.summary)}</span></li>`).join('')}</ul>`;
+}
 function renderAiResult(doc,summary){
-  $('#ai-drawer-body').innerHTML=`<div class="card meta-grid"><span>已导入用例 <b>${summary.count}</b></span></div>${summary.limitations?.length?`<div class="card"><h3>未验证/受限范围</h3><ul>${summary.limitations.map(l=>`<li>${esc(l)}</li>`).join('')}</ul></div>`:''}<p class="meta">已自动创建目录并导入到"用例评审"，请前往评审。</p><p class="drawer-actions"><button type="button" class="secondary" id="ai-restart">重新设计</button></p>`;
+  $('#ai-drawer-body').innerHTML=`<div class="card meta-grid"><span>已导入用例 <b>${summary.count}</b></span></div>${summary.limitations?.length?`<div class="card"><h3>未验证/受限范围 <small class="meta">按风险从高到低</small></h3>${aiLimitationsHTML(summary.limitations)}</div>`:''}<p class="meta">已自动创建目录并导入到"用例评审"，请前往评审。</p><p class="drawer-actions"><button type="button" class="secondary" id="ai-restart">重新设计</button></p>`;
   $('#ai-restart').onclick=()=>{localStorage.removeItem(aiResultKey(doc));renderAiForm(doc)};
 }
 // 按用例编号 TC-<REQ>-<MOD>-<CAT>-NNN 归档：用例评审下建 REQ / REQ-MOD / REQ-MOD-CAT 三层文件夹（同名复用），
