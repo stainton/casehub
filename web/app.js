@@ -48,7 +48,8 @@ function caseDetailBodyHTML(c,isPending){
   if(caseViewFor!==key){caseViewFor=key;caseViewMode=fresh?'friendly':'raw'}
   const toggle=caseDescriptionHTML(c,isPending)+caseViewToggleHTML();
   const prompt=fresh?'':`<div class="case-simplify-prompt"><p class="meta">${stale?'用例内容已更改，之前生成的阅读友好版本已过时。':'还没有阅读友好版本 —— 这份用例的步骤/预期结果是给 Planner/生成器看的原始内容，信息密度较高，供人阅读负担较大。'}</p><div class="case-simplify-actions"><button type="button" id="case-simplify-btn">${has?'重新生成阅读友好版本':'生成阅读友好版本'}</button>${has?'<button type="button" class="secondary" id="case-simplify-edit-btn">编辑旧版本</button>':''}</div></div>`;
-  if(caseViewMode!=='friendly')return `${toggle}${caseFieldLinesHTML(c.Preconditions,c.Steps,c.Expected)}${prompt}`;
+  // 原始内容页只展示原始内容；生成/过时提示只在"阅读友好版"页出现。
+  if(caseViewMode!=='friendly')return `${toggle}${caseFieldLinesHTML(c.Preconditions,c.Steps,c.Expected)}`;
   if(!fresh)return `${toggle}${prompt}`;
   return `${toggle}${caseFieldLinesHTML(c.SimplifiedPreconditions,c.SimplifiedSteps,c.SimplifiedExpected)}<p class="meta case-simplify-meta">阅读友好版 · 更新于 ${fmt(c.SimplifiedAt)} <button type="button" class="secondary" id="case-simplify-edit-btn">编辑</button><button type="button" class="secondary" id="case-simplify-btn">重新生成</button></p>`;
 }
