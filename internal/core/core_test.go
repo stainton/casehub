@@ -872,3 +872,71 @@ func TestScopedImportLeavesRestOfReviewAreaAlone(t *testing.T) {
 		t.Fatal("scoped import did not land the case in the target version")
 	}
 }
+
+func TestReqDocCodeAndStructuredPendingCaseIDs(t *testing.T) {
+	svc := core.NewService(store.NewMemory())
+	state := apply(t, svc, core.Action{Type: "setReqDocCode", DocID: "REQ-0001", Code: "LOGIN", Author: "pat"})
+	if d := state.ReqDocs[0]; d.Code != "LOGIN" {
+		t.Fatalf("code was not stored: %+v", d)
+	}
+	for _, bad := range []string{"login", "LO-GIN", "L", "LOGINLOGINLOGIN", "1LOGIN"} {
+		if _, err := svc.Apply(context.Background(), core.Action{Type: "setReqDocCode", DocID: "REQ-0001", Code: bad}); err == nil {
+			t.Fatalf("invalid code %q must be rejected", bad)
+		}
+	}
+	state = apply(t, svc, core.Action{Type: "createReqDoc", FolderID: "req-root", Title: "另一个需求", Author: "pat"})
+	var other string
+	for _, d := range state.ReqDocs {
+		if d.Title == "另一个需求" {
+			other = d.ID
+		}
+	}
+	if _, err := svc.Apply(context.Background(), core.Action{Type: "setReqDocCode", DocID: other, Code: "LOGIN"}); err == nil {
+		t.Fatal("a code already used by another requirement must be rejected")
+	}
+
+	folder := func(parent, name string) string {
+		st := apply(t, svc, core.Action{Type: "createPendingFolder", ParentID: parent, Name: name, Author: "pat"})
+		for _, f := range st.PendingFolders {
+			if f.ParentID == parent && f.Name == name {
+				return f.ID
+			}
+		}
+		t.Fatalf("folder %s not created", name)
+		return ""
+	}
+	req := folder("pending-root", "LOGIN")
+	mod := folder(req, "LOGIN-AUTH")
+	fn, sec := folder(mod, "LOGIN-AUTH-FUNC"), folder(mod, "LOGIN-AUTH-SEC")
+	create := func(folderID, title string) string {
+		st := apply(t, svc, core.Action{Type: "createPendingCase", FolderID: folderID, Title: title, Steps: "1. x", Author: "pat"})
+		for _, c := range st.PendingCases {
+			if c.Title == title {
+				return c.ID
+			}
+		}
+		t.Fatalf("case %s not created", title)
+		return ""
+	}
+	got := []string{create(fn, "a"), create(fn, "b"), create(sec, "c"), create(fn, "d")}
+	want := []string{"TC-LOGIN-AUTH-FUNC-001", "TC-LOGIN-AUTH-FUNC-002", "TC-LOGIN-AUTH-SEC-001", "TC-LOGIN-AUTH-FUNC-003"}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("case IDs = %v, want %v", got, want)
+		}
+	}
+	if id := create(mod, "not a category folder"); !strings.HasPrefix(id, "CASE-") {
+		t.Fatalf("a case outside a REQ-MOD-CAT folder keeps a random ID, got %s", id)
+	}
+
+	// numbering continues past IDs already imported into a version, even after they leave the review area
+	apply(t, svc, core.Action{Type: "reviewPendingCase", CaseID: got[0], Review: "passed", Author: "bob"})
+	branch := branchID(t, apply(t, svc, core.Action{Type: "createVersion", Name: "迭代", Author: "bob"}), "迭代")
+	apply(t, svc, core.Action{Type: "importPendingCases", VersionID: branch, CaseIDs: []string{got[0]}, Author: "bob"})
+	apply(t, svc, core.Action{Type: "deletePendingCase", CaseID: got[1], Author: "bob"})
+	apply(t, svc, core.Action{Type: "deletePendingCase", CaseID: got[3], Author: "bob"})
+	if id := create(fn, "e"); id != "TC-LOGIN-AUTH-FUNC-002" {
+		// 001 lives on in the version; 002/003 were deleted outright, so 002 is the next free number
+		t.Fatalf("expected TC-LOGIN-AUTH-FUNC-002 after deletions, got %s", id)
+	}
+}

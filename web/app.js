@@ -375,7 +375,7 @@ function renderReqFocus(){
   const outRefs=reqRefs(doc.Content).map(id=>state.reqDocs.find(x=>x.ID===id)).filter(Boolean);
   const inRefs=reqBacklinks(doc.ID);
   const relHTML=(outRefs.length||inRefs.length)?`<div class="card req-rel"><h4>关联需求</h4><div class="req-rel-list">${outRefs.map(r=>`<button type="button" class="req-rel-chip" data-req-doc="${esc(r.ID)}">→ ${esc(r.ID)} ${esc(r.Title)}</button>`).join('')}${inRefs.map(r=>`<button type="button" class="req-rel-chip" data-req-doc="${esc(r.ID)}">← ${esc(r.ID)} ${esc(r.Title)}</button>`).join('')}</div></div>`:'';
-  d.innerHTML=`<div class="detail-head"><div><div class="eyebrow">${esc(doc.ID)}</div><h1>${esc(doc.Title)}</h1></div><div class="detail-actions"><button type="button" id="req-link-btn" class="secondary">🔗 引用需求</button><button type="button" id="req-ai-design" class="secondary${isAiActive(doc)?' ai-running':''}">${isAiActive(doc)?'AI 设计中':'AI 设计'}</button><button type="button" id="save-req-doc">保存</button></div></div><div class="card meta-grid"><span>创建者 <b>${esc(doc.CreatedBy)}</b></span><span>创建时间 <b>${fmt(doc.CreatedAt)}</b></span><span>更新者 <b>${esc(doc.UpdatedBy)}</b></span><span>更新时间 <b>${fmt(doc.UpdatedAt)}</b></span></div>${relHTML}<div class="card"><div id="req-editor"></div></div>`;
+  d.innerHTML=`<div class="detail-head"><div><div class="eyebrow">${esc(doc.ID)}</div><h1>${esc(doc.Title)}</h1></div><div class="detail-actions"><button type="button" id="req-link-btn" class="secondary">🔗 引用需求</button><button type="button" id="req-ai-design" class="secondary${isAiActive(doc)?' ai-running':''}">${isAiActive(doc)?'AI 设计中':'AI 设计'}</button><button type="button" id="save-req-doc">保存</button></div></div><div class="card meta-grid"><span>需求缩写 <b id="req-doc-code">${esc(doc.Code||'未设置')}</b></span><span>创建者 <b>${esc(doc.CreatedBy)}</b></span><span>创建时间 <b>${fmt(doc.CreatedAt)}</b></span><span>更新者 <b>${esc(doc.UpdatedBy)}</b></span><span>更新时间 <b>${fmt(doc.UpdatedAt)}</b></span></div>${relHTML}<div class="card"><div id="req-editor"></div></div>`;
   reqEditor?.destroy();
   reqEditor=new toastui.Editor({el:$('#req-editor'),height:'520px',initialEditType:'wysiwyg',previewStyle:'tab',initialValue:doc.Content||'',language:'zh-CN',theme:document.documentElement.classList.contains('dark')?'dark':'light',usageStatistics:false});
   $('#save-req-doc').onclick=()=>saveReqDoc(doc).catch(()=>{});
@@ -471,13 +471,17 @@ async function checkAiJob(doc){
 // "建议覆盖用例数量"两步流程：开始分析 → 先调 /api/planner/estimate 评估并预填 → 用户可修改 →
 // 确认后才提交完整 planner 任务（caseCount=该值，planner 输出 [caseCount-5, caseCount] 条用例）。
 // 评估状态按需求保存在内存里（含已填表单），关闭抽屉再打开不会丢失评估中/评估结果。
-const aiEstimates=new Map(); // docID -> {status:'running'|'done', startedAt, count, rationale, notice, values}
+// 同一步里还会建议"需求缩写"（用例编号 TC-<需求缩写>-<模块>-<类别>-NNN 的第二段），人工确认后保存到需求文档上，下次沿用。
+const aiEstimates=new Map(); // docID -> {status:'running'|'done', startedAt, count, code, rationale, notice, values}
+const REQ_CODE_RE=/^[A-Z][A-Z0-9]{1,11}$/;
+const liveReqDoc=doc=>state.reqDocs.find(x=>x.ID===doc.ID)||doc;
 const AI_DEFAULT_CASE_COUNT=10, AI_MAX_CASE_COUNT=500, AI_CASE_COUNT_SLACK=5;
 const AI_ESTIMATE_CLIENT_TIMEOUT_MS=135000; // 服务端评估上限 120 秒，额外留出代理/网络余量
 const aiCaseRange=n=>`${Math.max(1,n-AI_CASE_COUNT_SLACK)}–${n}`;
-function aiFormValues(form){const x=Object.fromEntries(new FormData(form));delete x.caseCount;return x}
-function aiRequirementPayload(doc,values){
-  return {requirements:[{id:doc.ID,title:doc.Title,content:doc.Content||''}],instructions:[values.instructions||'',reqRefContext(doc)].filter(Boolean).join('\n\n')};
+function aiFormValues(form){const x=Object.fromEntries(new FormData(form));delete x.caseCount;delete x.reqCode;return x}
+function aiRequirementPayload(doc,values,code){
+  const d=liveReqDoc(doc);code=code||d.Code||'';
+  return {requirements:[{id:d.ID,title:d.Title,content:d.Content||'',...(code?{code}:{})}],instructions:[values.instructions||'',reqRefContext(doc)].filter(Boolean).join('\n\n')};
 }
 function aiEstimateStatusText(est){
   const seconds=Math.floor((Date.now()-est.startedAt)/1000);
@@ -494,11 +498,15 @@ function renderAiForm(doc,notice){
   const countField=done
     ?`<input name="caseCount" type="number" min="1" max="${AI_MAX_CASE_COUNT}" step="1" required value="${est.count}">`
     :`<input name="caseCount" type="number" disabled placeholder="点击“开始分析”后由 AI 评估">`;
+  const savedCode=liveReqDoc(doc).Code||'';
+  const codeField=done
+    ?`<input name="reqCode" required maxlength="12" pattern="[A-Z][A-Z0-9]{1,11}" autocomplete="off" spellcheck="false" placeholder="如 LOGIN" value="${esc(est.code||'')}">`
+    :`<input name="reqCode" disabled placeholder="${savedCode?esc(savedCode):'点击“开始分析”后由 AI 建议'}">`;
   const estimateInfo=running?`<p class="meta" id="ai-estimate-status">${aiEstimateStatusText(est)}</p>`
     :done?`${est.notice?`<p class="meta">${esc(est.notice)}</p>`:''}${est.rationale?`<p class="meta ai-estimate-rationale">${esc(est.rationale)}</p>`:''}<p class="meta" id="ai-case-range">AI 将输出 ${aiCaseRange(est.count)} 条用例</p>`:'';
   const actions=done?`<button type="button" class="secondary" id="ai-reestimate">重新评估</button><button type="submit">确认并开始设计</button>`
     :`<button type="submit"${running?' disabled':''}>${running?'评估中…':'开始分析'}</button>`;
-  $('#ai-drawer-body').innerHTML=`${notice?`<p class="meta">${esc(notice)}</p>`:''}<form id="ai-form" autocomplete="off"><label>被测系统 URL<input name="baseUrl" required placeholder="https://test.example.com/login" autocomplete="off" value="${esc(v.baseUrl||'')}"></label><label>补充说明（可选）<textarea name="instructions" placeholder="覆盖范围、登录方式等">${esc(v.instructions||'')}</textarea></label><label>测试账号 · 用户名（可选）<input name="testAccount" autocomplete="off" value="${esc(v.testAccount||'')}"></label><label>测试账号 · 密码（可选）<input name="testSecret" type="text" class="fake-password" autocomplete="off" spellcheck="false" value="${esc(v.testSecret||'')}"></label><label>建议覆盖用例数量${countField}</label>${estimateInfo}<p class="drawer-actions">${actions}</p></form>`;
+  $('#ai-drawer-body').innerHTML=`${notice?`<p class="meta">${esc(notice)}</p>`:''}<form id="ai-form" autocomplete="off"><label>被测系统 URL<input name="baseUrl" required placeholder="https://test.example.com/login" autocomplete="off" value="${esc(v.baseUrl||'')}"></label><label>补充说明（可选）<textarea name="instructions" placeholder="覆盖范围、登录方式等">${esc(v.instructions||'')}</textarea></label><label>测试账号 · 用户名（可选）<input name="testAccount" autocomplete="off" value="${esc(v.testAccount||'')}"></label><label>测试账号 · 密码（可选）<input name="testSecret" type="text" class="fake-password" autocomplete="off" spellcheck="false" value="${esc(v.testSecret||'')}"></label><label>建议覆盖用例数量${countField}</label><label>需求缩写（用例编号 TC-<b id="ai-code-preview">${esc((done&&est.code)||savedCode||'XXX')}</b>-模块-类别-001）${codeField}</label>${estimateInfo}<p class="drawer-actions">${actions}</p></form>`;
   const form=$('#ai-form');
   // 评估期间/评估后继续编辑的表单内容同步进状态，重新渲染（关闭再打开抽屉）时保留。
   form.oninput=()=>{
@@ -507,6 +515,12 @@ function renderAiForm(doc,notice){
     const n=Number(form.elements.caseCount.value),range=$('#ai-case-range');
     if(range)range.textContent=Number.isInteger(n)&&n>=1&&n<=AI_MAX_CASE_COUNT?`AI 将输出 ${aiCaseRange(n)} 条用例`:`请输入 1–${AI_MAX_CASE_COUNT} 的整数`;
     if(cur&&cur.status==='done'&&Number.isInteger(n))cur.count=n;
+    const codeInput=form.elements.reqCode;
+    if(cur&&cur.status==='done'){
+      const up=codeInput.value.toUpperCase().replace(/[^A-Z0-9]/g,'');
+      if(up!==codeInput.value)codeInput.value=up;
+      cur.code=up;$('#ai-code-preview').textContent=up||'XXX';
+    }
   };
   if(done)$('#ai-reestimate').onclick=()=>runAiEstimate(doc,aiFormValues(form));
   form.onsubmit=async e=>{
@@ -515,10 +529,17 @@ function renderAiForm(doc,notice){
     if(!done)return runAiEstimate(doc,values);
     const caseCount=Number(form.elements.caseCount.value);
     if(!Number.isInteger(caseCount)||caseCount<1||caseCount>AI_MAX_CASE_COUNT){toast(`建议覆盖用例数量需为 1–${AI_MAX_CASE_COUNT} 的整数`,true);return}
-    const {requirements,instructions}=aiRequirementPayload(doc,values);
+    const code=form.elements.reqCode.value.trim();
+    if(!REQ_CODE_RE.test(code)){toast('需求缩写需为 2–12 位大写英文字母或数字，以字母开头，不含 -',true);return}
+    const btn=form.querySelector('button[type="submit"]');btn.disabled=true;
+    if(code!==(liveReqDoc(doc).Code||'')){
+      try{await act('setReqDocCode',{DocID:doc.ID,Code:code})}catch{btn.disabled=false;return} // act 已提示原因（如缩写重复）
+      // 只更新详情页上的缩写标签：整页 renderReqFocus 会重建编辑器，丢掉未保存的需求正文修改。
+      if(reqFocus?.type==='doc'&&reqFocus.id===doc.ID&&$('#req-doc-code'))$('#req-doc-code').textContent=code;
+    }
+    const {requirements,instructions}=aiRequirementPayload(doc,values,code);
     const payload={requirements,target:{baseUrl:values.baseUrl},context:{instructions},caseCount};
     if(values.testAccount||values.testSecret)payload.context.testData={username:values.testAccount||'',password:values.testSecret||''};
-    const btn=form.querySelector('button[type="submit"]');btn.disabled=true;
     try{
       const job=await plannerRequest('/api/planner/jobs',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
       aiEstimates.delete(doc.ID);
@@ -539,11 +560,11 @@ async function runAiEstimate(doc,values){
     const {requirements,instructions}=aiRequirementPayload(doc,values);
     const r=await plannerRequest('/api/planner/estimate',{method:'POST',headers:{'Content-Type':'application/json'},signal:controller.signal,
       body:JSON.stringify({requirements,context:{instructions}})});
-    next={count:r.suggestedCaseCount,rationale:r.rationale||''};
+    next={count:r.suggestedCaseCount,code:r.requirementCodes?.find(x=>x.requirement===doc.ID)?.code||liveReqDoc(doc).Code||'',rationale:r.rationale||''};
   }catch(e){
     const reason=controller.signal.aborted?'评估超时':`评估失败：${e.message}`;
     toast(reason,true);
-    next={count:AI_DEFAULT_CASE_COUNT,rationale:'',notice:`${reason}，已填入默认值 ${AI_DEFAULT_CASE_COUNT}，可修改后确认。`};
+    next={count:AI_DEFAULT_CASE_COUNT,code:liveReqDoc(doc).Code||'',rationale:'',notice:`${reason}，已填入默认值 ${AI_DEFAULT_CASE_COUNT}，可修改后确认。`};
   }finally{clearTimeout(abortTimer);clearInterval(ticker)}
   if(aiEstimates.get(doc.ID)!==est)return; // superseded (e.g. a job was started elsewhere)
   aiEstimates.set(doc.ID,{status:'done',...next,values:est.values});
@@ -645,16 +666,28 @@ function renderAiResult(doc,summary){
   $('#ai-drawer-body').innerHTML=`<div class="card meta-grid"><span>已导入用例 <b>${summary.count}</b></span></div>${summary.limitations?.length?`<div class="card"><h3>未验证/受限范围</h3><ul>${summary.limitations.map(l=>`<li>${esc(l)}</li>`).join('')}</ul></div>`:''}<p class="meta">已自动创建目录并导入到"用例评审"，请前往评审。</p><p class="drawer-actions"><button type="button" class="secondary" id="ai-restart">重新设计</button></p>`;
   $('#ai-restart').onclick=()=>{localStorage.removeItem(aiResultKey(doc));renderAiForm(doc)};
 }
+// 按用例编号 TC-<REQ>-<MOD>-<CAT>-NNN 归档：用例评审下建 REQ / REQ-MOD / REQ-MOD-CAT 三层文件夹（同名复用），
+// 用例建在最里层，由 CaseHub 按文件夹名续编号（planner 结果里的序号只在单次结果内递增，可能与已有用例重复）。
+// 编号不符合该格式的旧结果退回放在需求文件夹下（随机编号）。
+const AI_CASE_ID_RE=/^TC-([A-Z][A-Z0-9]{1,11})-([A-Z][A-Z0-9]{1,11})-(FUNC|REL|PERF|SEC|COMPAT|UX)-\d{3,}$/;
+async function ensurePendingFolder(parentID,name){
+  const found=state.pendingFolders.find(f=>f.ParentID===parentID&&f.Name===name);
+  if(found)return found.ID;
+  const before=new Set(state.pendingFolders.map(f=>f.ID));
+  const out=await act('createPendingFolder',{ParentID:parentID,Name:name});
+  return out.state.pendingFolders.find(f=>!before.has(f.ID)).ID;
+}
 async function importAiResult(doc,result){
-  const folderName=`${doc.ID} · ${doc.Title}`;
-  let folder=state.pendingFolders.find(f=>f.ParentID==='pending-root'&&f.Name===folderName);
-  if(!folder){
-    const before=new Set(state.pendingFolders.map(f=>f.ID));
-    const out=await act('createPendingFolder',{ParentID:'pending-root',Name:folderName});
-    folder=out.state.pendingFolders.find(f=>!before.has(f.ID));
+  const fallbackReq=liveReqDoc(doc).Code||doc.ID;
+  for(const c of result.cases){
+    const m=AI_CASE_ID_RE.exec(c.case_id||'');
+    let folderID=await ensurePendingFolder('pending-root',m?m[1]:fallbackReq);
+    if(m){
+      folderID=await ensurePendingFolder(folderID,`${m[1]}-${m[2]}`);
+      folderID=await ensurePendingFolder(folderID,`${m[1]}-${m[2]}-${m[3]}`);
+    }
+    await act('createPendingCase',{FolderID:folderID,Title:c.name,Priority:c.priority,Preconditions:c.precondition,Steps:c.steps,Expected:c.expects});
   }
-  for(const c of result.cases)
-    await act('createPendingCase',{FolderID:folder.ID,Title:c.name,Priority:c.priority,Preconditions:c.precondition,Steps:c.steps,Expected:c.expects});
 }
 
 // ---- Pending case review (用例评审) ----
