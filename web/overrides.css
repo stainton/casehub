@@ -28,6 +28,11 @@ h3 small.meta{font-size:12px;font-weight:400;margin-left:6px}
 .risk-tag{flex:none;font-size:11px;font-weight:600;padding:1px 6px;border-radius:10px}
 .risk-high{background:#fee2e2;color:#b91c1c}.risk-medium{background:#fef3c7;color:#92400e}.risk-low{background:var(--surface2);color:var(--muted)}
 .dark .risk-high{background:#7f1d1d55;color:#fca5a5}.dark .risk-medium{background:#78350f55;color:#fcd34d}
+.case-edit-form{margin-top:16px}
+.case-edit-form label{margin:10px 0}
+.case-description.case-edit-form{display:block}
+.case-edit-form.case-lines{gap:0}
+.case-edit-actions{margin:8px 0 0}
 .case-description button{padding:4px 10px;font-size:12px;flex:none}
 .case-simplify-actions{display:flex;gap:8px;flex-wrap:wrap}
 .case-simplify-meta{margin-top:10px;display:flex;align-items:center;flex-wrap:wrap;gap:10px;font-size:12px}

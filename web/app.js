@@ -35,20 +35,62 @@ function caseFieldLinesHTML(preconditions,steps,expected){return `<div class="ca
 // 用例描述不由 AI 填写：评审发起人读完用例后人工总结，其他评审人先看描述再看细节，负担更小。
 // 与阅读友好版/原始内容切换无关，两种视图下都显示在最前面。
 function caseDescriptionHTML(c,isPending){
+  const edit=caseEditFor(c,isPending);
+  if(edit?.mode==='describe')return `<div class="case-description case-edit-form"><p class="meta">阅读用例后写一段总结（测试目标、覆盖范围、需要评审人特别注意的地方），保存不会重置评审状态。</p>${caseEditArea('Description','用例描述',edit.draft.Description)}${caseEditActionsHTML()}</div>`;
   const empty=isPending?'尚未填写 —— 由评审发起人阅读用例后总结，方便其他评审人快速了解这条用例':'未填写';
   return `<div class="case-description"><div class="field-line"><h4>用例描述</h4>${c.Description?`<p>${esc(c.Description)}</p>`:`<p class="meta">${empty}</p>`}</div>${isPending?`<button type="button" class="secondary" id="case-describe-btn">${c.Description?'编辑描述':'填写描述'}</button>`:''}</div>`;
 }
-function describePendingCaseModal(c){
-  showModal('填写用例描述',`<p class="meta">阅读用例后写一段总结（测试目标、覆盖范围、需要评审人特别注意的地方），保存不会重置评审状态。</p><label>用例描述<textarea name="Description" rows="6">${esc(c.Description||'')}</textarea></label>`,
-    x=>actReview('describePendingCase',{CaseID:c.ID,Description:x.Description}).then(()=>toast('用例描述已保存')));
+// ---- 页面内编辑（不弹窗）------------------------------------------------------
+// mode: 'case' 整条用例 / 'describe' 用例描述（仅评审区）/ 'friendly' 阅读友好版。
+// 用例管理和用例评审两个详情面板各自最多一条用例处于编辑态；草稿存在这里，其他操作触发重渲染时输入不丢，
+// 在该面板打开另一条用例时丢弃。
+const caseEdits={cases:null,review:null};
+const casePane=isPending=>isPending?'review':'cases';
+function caseEditFor(c,isPending){const e=caseEdits[casePane(isPending)];return e&&e.key===simplifyKey(c,isPending)?e:null}
+function startCaseEdit(c,isPending,mode){
+  const draft=mode==='case'?{Title:c.Title||'',Priority:c.Priority||'P0',Description:c.Description||'',Preconditions:c.Preconditions||'',Steps:c.Steps||'',Expected:c.Expected||''}
+    :mode==='describe'?{Description:c.Description||''}
+    :{SimplifiedPreconditions:c.SimplifiedPreconditions||'',SimplifiedSteps:c.SimplifiedSteps||'',SimplifiedExpected:c.SimplifiedExpected||''};
+  caseEdits[casePane(isPending)]={key:simplifyKey(c,isPending),mode,draft};
+  if(mode==='friendly'){caseViewFor=simplifyKey(c,isPending);caseViewMode='friendly'}
+}
+function caseEditArea(field,label,value,required=false){
+  const rows=Math.min(14,Math.max(3,String(value||'').split('\n').length+1));
+  return `<label>${label}<textarea data-edit-field="${field}" rows="${rows}"${required?' required':''}>${esc(value)}</textarea></label>`;
+}
+function caseEditActionsHTML(){return `<p class="drawer-actions case-edit-actions"><button type="button" class="secondary" data-edit-cancel>取消</button><button type="button" data-edit-save>保存</button></p>`}
+function caseFullEditHTML(c,isPending,d){
+  return `<div class="case-edit-form">${isPending?'<p class="meta">保存后评审状态会重置为待评审。</p>':''}<label>标题<input data-edit-field="Title" required value="${esc(d.Title)}"></label><label>优先级<select data-edit-field="Priority">${['P0','P1','P2','P3'].map(x=>`<option ${d.Priority===x?'selected':''}>${x}</option>`).join('')}</select></label>${caseEditArea('Description','用例描述（评审时人工填写，可选）',d.Description)}${caseEditArea('Preconditions','前置条件',d.Preconditions)}${caseEditArea('Steps','执行步骤',d.Steps)}${caseEditArea('Expected','预期结果',d.Expected)}${caseEditActionsHTML()}</div>`;
+}
+async function saveCaseEdit(c,isPending,rerender,btn){
+  const pane=casePane(isPending),edit=caseEdits[pane],d=edit.draft;
+  let type,payload,done;
+  if(edit.mode==='case'){
+    if(!d.Title.trim())return toast('用例标题不能为空',true);
+    type=isPending?'editPendingCase':'editCase';payload={...d,CaseID:c.ID,FolderID:c.FolderID};done='用例已保存';
+  }else if(edit.mode==='describe'){
+    type='describePendingCase';payload={CaseID:c.ID,Description:d.Description};done='用例描述已保存';
+  }else{
+    if(!d.SimplifiedSteps.trim())return toast('阅读友好版步骤不能为空',true);
+    type=isPending?'simplifyPendingCase':'simplifyCase';payload={CaseID:c.ID,...d};done='阅读友好版本已保存';
+  }
+  if(!isPending&&type!=='describePendingCase')payload.VersionID=c.VersionID;
+  btn.disabled=true;
+  try{await (isPending?actReview:act)(type,payload)}catch{btn.disabled=false;return} // act 已提示失败原因
+  if(caseEdits[pane]===edit)caseEdits[pane]=null;
+  toast(done);rerender();
 }
 function caseDetailBodyHTML(c,isPending){
   const has=caseHasSimplified(c),stale=has&&caseSimplifiedStale(c),fresh=has&&!stale;
   // 每打开一条用例重新选默认视图：有（未过时的）阅读友好版优先展示，否则展示 Planner 原始内容。
   // 同一条用例内用户手动切换的视图在重渲染时保持不变。
-  const key=simplifyKey(c,isPending);
+  const key=simplifyKey(c,isPending),pane=casePane(isPending);
+  if(caseEdits[pane]&&caseEdits[pane].key!==key)caseEdits[pane]=null; // 打开了另一条用例：丢弃未保存的编辑
   if(caseViewFor!==key){caseViewFor=key;caseViewMode=fresh?'friendly':'raw'}
+  const edit=caseEdits[pane];
+  if(edit?.mode==='case')return caseFullEditHTML(c,isPending,edit.draft);
   const toggle=caseDescriptionHTML(c,isPending)+caseViewToggleHTML();
+  if(edit?.mode==='friendly')return `${toggle}<div class="case-edit-form case-lines">${caseEditArea('SimplifiedPreconditions','前置条件',edit.draft.SimplifiedPreconditions)}${caseEditArea('SimplifiedSteps','执行步骤',edit.draft.SimplifiedSteps,true)}${caseEditArea('SimplifiedExpected','预期结果',edit.draft.SimplifiedExpected)}${caseEditActionsHTML()}</div>`;
   const prompt=fresh?'':`<div class="case-simplify-prompt"><p class="meta">${stale?'用例内容已更改，之前生成的阅读友好版本已过时。':'还没有阅读友好版本 —— 这份用例的步骤/预期结果是给 Planner/生成器看的原始内容，信息密度较高，供人阅读负担较大。'}</p><div class="case-simplify-actions"><button type="button" id="case-simplify-btn">${has?'重新生成阅读友好版本':'生成阅读友好版本'}</button>${has?'<button type="button" class="secondary" id="case-simplify-edit-btn">编辑旧版本</button>':''}</div></div>`;
   // 原始内容页只展示原始内容；生成/过时提示只在"阅读友好版"页出现。
   if(caseViewMode!=='friendly')return `${toggle}${caseFieldLinesHTML(c.Preconditions,c.Steps,c.Expected)}`;
@@ -56,25 +98,26 @@ function caseDetailBodyHTML(c,isPending){
   return `${toggle}${caseFieldLinesHTML(c.SimplifiedPreconditions,c.SimplifiedSteps,c.SimplifiedExpected)}<p class="meta case-simplify-meta">阅读友好版 · 更新于 ${fmt(c.SimplifiedAt)} <button type="button" class="secondary" id="case-simplify-edit-btn">编辑</button><button type="button" class="secondary" id="case-simplify-btn">重新生成</button></p>`;
 }
 function bindCaseDetailBody(root,c,isPending,rerender){
-  root.querySelectorAll('[data-case-view]').forEach(b=>b.onclick=()=>{caseViewMode=b.dataset.caseView;rerender()});
+  const edit=caseEditFor(c,isPending);
+  root.querySelectorAll('[data-case-view]').forEach(b=>b.onclick=()=>{
+    if(edit?.mode==='friendly'&&b.dataset.caseView!=='friendly')caseEdits[casePane(isPending)]=null;
+    caseViewMode=b.dataset.caseView;rerender()});
+  const headerEdit=root.querySelector('#edit-case,#edit-review-case');
+  if(headerEdit){headerEdit.disabled=edit?.mode==='case';headerEdit.onclick=()=>{startCaseEdit(c,isPending,'case');rerender()}}
+  root.querySelectorAll('[data-edit-field]').forEach(el=>el.oninput=el.onchange=()=>{if(edit)edit.draft[el.dataset.editField]=el.value});
+  root.querySelector('[data-edit-cancel]')?.addEventListener('click',()=>{caseEdits[casePane(isPending)]=null;rerender()});
+  const saveBtn=root.querySelector('[data-edit-save]');
+  if(saveBtn)saveBtn.onclick=()=>saveCaseEdit(c,isPending,rerender,saveBtn);
+  if(edit&&!edit.focused){edit.focused=true;root.querySelector('.case-edit-form [data-edit-field]')?.focus({preventScroll:true})} // 只在刚进入编辑时聚焦，重渲染不抢焦点
   const describeBtn=root.querySelector('#case-describe-btn');
-  if(describeBtn)describeBtn.onclick=()=>describePendingCaseModal(c);
+  if(describeBtn)describeBtn.onclick=()=>{startCaseEdit(c,isPending,'describe');rerender()};
   const key=simplifyKey(c,isPending),btn=root.querySelector('#case-simplify-btn'),editBtn=root.querySelector('#case-simplify-edit-btn');
   if(btn){btn.dataset.simplifyKey=key;btn.onclick=()=>runSimplify(c,isPending,rerender)}
-  if(editBtn){editBtn.dataset.simplifyKey=key;editBtn.onclick=()=>simplifiedEditModal(c,isPending)}
+  if(editBtn){editBtn.dataset.simplifyKey=key;editBtn.onclick=()=>{if(simplifyInFlight.has(key))return;startCaseEdit(c,isPending,'friendly');rerender()}}
   syncSimplifyButtons(key);
 }
-// 人工修改阅读友好版：复用 simplifyCase/simplifyPendingCase 持久化（服务端同时把
-// SimplifiedFrom* 更新为用例当前内容，所以编辑"已过时"的旧版本保存后即不再过时）。
-function simplifiedEditModal(c,isPending){
-  if(simplifyInFlight.has(simplifyKey(c,isPending)))return;
-  showModal('编辑阅读友好版本',`<label>前置条件<textarea name="SimplifiedPreconditions">${esc(c.SimplifiedPreconditions||'')}</textarea></label><label>执行步骤<textarea name="SimplifiedSteps" required>${esc(c.SimplifiedSteps||'')}</textarea></label><label>预期结果<textarea name="SimplifiedExpected">${esc(c.SimplifiedExpected||'')}</textarea></label>`,x=>{
-    const payload={CaseID:c.ID,SimplifiedPreconditions:x.SimplifiedPreconditions,SimplifiedSteps:x.SimplifiedSteps,SimplifiedExpected:x.SimplifiedExpected};
-    if(!isPending)payload.VersionID=c.VersionID;
-    if(caseViewFor===simplifyKey(c,isPending))caseViewMode='friendly';
-    return (isPending?actReview:act)(isPending?'simplifyPendingCase':'simplifyCase',payload).then(()=>toast('阅读友好版本已保存'));
-  });
-}
+// 人工修改阅读友好版（页面内编辑，见 saveCaseEdit）复用 simplifyCase/simplifyPendingCase 持久化：服务端同时把
+// SimplifiedFrom* 更新为用例当前内容，所以编辑"已过时"的旧版本保存后即不再过时。
 // 正在生成阅读友好版的用例：key -> 开始时间。忙碌态记在模块级而不是按钮 DOM 上——
 // 生成期间任何重渲染（render()/renderReqFocus()）重新画出的按钮仍是禁用+计时态，
 // 结束或超时前都不能再次点击。按钮也不能用 $('#case-simplify-btn') 取：用例管理
@@ -121,7 +164,7 @@ async function runSimplify(c,isPending,rerender){
   }
 }
 
-function renderFocus(){if(!focus){updateEmptyHint();$('#empty').classList.remove('hidden');$('#detail').classList.add('hidden');return}$('#empty').classList.add('hidden');let d=$('#detail');d.classList.remove('hidden');if(focus.type==='folder'){let f=state.folders.find(x=>x.VersionID===focus.versionID&&x.ID===focus.id);if(!f){focus=null;return renderFocus()}let descendants=descendantFolders(f),count=cases(f.VersionID).filter(c=>c.FolderID===f.ID||descendants.includes(c.FolderID)).length;d.innerHTML=`<div class="detail-head"><div><div class="eyebrow">文件夹 · ${esc(version(f.VersionID).name)}</div><h1>📁 ${esc(f.Name)}</h1></div></div><div class="card meta-grid"><span>用例 <b>${count}</b></span><span>子文件夹 <b>${descendants.length}</b></span><span>创建者 <b>${esc(f.CreatedBy)}</b></span><span>创建时间 <b>${fmt(f.CreatedAt)}</b></span></div>`;return}let c=state.cases.find(x=>x.VersionID===focus.versionID&&x.ID===focus.id);if(!c){focus=null;return renderFocus()}let branch=!version(c.VersionID).mainline,h=state.histories.filter(x=>x.CaseID===c.ID&&x.VersionID===c.VersionID).slice().reverse();d.innerHTML=`<div class="detail-head"><div><div class="eyebrow">${esc(c.ID)} · ${esc(version(c.VersionID).name)} ${c.Dirty?'· 未合并':''}</div><h1>${esc(c.Title)}</h1></div><div class="detail-actions">${branch?'<button id="edit-case" class="secondary">编辑</button>':''}<button id="open-record">测试记录</button></div></div><div class="card case-detail"><div class="meta-grid case-meta"><span>优先级 <b>${esc(c.Priority||'未设置')}</b></span><span>当前结果 <b>${resultName(c.Result)}</b></span><span>更新者 <b>${esc(c.UpdatedBy)}</b></span><span>更新时间 <b>${fmt(c.UpdatedAt)}</b></span><span>基线版本 <b>r${c.BaseRevision||c.Revision}</b></span><button type="button" class="link-button version-toggle" id="case-version-toggle" aria-expanded="false"${h.length?'':' disabled'}>用例版本 <b>${esc(version(c.VersionID).name)}</b><small>${h.length?`${h.length} 条编辑历史 ▾`:'暂无编辑历史'}</small></button></div>${caseDetailBodyHTML(c,false)}${h.length?`<div class="history-list hidden" id="case-history-list">${h.map(x=>`<a class="history-row" href="#history=${encodeURIComponent(x.ID)}&amp;version=${encodeURIComponent(c.VersionID)}"><b>${historyAction(x.Action)}</b> · ${esc(x.Author)} <small>${fmt(x.CreatedAt)}${x.SourceVersionID?` · 来源 ${esc(version(x.SourceVersionID)?.name||x.SourceVersionID)}`:''}</small></a>`).join('')}</div>`:''}</div>`;if(branch)$('#edit-case').onclick=()=>caseModal(c);$('#open-record').onclick=()=>openRecords(c);if(h.length)$('#case-version-toggle').onclick=()=>{let hidden=$('#case-history-list').classList.toggle('hidden');$('#case-version-toggle').setAttribute('aria-expanded',String(!hidden))};bindCaseDetailBody(d,c,false,renderFocus)}
+function renderFocus(){if(!focus){updateEmptyHint();$('#empty').classList.remove('hidden');$('#detail').classList.add('hidden');return}$('#empty').classList.add('hidden');let d=$('#detail');d.classList.remove('hidden');if(focus.type==='folder'){let f=state.folders.find(x=>x.VersionID===focus.versionID&&x.ID===focus.id);if(!f){focus=null;return renderFocus()}let descendants=descendantFolders(f),count=cases(f.VersionID).filter(c=>c.FolderID===f.ID||descendants.includes(c.FolderID)).length;d.innerHTML=`<div class="detail-head"><div><div class="eyebrow">文件夹 · ${esc(version(f.VersionID).name)}</div><h1>📁 ${esc(f.Name)}</h1></div></div><div class="card meta-grid"><span>用例 <b>${count}</b></span><span>子文件夹 <b>${descendants.length}</b></span><span>创建者 <b>${esc(f.CreatedBy)}</b></span><span>创建时间 <b>${fmt(f.CreatedAt)}</b></span></div>`;return}let c=state.cases.find(x=>x.VersionID===focus.versionID&&x.ID===focus.id);if(!c){focus=null;return renderFocus()}let branch=!version(c.VersionID).mainline,h=state.histories.filter(x=>x.CaseID===c.ID&&x.VersionID===c.VersionID).slice().reverse();d.innerHTML=`<div class="detail-head"><div><div class="eyebrow">${esc(c.ID)} · ${esc(version(c.VersionID).name)} ${c.Dirty?'· 未合并':''}</div><h1>${esc(c.Title)}</h1></div><div class="detail-actions">${branch?'<button id="edit-case" class="secondary">编辑</button>':''}<button id="open-record">测试记录</button></div></div><div class="card case-detail"><div class="meta-grid case-meta"><span>优先级 <b>${esc(c.Priority||'未设置')}</b></span><span>当前结果 <b>${resultName(c.Result)}</b></span><span>更新者 <b>${esc(c.UpdatedBy)}</b></span><span>更新时间 <b>${fmt(c.UpdatedAt)}</b></span><span>基线版本 <b>r${c.BaseRevision||c.Revision}</b></span><button type="button" class="link-button version-toggle" id="case-version-toggle" aria-expanded="false"${h.length?'':' disabled'}>用例版本 <b>${esc(version(c.VersionID).name)}</b><small>${h.length?`${h.length} 条编辑历史 ▾`:'暂无编辑历史'}</small></button></div>${caseDetailBodyHTML(c,false)}${h.length?`<div class="history-list hidden" id="case-history-list">${h.map(x=>`<a class="history-row" href="#history=${encodeURIComponent(x.ID)}&amp;version=${encodeURIComponent(c.VersionID)}"><b>${historyAction(x.Action)}</b> · ${esc(x.Author)} <small>${fmt(x.CreatedAt)}${x.SourceVersionID?` · 来源 ${esc(version(x.SourceVersionID)?.name||x.SourceVersionID)}`:''}</small></a>`).join('')}</div>`:''}</div>`;$('#open-record').onclick=()=>openRecords(c);if(h.length)$('#case-version-toggle').onclick=()=>{let hidden=$('#case-history-list').classList.toggle('hidden');$('#case-version-toggle').setAttribute('aria-expanded',String(!hidden))};bindCaseDetailBody(d,c,false,renderFocus)}
 function descendantFolders(f){let out=[];function walk(id){state.folders.filter(x=>x.VersionID===f.VersionID&&x.ParentID===id).forEach(x=>{out.push(x.ID);walk(x.ID)})}walk(f.ID);return out}
 function toggleSelect(v,id,on){if(!selected.has(v))selected.set(v,new Set());on?selected.get(v).add(id):selected.get(v).delete(id);updateBulk();updateFolderChecks()}
 function updateBulk(){let entries=[...selected.entries()].filter(([,s])=>s.size);let n=entries.reduce((x,[,s])=>x+s.size,0);$('#bulk').classList.toggle('hidden',!n);$('#selected-count').textContent=`已选 ${n} 项`;}
@@ -131,7 +174,7 @@ function targetFolderModal(title,versionID,onSubmit){showModal(title,`<label>目
 function mergeFolderModal(v,f){targetFolderModal('合并到主线','main',id=>act('mergeFolder',{VersionID:v,FolderID:f,TargetFolderID:id}))}
 function mergeCasesModal(v,ids){targetFolderModal('合并到主线','main',id=>act('mergeCases',{VersionID:v,CaseIDs:ids,TargetFolderID:id}))}
 function moveCasesModal(v,ids){targetFolderModal('移动用例',v,id=>act('moveCases',{VersionID:v,CaseIDs:ids,TargetFolderID:id}))}
-function caseMenu(v,id){let c=state.cases.find(x=>x.VersionID===v&&x.ID===id),items=[['查看详情',()=>setFocus({type:'case',versionID:v,id})],['测试记录',()=>openRecords(c)]];if(!version(v).mainline)items.push(['编辑用例',()=>caseModal(c)],['删除用例',()=>{if(confirm('确定删除这条用例？测试记录和历史也会一并删除，且无法恢复。'))act('deleteCases',{VersionID:v,CaseIDs:[id]})}]);return items}
+function caseMenu(v,id){let c=state.cases.find(x=>x.VersionID===v&&x.ID===id),items=[['查看详情',()=>setFocus({type:'case',versionID:v,id})],['测试记录',()=>openRecords(c)]];if(!version(v).mainline)items.push(['编辑用例',()=>{startCaseEdit(c,false,'case');setFocus({type:'case',versionID:v,id})}],['删除用例',()=>{if(confirm('确定删除这条用例？测试记录和历史也会一并删除，且无法恢复。'))act('deleteCases',{VersionID:v,CaseIDs:[id]})}]);return items}
 function menu(e,items){e.preventDefault();let m=$('#context-menu');m.innerHTML=items.map((x,i)=>`<button data-i="${i}"${x[2]?` class="${x[2]}"`:''}>${esc(x[0])}</button>`).join('');m.style.left=Math.min(e.clientX,innerWidth-205)+'px';m.style.top=Math.min(e.clientY,innerHeight-items.length*38-10)+'px';m.classList.remove('hidden');m.querySelectorAll('button').forEach(b=>b.onclick=()=>{m.classList.add('hidden');items[+b.dataset.i][1]()})}
 function showModal(title,html,save){$('#modal-title').textContent=title;$('#modal-body').innerHTML=html;modalSave=save;$('#modal').showModal()}
 function versionModal(){showModal('创建测试版本',`<label>版本名称<input name="Name" required placeholder="例如：v2.4.0 回归"></label>`,x=>act('createVersion',x))}
@@ -362,7 +405,6 @@ function renderReqFocus(){
     reqEditor?.destroy();reqEditor=null;
     const reviewLabel=({passed:'已通过',rejected:'未通过'})[c.Review]||'待评审';
     d.innerHTML=`<div class="detail-head"><div><div class="eyebrow">${esc(c.ID)} · <span class="badge">${reviewLabel}</span></div><h1>${esc(c.Title)}</h1></div><div class="detail-actions"><button id="edit-review-case" class="secondary">编辑</button><button id="delete-review-case" class="secondary">删除</button><button id="reject-review-case" class="secondary">评审不通过</button><button id="approve-review-case">评审通过</button><button id="import-review-case" class="secondary">导入到版本…</button></div></div><div class="card case-detail"><div class="meta-grid case-meta"><span>优先级 <b>${esc(c.Priority||'未设置')}</b></span><span>评审状态 <b>${reviewLabel}</b></span><span>创建者 <b>${esc(c.CreatedBy)}</b></span><span>更新者 <b>${esc(c.UpdatedBy)}</b></span><span>更新时间 <b>${fmt(c.UpdatedAt)}</b></span>${c.ReviewedBy?`<span>评审人 <b>${esc(c.ReviewedBy)}</b></span><span>评审时间 <b>${fmt(c.ReviewedAt)}</b></span>`:''}</div>${caseDetailBodyHTML(c,true)}</div>`;
-    $('#edit-review-case').onclick=()=>pendingCaseModal(c);
     $('#delete-review-case').onclick=()=>{if(confirm('确定删除这条待评审用例？'))actReview('deletePendingCase',{CaseID:c.ID})};
     $('#approve-review-case').onclick=()=>actReview('reviewPendingCase',{CaseID:c.ID,Review:'passed'});
     $('#reject-review-case').onclick=()=>actReview('reviewPendingCase',{CaseID:c.ID,Review:'rejected'});
@@ -733,7 +775,7 @@ function pendingCaseIdsIn(folderId){
   return state.pendingCases.filter(c=>scope.includes(c.FolderID)).map(c=>c.ID);
 }
 function reviewFolderMenu(id){const items=[['查看详情',()=>setReqFocus({type:'reviewFolder',id})],['新建文件夹',()=>pendingFolderModal(id)],['新增用例',()=>pendingCaseModal(null,id)],['导入到版本…',()=>importReviewModal(pendingCaseIdsIn(id))],['重命名空文件夹',()=>renamePendingFolderModal(id)]];if(id!=='pending-root')items.push(['删除空文件夹',()=>{if(confirm('确定删除这个空文件夹？'))actReview('deletePendingFolder',{FolderID:id})}]);return items}
-function reviewCaseMenu(id){return [['查看详情',()=>setReqFocus({type:'reviewCase',id})],['编辑',()=>pendingCaseModal(state.pendingCases.find(x=>x.ID===id))],['导入到版本…',()=>importReviewModal([id])],['删除',()=>{if(confirm('确定删除这条待评审用例？'))actReview('deletePendingCase',{CaseID:id})}],['评审通过',()=>actReview('reviewPendingCase',{CaseID:id,Review:'passed'})],['评审不通过',()=>actReview('reviewPendingCase',{CaseID:id,Review:'rejected'})]]}
+function reviewCaseMenu(id){return [['查看详情',()=>setReqFocus({type:'reviewCase',id})],['编辑',()=>{const c=state.pendingCases.find(x=>x.ID===id);startCaseEdit(c,true,'case');setReqFocus({type:'reviewCase',id})}],['导入到版本…',()=>importReviewModal([id])],['删除',()=>{if(confirm('确定删除这条待评审用例？'))actReview('deletePendingCase',{CaseID:id})}],['评审通过',()=>actReview('reviewPendingCase',{CaseID:id,Review:'passed'})],['评审不通过',()=>actReview('reviewPendingCase',{CaseID:id,Review:'rejected'})]]}
 function pendingFolderModal(parent){showModal('新建文件夹',`<label>文件夹名称<input name="Name" required></label>`,x=>actReview('createPendingFolder',{...x,ParentID:parent}))}
 function renamePendingFolderModal(id){const f=pendingFolder(id);showModal('重命名文件夹',`<label>文件夹名称<input name="Name" required value="${esc(f.Name)}"></label>`,x=>actReview('renamePendingFolder',{...x,FolderID:id}))}
 function pendingCaseModal(c,folderId){folderId=c?.FolderID||folderId;showModal(c?'编辑待评审用例':'新增待评审用例',`<label>标题<input name="Title" required value="${esc(c?.Title||'')}"></label><label>优先级<select name="Priority">${['P0','P1','P2','P3'].map(x=>`<option ${c?.Priority===x?'selected':''}>${x}</option>`).join('')}</select></label><label>用例描述（评审时人工填写，可选）<textarea name="Description">${esc(c?.Description||'')}</textarea></label><label>前置条件<textarea name="Preconditions">${esc(c?.Preconditions||'')}</textarea></label><label>执行步骤<textarea name="Steps">${esc(c?.Steps||'')}</textarea></label><label>预期结果<textarea name="Expected">${esc(c?.Expected||'')}</textarea></label>`,x=>actReview(c?'editPendingCase':'createPendingCase',{...x,FolderID:folderId,CaseID:c?.ID||''}))}
