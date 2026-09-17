@@ -756,18 +756,42 @@ const pendingCasesIn=id=>state.pendingCases.filter(c=>c.FolderID===id);
 function pendingRoots(){return state.pendingFolders.filter(f=>!f.ParentID||!state.pendingFolders.some(x=>x.ID===f.ParentID))}
 function pendingDescendantFolders(f){let out=[];function walk(id){pendingChildren(id).forEach(x=>{out.push(x.ID);walk(x.ID)})}walk(f.ID);return out}
 function reviewBadge(c){return c.Review==='passed'?'<span class="result passed" title="评审通过"></span>':c.Review==='rejected'?'<span class="result failed" title="评审不通过"></span>':''}
-function reviewCaseRow(c,depth){return `<div class="tree-row case-row" style="padding-left:${8+depth*17}px" data-review-case="${c.ID}" title="${esc(caseLabel(c))}"><span class="label">${esc(caseLabel(c))}</span>${reviewBadge(c)}</div>`}
+// 用例评审树的多选（批量删除）：勾选用例或文件夹（=其下全部用例），顶部批量栏显示已选数量。
+const reviewSelected=new Set();
+function reviewCaseRow(c,depth){return `<div class="tree-row case-row" style="padding-left:${8+depth*17}px" data-review-case="${c.ID}" title="${esc(caseLabel(c))}"><input class="review-case-check" type="checkbox" ${reviewSelected.has(c.ID)?'checked':''}><span class="label">${esc(caseLabel(c))}</span>${reviewBadge(c)}</div>`}
 function reviewTreeHTML(){
   function node(f,depth){
     let children=pendingChildren(f.ID),own=pendingCasesIn(f.ID);
-    return `<div class="tree-row folder-row" style="padding-left:${8+depth*17}px" data-review-folder="${f.ID}"><span class="chev">▾</span><span>📁</span><span class="label">${esc(f.Name)}</span></div><div>${own.map(c=>reviewCaseRow(c,depth+1)).join('')}${children.map(ch=>node(ch,depth+1)).join('')}</div>`;
+    return `<div class="tree-row folder-row" style="padding-left:${8+depth*17}px" data-review-folder="${f.ID}"><input class="review-folder-check" type="checkbox"><span class="chev">▾</span><span>📁</span><span class="label">${esc(f.Name)}</span></div><div>${own.map(c=>reviewCaseRow(c,depth+1)).join('')}${children.map(ch=>node(ch,depth+1)).join('')}</div>`;
   }
   return pendingRoots().map(r=>node(r,0)).join('')||'<p class="meta">暂无待评审用例</p>';
 }
-function renderReviewTree(){const box=$('#review-tree');box.innerHTML=reviewTreeHTML();bindReviewTree(box)}
+function renderReviewTree(){
+  const alive=new Set(state.pendingCases.map(c=>c.ID));
+  for(const id of [...reviewSelected])if(!alive.has(id))reviewSelected.delete(id); // 已被删除/导入的不再算已选
+  const box=$('#review-tree');box.innerHTML=reviewTreeHTML();bindReviewTree(box);updateReviewBulk();
+}
+function updateReviewBulk(){
+  const n=reviewSelected.size;
+  $('#review-bulk').classList.toggle('hidden',!n);
+  $('#review-selected-count').textContent=`已选 ${n} 条用例`;
+  $$('#review-tree [data-review-folder]').forEach(e=>{
+    const fc=e.querySelector('.review-folder-check'),ids=pendingCaseIdsIn(e.dataset.reviewFolder),sel=ids.filter(id=>reviewSelected.has(id)).length;
+    fc.checked=ids.length>0&&sel===ids.length;fc.indeterminate=sel>0&&sel<ids.length;fc.disabled=!ids.length;
+  });
+  $$('#review-tree .review-case-check').forEach(cb=>cb.checked=reviewSelected.has(cb.closest('[data-review-case]').dataset.reviewCase));
+}
+$('#review-bulk [data-review-bulk="clear"]').onclick=()=>{reviewSelected.clear();updateReviewBulk()};
+$('#review-bulk [data-review-bulk="delete"]').onclick=async()=>{
+  const ids=[...reviewSelected];
+  if(!ids.length||!confirm(`确定删除选中的 ${ids.length} 条待评审用例？删除后无法恢复。`))return;
+  try{await actReview('deletePendingCases',{CaseIDs:ids})}catch{return}
+  ids.forEach(id=>reviewSelected.delete(id));updateReviewBulk();
+  toast(`已删除 ${ids.length} 条待评审用例`);
+};
 function bindReviewTree(root){
-  root.querySelectorAll('[data-review-folder]').forEach(e=>{let key=e.dataset.reviewFolder;if(closedReviewFolders.has(key))e.classList.add('closed');e.querySelector('.chev').onclick=x=>{x.stopPropagation();let closed=e.classList.toggle('closed');closed?closedReviewFolders.add(key):closedReviewFolders.delete(key)};e.onclick=()=>setReqFocus({type:'reviewFolder',id:e.dataset.reviewFolder});e.oncontextmenu=x=>menu(x,reviewFolderMenu(e.dataset.reviewFolder))});
-  root.querySelectorAll('[data-review-case]').forEach(e=>{e.onclick=()=>setReqFocus({type:'reviewCase',id:e.dataset.reviewCase});e.oncontextmenu=x=>menu(x,reviewCaseMenu(e.dataset.reviewCase))});
+  root.querySelectorAll('[data-review-folder]').forEach(e=>{let key=e.dataset.reviewFolder;if(closedReviewFolders.has(key))e.classList.add('closed');e.querySelector('.chev').onclick=x=>{x.stopPropagation();let closed=e.classList.toggle('closed');closed?closedReviewFolders.add(key):closedReviewFolders.delete(key)};const fc=e.querySelector('.review-folder-check');fc.onclick=x=>{x.stopPropagation();pendingCaseIdsIn(e.dataset.reviewFolder).forEach(id=>fc.checked?reviewSelected.add(id):reviewSelected.delete(id));updateReviewBulk()};e.onclick=()=>setReqFocus({type:'reviewFolder',id:e.dataset.reviewFolder});e.oncontextmenu=x=>menu(x,reviewFolderMenu(e.dataset.reviewFolder))});
+  root.querySelectorAll('[data-review-case]').forEach(e=>{const cb=e.querySelector('.review-case-check');cb.onclick=x=>{x.stopPropagation();cb.checked?reviewSelected.add(e.dataset.reviewCase):reviewSelected.delete(e.dataset.reviewCase);updateReviewBulk()};e.onclick=()=>setReqFocus({type:'reviewCase',id:e.dataset.reviewCase});e.oncontextmenu=x=>menu(x,reviewCaseMenu(e.dataset.reviewCase))});
 }
 function pendingCaseIdsIn(folderId){
   const f=pendingFolder(folderId);

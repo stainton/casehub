@@ -333,6 +333,8 @@ func (s *Service) Apply(ctx context.Context, a Action) (Result, error) {
 		warnings, err = editCase(&st, a)
 	case "simplifyCase":
 		err = simplifyCase(&st, a)
+	case "deletePendingCases":
+		err = deletePendingCases(&st, a)
 	case "simplifyPendingCase":
 		err = simplifyPendingCase(&st, a)
 	case "describePendingCase":
@@ -1407,6 +1409,42 @@ func deletePendingCase(s *State, a Action) error {
 		return errors.New("用例不存在")
 	}
 	s.PendingCases = append(s.PendingCases[:i], s.PendingCases[i+1:]...)
+	return nil
+}
+
+// deletePendingCases removes several pending cases at once. It is all or
+// nothing: if any ID is unknown (e.g. already deleted elsewhere) nothing is
+// removed and the missing IDs are reported.
+func deletePendingCases(s *State, a Action) error {
+	if len(a.CaseIDs) == 0 {
+		return errors.New("请选择要删除的用例")
+	}
+	want := map[string]bool{}
+	for _, id := range a.CaseIDs {
+		want[id] = true
+	}
+	for _, c := range s.PendingCases {
+		delete(want, c.ID)
+	}
+	if len(want) > 0 {
+		missing := make([]string, 0, len(want))
+		for id := range want {
+			missing = append(missing, id)
+		}
+		sort.Strings(missing)
+		return fmt.Errorf("用例不存在：%s", strings.Join(missing, "、"))
+	}
+	drop := map[string]bool{}
+	for _, id := range a.CaseIDs {
+		drop[id] = true
+	}
+	kept := s.PendingCases[:0]
+	for _, c := range s.PendingCases {
+		if !drop[c.ID] {
+			kept = append(kept, c)
+		}
+	}
+	s.PendingCases = kept
 	return nil
 }
 func reviewPendingCase(s *State, a Action) error {

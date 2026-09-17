@@ -950,3 +950,22 @@ func TestReqDocCodeAndStructuredPendingCaseIDs(t *testing.T) {
 		t.Fatalf("expected TC-LOGIN-AUTH-FUNC-002 after deletions, got %s", id)
 	}
 }
+
+func TestDeletePendingCasesInBulk(t *testing.T) {
+	svc := core.NewService(store.NewMemory())
+	var ids []string
+	for _, title := range []string{"a", "b", "c"} {
+		st := apply(t, svc, core.Action{Type: "createPendingCase", FolderID: "pending-root", Title: title, Author: "pat"})
+		ids = append(ids, st.PendingCases[len(st.PendingCases)-1].ID)
+	}
+	if _, err := svc.Apply(context.Background(), core.Action{Type: "deletePendingCases", CaseIDs: []string{ids[0], "CASE-NOPE"}}); err == nil || !strings.Contains(err.Error(), "CASE-NOPE") {
+		t.Fatalf("an unknown ID must fail the whole batch and be reported, got %v", err)
+	}
+	if _, err := svc.Apply(context.Background(), core.Action{Type: "deletePendingCases"}); err == nil {
+		t.Fatal("an empty selection must be rejected")
+	}
+	st := apply(t, svc, core.Action{Type: "deletePendingCases", CaseIDs: []string{ids[0], ids[2]}, Author: "pat"})
+	if len(st.PendingCases) != 1 || st.PendingCases[0].ID != ids[1] {
+		t.Fatalf("expected only %s to remain, got %+v", ids[1], st.PendingCases)
+	}
+}
