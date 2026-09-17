@@ -895,19 +895,25 @@ func TestReqDocCodeAndStructuredPendingCaseIDs(t *testing.T) {
 		t.Fatal("a code already used by another requirement must be rejected")
 	}
 
-	folder := func(parent, name string) string {
-		st := apply(t, svc, core.Action{Type: "createPendingFolder", ParentID: parent, Name: name, Author: "pat"})
+	folder := func(parent, name, code string) string {
+		st := apply(t, svc, core.Action{Type: "createPendingFolder", ParentID: parent, Name: name, Code: code, Author: "pat"})
 		for _, f := range st.PendingFolders {
 			if f.ParentID == parent && f.Name == name {
+				if f.Code != code {
+					t.Fatalf("folder code = %q, want %q", f.Code, code)
+				}
 				return f.ID
 			}
 		}
 		t.Fatalf("folder %s not created", name)
 		return ""
 	}
-	req := folder("pending-root", "LOGIN")
-	mod := folder(req, "LOGIN-AUTH")
-	fn, sec := folder(mod, "LOGIN-AUTH-FUNC"), folder(mod, "LOGIN-AUTH-SEC")
+	if _, err := svc.Apply(context.Background(), core.Action{Type: "createPendingFolder", ParentID: "pending-root", Name: "x", Code: "LOGIN-AUTH-FUNCTIONAL"}); err == nil {
+		t.Fatal("an invalid folder code must be rejected")
+	}
+	req := folder("pending-root", "登录模块需求说明", "LOGIN")
+	mod := folder(req, "登录认证", "LOGIN-AUTH")
+	fn, sec := folder(mod, "功能测试", "LOGIN-AUTH-FUNC"), folder(mod, "安全测试", "LOGIN-AUTH-SEC")
 	create := func(folderID, title string) string {
 		st := apply(t, svc, core.Action{Type: "createPendingCase", FolderID: folderID, Title: title, Steps: "1. x", Author: "pat"})
 		for _, c := range st.PendingCases {
@@ -935,6 +941,10 @@ func TestReqDocCodeAndStructuredPendingCaseIDs(t *testing.T) {
 	apply(t, svc, core.Action{Type: "importPendingCases", VersionID: branch, CaseIDs: []string{got[0]}, Author: "bob"})
 	apply(t, svc, core.Action{Type: "deletePendingCase", CaseID: got[1], Author: "bob"})
 	apply(t, svc, core.Action{Type: "deletePendingCase", CaseID: got[3], Author: "bob"})
+	// a legacy folder named by its code (no Code set) still numbers its cases
+	if id := create(folder(mod, "LOGIN-AUTH-PERF", ""), "legacy"); id != "TC-LOGIN-AUTH-PERF-001" {
+		t.Fatalf("legacy code-named folder: got %s", id)
+	}
 	if id := create(fn, "e"); id != "TC-LOGIN-AUTH-FUNC-002" {
 		// 001 lives on in the version; 002/003 were deleted outright, so 002 is the next free number
 		t.Fatalf("expected TC-LOGIN-AUTH-FUNC-002 after deletions, got %s", id)

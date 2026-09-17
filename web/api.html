@@ -112,17 +112,18 @@
     &quot;CASE-0001&quot;
   ],
   &quot;TargetFolderID&quot;: &quot;同一分支内的目标文件夹ID&quot;
-}</code></pre></details><details class="card" id="createPendingFolder"><summary><code>createPendingFolder</code> · 新建待评审文件夹</summary><p>ParentID 可省略以创建根目录下的文件夹；指定父目录时必须存在。与主线/测试版本的目录树完全独立。</p><pre><code>{
+}</code></pre></details><details class="card" id="createPendingFolder"><summary><code>createPendingFolder</code> · 新建待评审文件夹</summary><p>ParentID 可省略以创建根目录下的文件夹；指定父目录时必须存在。与主线/测试版本的目录树完全独立。Code 可选，表示该文件夹对应的用例编号前缀：<code>需求缩写</code>、<code>需求缩写-模块缩写</code> 或 <code>需求缩写-模块缩写-测试类别</code>；Name 仍用中文描述。AI 设计导入时自动设置。</p><pre><code>{
   &quot;Type&quot;: &quot;createPendingFolder&quot;,
   &quot;Author&quot;: &quot;本地用户&quot;,
   &quot;ParentID&quot;: &quot;pending-root&quot;,
-  &quot;Name&quot;: &quot;支付&quot;
+  &quot;Name&quot;: &quot;功能测试&quot;,
+  &quot;Code&quot;: &quot;LOGIN-AUTH-FUNC&quot;
 }</code></pre></details><details class="card" id="renamePendingFolder"><summary><code>renamePendingFolder</code> · 重命名空待评审文件夹</summary><p>仅允许重命名没有子目录和用例的文件夹。</p><pre><code>{
   &quot;Type&quot;: &quot;renamePendingFolder&quot;,
   &quot;Author&quot;: &quot;本地用户&quot;,
   &quot;FolderID&quot;: &quot;文件夹ID&quot;,
   &quot;Name&quot;: &quot;支付流程&quot;
-}</code></pre></details><details class="card" id="createPendingCase"><summary><code>createPendingCase</code> · 新增待评审用例</summary><p>标题和有效目录必填，用例 ID 自动生成。新建的用例评审状态为空（未评审）。所在文件夹名形如 <code>LOGIN-AUTH-FUNC</code>（需求缩写-模块缩写-测试类别，类别为 FUNC/REL/PERF/SEC/COMPAT/UX）时，编号自动取 <code>TC-LOGIN-AUTH-FUNC-NNN</code>，NNN 接着待评审区和各版本中该前缀的最大编号递增；其他文件夹下为随机编号。</p><pre><code>{
+}</code></pre></details><details class="card" id="createPendingCase"><summary><code>createPendingCase</code> · 新增待评审用例</summary><p>标题和有效目录必填，用例 ID 自动生成。新建的用例评审状态为空（未评审）。所在文件夹的 Code 形如 <code>LOGIN-AUTH-FUNC</code>（需求缩写-模块缩写-测试类别，类别为 FUNC/REL/PERF/SEC/COMPAT/UX）时，编号自动取 <code>TC-LOGIN-AUTH-FUNC-NNN</code>，NNN 接着待评审区和各版本中该前缀的最大编号递增；其他文件夹下为随机编号。</p><pre><code>{
   &quot;Type&quot;: &quot;createPendingCase&quot;,
   &quot;Author&quot;: &quot;本地用户&quot;,
   &quot;FolderID&quot;: &quot;pending-root&quot;,

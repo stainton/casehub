@@ -353,7 +353,7 @@ function renderReqFocus(){
     if(!f){reqFocus=null;return renderReqFocus()}
     reqEditor?.destroy();reqEditor=null;
     const descendants=pendingDescendantFolders(f),count=state.pendingCases.filter(x=>x.FolderID===f.ID||descendants.includes(x.FolderID)).length;
-    d.innerHTML=`<div class="detail-head"><div><div class="eyebrow">待评审文件夹</div><h1>📁 ${esc(f.Name)}</h1></div></div><div class="card meta-grid"><span>用例 <b>${count}</b></span><span>子文件夹 <b>${descendants.length}</b></span><span>创建者 <b>${esc(f.CreatedBy)}</b></span><span>创建时间 <b>${fmt(f.CreatedAt)}</b></span></div>`;
+    d.innerHTML=`<div class="detail-head"><div><div class="eyebrow">待评审文件夹</div><h1>📁 ${esc(f.Name)}</h1></div></div><div class="card meta-grid">${f.Code?`<span>编号前缀 <b>TC-${esc(f.Code)}</b></span>`:''}<span>用例 <b>${count}</b></span><span>子文件夹 <b>${descendants.length}</b></span><span>创建者 <b>${esc(f.CreatedBy)}</b></span><span>创建时间 <b>${fmt(f.CreatedAt)}</b></span></div>`;
     return;
   }
   if(reqFocus.type==='reviewCase'){
@@ -674,25 +674,33 @@ function renderAiResult(doc,summary){
   $('#ai-drawer-body').innerHTML=`<div class="card meta-grid"><span>已导入用例 <b>${summary.count}</b></span></div>${summary.limitations?.length?`<div class="card"><h3>未验证/受限范围 <small class="meta">按风险从高到低</small></h3>${aiLimitationsHTML(summary.limitations)}</div>`:''}<p class="meta">已自动创建目录并导入到"用例评审"，请前往评审。</p><p class="drawer-actions"><button type="button" class="secondary" id="ai-restart">重新设计</button></p>`;
   $('#ai-restart').onclick=()=>{localStorage.removeItem(aiResultKey(doc));renderAiForm(doc)};
 }
-// 按用例编号 TC-<REQ>-<MOD>-<CAT>-NNN 归档：用例评审下建 REQ / REQ-MOD / REQ-MOD-CAT 三层文件夹（同名复用），
-// 用例建在最里层，由 CaseHub 按文件夹名续编号（planner 结果里的序号只在单次结果内递增，可能与已有用例重复）。
-// 编号不符合该格式的旧结果退回放在需求文件夹下（随机编号）。
+// 按用例编号 TC-<REQ>-<MOD>-<CAT>-NNN 归档：用例评审下建 需求 / 功能模块 / 测试类别 三层文件夹。
+// 文件夹名用中文（需求标题、planner 给出的模块中文名、"功能测试"等），编号前缀存在文件夹的 Code 上
+// （REQ / REQ-MOD / REQ-MOD-CAT），同 Code 复用；用例建在最里层，由 CaseHub 按 Code 续编号
+// （planner 结果里的序号只在单次结果内递增，可能与已有用例重复）。编号不符合该格式的旧结果放在需求文件夹下（随机编号）。
 const AI_CASE_ID_RE=/^TC-([A-Z][A-Z0-9]{1,11})-([A-Z][A-Z0-9]{1,11})-(FUNC|REL|PERF|SEC|COMPAT|UX)-\d{3,}$/;
-async function ensurePendingFolder(parentID,name){
-  const found=state.pendingFolders.find(f=>f.ParentID===parentID&&f.Name===name);
+const TEST_CATEGORY_NAMES={FUNC:'功能测试',REL:'可靠性测试',PERF:'性能测试',SEC:'安全测试',COMPAT:'兼容性测试',UX:'易用性测试'};
+async function ensurePendingFolder(parentID,code,name){
+  // 早期按编号命名、没有 Code 的文件夹也认作同一个
+  const found=state.pendingFolders.find(f=>f.ParentID===parentID&&(code?(f.Code===code||(!f.Code&&f.Name===code)):f.Name===name));
   if(found)return found.ID;
   const before=new Set(state.pendingFolders.map(f=>f.ID));
-  const out=await act('createPendingFolder',{ParentID:parentID,Name:name});
+  const out=await act('createPendingFolder',{ParentID:parentID,Name:name,Code:code});
   return out.state.pendingFolders.find(f=>!before.has(f.ID)).ID;
 }
 async function importAiResult(doc,result){
-  const fallbackReq=liveReqDoc(doc).Code||doc.ID;
+  const d=liveReqDoc(doc);
   for(const c of result.cases){
     const m=AI_CASE_ID_RE.exec(c.case_id||'');
-    let folderID=await ensurePendingFolder('pending-root',m?m[1]:fallbackReq);
+    let folderID;
     if(m){
-      folderID=await ensurePendingFolder(folderID,`${m[1]}-${m[2]}`);
-      folderID=await ensurePendingFolder(folderID,`${m[1]}-${m[2]}-${m[3]}`);
+      const [,req,mod,cat]=m;
+      const moduleName=(result.modules||[]).find(x=>x.requirement===c.request&&x.code===mod)?.name||mod;
+      folderID=await ensurePendingFolder('pending-root',req,d.Code===req?d.Title:req);
+      folderID=await ensurePendingFolder(folderID,`${req}-${mod}`,moduleName);
+      folderID=await ensurePendingFolder(folderID,`${req}-${mod}-${cat}`,TEST_CATEGORY_NAMES[cat]);
+    }else{
+      folderID=await ensurePendingFolder('pending-root',d.Code||'',d.Title);
     }
     await act('createPendingCase',{FolderID:folderID,Title:c.name,Priority:c.priority,Preconditions:c.precondition,Steps:c.steps,Expected:c.expects});
   }

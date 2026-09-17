@@ -91,7 +91,10 @@ type ReqDoc struct {
 
 type PendingFolder struct {
 	ID, ParentID, Name, CreatedBy string
-	CreatedAt                     time.Time
+	// Code is the case-ID prefix the folder stands for (REQ, REQ-MODULE or
+	// REQ-MODULE-CATEGORY); Name stays a human-readable Chinese label.
+	Code      string
+	CreatedAt time.Time
 }
 
 type PendingCase struct {
@@ -1202,11 +1205,13 @@ func createReqDoc(s *State, a Action) error {
 
 // Case ID scheme: TC-<REQ>-<MODULE>-<CATEGORY>-<NNN>. Codes are uppercase ASCII
 // without "-", so an ID splits back into its parts. The review area mirrors it
-// with folders REQ / REQ-MODULE / REQ-MODULE-CATEGORY, and a pending case
-// created in such a leaf folder is numbered from the folder name.
+// with folders coded REQ / REQ-MODULE / REQ-MODULE-CATEGORY (Chinese names,
+// the code kept in PendingFolder.Code), and a pending case created in a
+// REQ-MODULE-CATEGORY folder is numbered from that code.
 var (
 	codeRE           = regexp.MustCompile(`^[A-Z][A-Z0-9]{1,11}$`)
 	caseFolderRE     = regexp.MustCompile(`^[A-Z][A-Z0-9]{1,11}-[A-Z][A-Z0-9]{1,11}-(FUNC|REL|PERF|SEC|COMPAT|UX)$`)
+	folderCodeRE     = regexp.MustCompile(`^[A-Z][A-Z0-9]{1,11}(-[A-Z][A-Z0-9]{1,11}(-(FUNC|REL|PERF|SEC|COMPAT|UX))?)?$`)
 	caseNumberSuffix = regexp.MustCompile(`^\d{3,}$`)
 )
 
@@ -1303,7 +1308,11 @@ func createPendingFolder(s *State, a Action) error {
 			return errors.New("父文件夹不存在")
 		}
 	}
-	s.PendingFolders = append(s.PendingFolders, PendingFolder{ID: ID(), ParentID: a.ParentID, Name: strings.TrimSpace(a.Name), CreatedBy: a.Author, CreatedAt: now()})
+	code := strings.TrimSpace(a.Code)
+	if code != "" && !folderCodeRE.MatchString(code) {
+		return errors.New("文件夹编号前缀格式应为 需求缩写[-模块缩写[-测试类别]]")
+	}
+	s.PendingFolders = append(s.PendingFolders, PendingFolder{ID: ID(), ParentID: a.ParentID, Name: strings.TrimSpace(a.Name), Code: code, CreatedBy: a.Author, CreatedAt: now()})
 	return nil
 }
 func renamePendingFolder(s *State, a Action) error {
@@ -1357,8 +1366,14 @@ func createPendingCase(s *State, a Action) error {
 	}
 	t := now()
 	id := "CASE-" + strings.ToUpper(ID()[:6])
-	if f, _ := pendingFolderAt(s, a.FolderID); f != nil && caseFolderRE.MatchString(f.Name) {
-		id = nextCaseID(s, f.Name)
+	if f, _ := pendingFolderAt(s, a.FolderID); f != nil {
+		code := f.Code
+		if code == "" && caseFolderRE.MatchString(f.Name) {
+			code = f.Name // folders created before Code existed were named by their code
+		}
+		if caseFolderRE.MatchString(code) {
+			id = nextCaseID(s, code)
+		}
 	}
 	c := PendingCase{ID: id, FolderID: a.FolderID, Title: strings.TrimSpace(a.Title), Preconditions: a.Preconditions, Steps: a.Steps, Expected: a.Expected, Description: a.Description, Priority: a.Priority, CreatedBy: a.Author, UpdatedBy: a.Author, CreatedAt: t, UpdatedAt: t}
 	s.PendingCases = append(s.PendingCases, c)
