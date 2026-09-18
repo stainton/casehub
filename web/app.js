@@ -691,7 +691,7 @@ async function handleAiSuccess(doc,job){
   try{
     const result=await plannerRequest(`/api/planner/jobs/${job.id}/result`);
     await importAiResult(doc,result);
-    const summary={count:result.cases.length,limitations:result.limitations||[]};
+    const summary={count:result.cases.length,limitations:result.limitations||[],issues:result.issues||[]};
     localStorage.setItem(aiResultKey(doc),JSON.stringify(summary));
     localStorage.removeItem(aiJobKey(doc));
     toast(`AI 设计已完成，已自动导入 ${result.cases.length} 条用例到"用例评审"`);
@@ -706,16 +706,20 @@ async function handleAiSuccess(doc,job){
     if(aiHandlingJobId===job.id)aiHandlingJobId=null;
   }
 }
-// planner 给出的未验证/受限范围是 {risk, summary}（已按风险高→低排序）；更早保存的结果是纯文本，照原样显示在最后。
+// planner 给出的未验证/受限范围是 {risk, summary}、探索中发现的问题是 {risk, scenario, symptom}，
+// 两者都已按风险高→低排序；更早保存的结果里 limitations 是纯文本，照原样显示在最后。
 const AI_RISKS={high:'高',medium:'中',low:'低'};
-function aiLimitationsHTML(list){
-  const items=(list||[]).map((l,i)=>typeof l==='string'?{risk:'',summary:l,i}:{...l,i});
+function aiRiskListHTML(list,textHTML){
+  const items=(list||[]).map((l,i)=>typeof l==='string'?{risk:'',html:esc(l),i}:{risk:l.risk,html:textHTML(l),i});
   const rank=r=>r in AI_RISKS?Object.keys(AI_RISKS).indexOf(r):3;
   items.sort((a,b)=>rank(a.risk)-rank(b.risk)||a.i-b.i);
-  return `<ul class="ai-limitations">${items.map(l=>`<li>${l.risk in AI_RISKS?`<span class="risk-tag risk-${l.risk}">${AI_RISKS[l.risk]}</span>`:''}<span>${esc(l.summary)}</span></li>`).join('')}</ul>`;
+  return `<ul class="ai-risk-list">${items.map(l=>`<li>${l.risk in AI_RISKS?`<span class="risk-tag risk-${l.risk}">${AI_RISKS[l.risk]}</span>`:''}<span>${l.html}</span></li>`).join('')}</ul>`;
 }
+// 发现的问题排在前面：那是探索时实测到的缺陷，用例仍按需求的正确行为编写，需要人来决定怎么处理。
 function renderAiResult(doc,summary){
-  $('#ai-drawer-body').innerHTML=`<div class="card meta-grid"><span>已导入用例 <b>${summary.count}</b></span></div>${summary.limitations?.length?`<div class="card"><h3>未验证/受限范围 <small class="meta">按风险从高到低</small></h3>${aiLimitationsHTML(summary.limitations)}</div>`:''}<p class="meta">已自动创建目录并导入到"用例评审"，请前往评审。</p><p class="drawer-actions"><button type="button" class="secondary" id="ai-restart">重新设计</button></p>`;
+  const issues=summary.issues?.length?`<div class="card"><h3>探索中发现的问题 <small class="meta">按风险从高到低</small></h3>${aiRiskListHTML(summary.issues,i=>`<b>${esc(i.scenario)}</b>：${esc(i.symptom)}`)}</div>`:'';
+  const limitations=summary.limitations?.length?`<div class="card"><h3>未验证/受限范围 <small class="meta">按风险从高到低</small></h3>${aiRiskListHTML(summary.limitations,l=>esc(l.summary))}</div>`:'';
+  $('#ai-drawer-body').innerHTML=`<div class="card meta-grid"><span>已导入用例 <b>${summary.count}</b></span></div>${issues}${limitations}<p class="meta">已自动创建目录并导入到"用例评审"，请前往评审。</p><p class="drawer-actions"><button type="button" class="secondary" id="ai-restart">重新设计</button></p>`;
   $('#ai-restart').onclick=()=>{localStorage.removeItem(aiResultKey(doc));renderAiForm(doc)};
 }
 // 按用例编号 TC-<REQ>-<MOD>-<CAT>-NNN 归档：用例评审下建 需求 / 功能模块 / 测试类别 三层文件夹。
