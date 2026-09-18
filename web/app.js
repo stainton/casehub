@@ -455,6 +455,14 @@ const aiJobKey=doc=>`casehub-ai-job-${doc.ID}`;
 // 直到用户点击"重新设计"才清除。
 const aiResultKey=doc=>`casehub-ai-result-${doc.ID}`;
 function loadAiResult(doc){try{return JSON.parse(localStorage.getItem(aiResultKey(doc)))}catch{return null}}
+// 上一次提交过的表单：任务失败后点"重试"/"继续"不用重新填一遍，刷新页面也还在。
+// 密码是被测系统的测试账号，不写进 localStorage，只留在内存里的 aiEstimates.values 中；
+// 刷新后密码为空，表单里会提示需要重填。
+const aiFormKey=doc=>`casehub-ai-form-${doc.ID}`;
+function saveAiForm(doc,values,count,code){
+  try{localStorage.setItem(aiFormKey(doc),JSON.stringify({values:{...values,testSecret:''},count,code}))}catch{}
+}
+function loadAiForm(doc){try{return JSON.parse(localStorage.getItem(aiFormKey(doc)))}catch{return null}}
 let aiActiveDocId=null, aiSourceJobId=null, aiHandlingJobId=null;
 function isAiActive(doc){return aiActiveDocId===doc.ID}
 function setAiActive(doc){aiActiveDocId=doc.ID;syncAiButton()}
@@ -519,7 +527,19 @@ async function checkAiJob(doc){
 // 确认后才提交完整 planner 任务（caseCount=该值，planner 输出 [caseCount-5, caseCount] 条用例）。
 // 评估状态按需求保存在内存里（含已填表单），关闭抽屉再打开不会丢失评估中/评估结果。
 // 同一步里还会建议"需求缩写"（用例编号 TC-<需求缩写>-<模块>-<类别>-NNN 的第二段），人工确认后保存到需求文档上，下次沿用。
-const aiEstimates=new Map(); // docID -> {status:'running'|'done', startedAt, count, code, rationale, notice, values}
+const aiEstimates=new Map(); // docID -> {status:'running'|'done', startedAt, count, code, rationale, notice, values, restored}
+// 抽屉里表单内容的唯一来源。内存里没有（刷新过、或换了浏览器标签）就用上次提交的表单补上，
+// 直接是"已评估"状态：数量和缩写都已经人工确认过，重试/继续不该再花一次评估。
+function aiFormState(doc,ensure){
+  let est=aiEstimates.get(doc.ID);
+  if(est)return est;
+  const saved=loadAiForm(doc);
+  if(!saved&&!ensure)return undefined;
+  est={status:'done',values:saved?.values||{},count:saved?.count||AI_DEFAULT_CASE_COUNT,
+    code:saved?.code||liveReqDoc(doc).Code||'',rationale:'',restored:true};
+  aiEstimates.set(doc.ID,est);
+  return est;
+}
 const REQ_CODE_RE=/^[A-Z][A-Z0-9]{1,11}$/;
 const liveReqDoc=doc=>state.reqDocs.find(x=>x.ID===doc.ID)||doc;
 const AI_DEFAULT_CASE_COUNT=10, AI_MAX_CASE_COUNT=500, AI_CASE_COUNT_SLACK=5;
@@ -542,14 +562,15 @@ function aiEstimateStatusText(est){
   const seconds=Math.floor((Date.now()-est.startedAt)/1000);
   return `正在评估这份需求至少需要多少条用例覆盖…${seconds?`（已等待 ${seconds} 秒，最长约 120 秒）`:''}`;
 }
-function renderAiForm(doc,notice){
+// continueFrom：从失败任务的"继续"进来，提交时带上该任务 ID，服务端接着那次探索继续，不重新探索。
+function renderAiForm(doc,notice,continueFrom){
   // 用例字段特意不叫 name="username"/"password"，且密码框用 type="text" +
   // -webkit-text-security 伪装遮罩：这些只是被测系统的测试账号，不是本机
   // 登录凭据，但字段名/类型撞上 Chrome 的登录表单识别规则后，提交时会触发
   // 它的"密码遭遇数据泄露"弹窗（表单没有真正提交/跳转也会触发，JS 端
   // preventDefault 拦不住）。换掉字段名和输入类型可以让 Chrome 从一开始就不
   // 把这当成登录密码框，从根上避免弹窗，同时视觉上仍然是圆点遮罩。
-  const est=aiEstimates.get(doc.ID),v=est?.values||{},done=est?.status==='done',running=est?.status==='running';
+  const est=aiFormState(doc,Boolean(continueFrom)),v=est?.values||{},done=est?.status==='done',running=est?.status==='running';
   const countField=done
     ?`<input name="caseCount" type="number" min="1" max="${AI_MAX_CASE_COUNT}" step="1" required value="${est.count}">`
     :`<input name="caseCount" type="number" disabled placeholder="点击“开始分析”后由 AI 评估">`;
@@ -559,9 +580,11 @@ function renderAiForm(doc,notice){
     :`<input name="reqCode" disabled placeholder="${savedCode?esc(savedCode):'点击“开始分析”后由 AI 建议'}">`;
   const estimateInfo=running?`<p class="meta" id="ai-estimate-status">${aiEstimateStatusText(est)}</p>`
     :done?`${est.notice?`<p class="meta">${esc(est.notice)}</p>`:''}${est.rationale?`<p class="meta ai-estimate-rationale">${esc(est.rationale)}</p>`:''}<p class="meta" id="ai-case-range">AI 将输出 ${aiCaseRange(est.count)} 条用例</p>`:'';
-  const actions=done?`<button type="button" class="secondary" id="ai-reestimate">重新评估</button><button type="submit">确认并开始设计</button>`
+  const actions=done?`${continueFrom?'':'<button type="button" class="secondary" id="ai-reestimate">重新评估</button>'}<button type="submit">${continueFrom?'继续设计':'确认并开始设计'}</button>`
     :`<button type="submit"${running?' disabled':''}>${running?'评估中…':'开始分析'}</button>`;
-  $('#ai-drawer-body').innerHTML=`${notice?`<p class="meta">${esc(notice)}</p>`:''}<form id="ai-form" autocomplete="off"><label>被测系统 URL<input name="baseUrl" required placeholder="https://test.example.com/login" autocomplete="off" value="${esc(v.baseUrl||'')}"></label><label>补充说明（可选）<textarea name="instructions" placeholder="覆盖范围、登录方式等">${esc(v.instructions||'')}</textarea></label><label>测试账号 · 用户名（可选）<input name="testAccount" autocomplete="off" value="${esc(v.testAccount||'')}"></label><label>测试账号 · 密码（可选）<input name="testSecret" type="text" class="fake-password" autocomplete="off" spellcheck="false" value="${esc(v.testSecret||'')}"></label><label>建议覆盖用例数量${countField}</label><label>需求缩写（用例编号 TC-<b id="ai-code-preview">${esc((done&&est.code)||savedCode||'XXX')}</b>-模块-类别-001）${codeField}</label><label>任务超时时间（分钟）<input name="timeoutMinutes" type="number" min="${AI_MIN_TIMEOUT_MIN}" max="${AI_MAX_TIMEOUT_MIN}" step="1" required value="${aiTimeoutMinutes()}"><small class="meta">探索时间取决于被测系统和用例数量；超时任务会以 JOB_TIMEOUT 失败，已产出的草稿不会保留。</small></label>${estimateInfo}<p class="drawer-actions">${actions}</p></form>`;
+  const continueCard=continueFrom?`<div class="card"><h3>继续上次中断的设计</h3><p class="meta">接着上次的探索往下做，不会从头再探索一遍；浏览器会重新打开被测系统。可以先调大下面的任务超时时间再继续。</p></div>`:'';
+  const restored=est?.restored&&!v.testSecret&&(v.baseUrl||v.testAccount)?'<p class="meta">已恢复上次提交的表单；测试账号密码没有保存在浏览器里，被测系统需要登录时请重新填写。</p>':'';
+  $('#ai-drawer-body').innerHTML=`${notice?`<p class="meta">${esc(notice)}</p>`:''}${continueCard}${restored}<form id="ai-form" autocomplete="off"><label>被测系统 URL<input name="baseUrl" required placeholder="https://test.example.com/login" autocomplete="off" value="${esc(v.baseUrl||'')}"></label><label>补充说明（可选）<textarea name="instructions" placeholder="覆盖范围、登录方式；也可以限制探索行为，例如：提交后确认任务已开始即可，不要等待任务运行完成">${esc(v.instructions||'')}</textarea><small class="meta">这里写的内容是硬性约束：AI 探索时会照做，被它挡住的验证会作为"未验证范围"返回，而不是绕开约束去试。</small></label><label>测试账号 · 用户名（可选）<input name="testAccount" autocomplete="off" value="${esc(v.testAccount||'')}"></label><label>测试账号 · 密码（可选）<input name="testSecret" type="text" class="fake-password" autocomplete="off" spellcheck="false" value="${esc(v.testSecret||'')}"></label><label>建议覆盖用例数量${countField}</label><label>需求缩写（用例编号 TC-<b id="ai-code-preview">${esc((done&&est.code)||savedCode||'XXX')}</b>-模块-类别-001）${codeField}</label><label>任务超时时间（分钟）<input name="timeoutMinutes" type="number" min="${AI_MIN_TIMEOUT_MIN}" max="${AI_MAX_TIMEOUT_MIN}" step="1" required value="${aiTimeoutMinutes()}"><small class="meta">探索时间取决于被测系统和用例数量；超时任务会以 JOB_TIMEOUT 失败，草稿不会保留，但已探索的内容留在服务端，可以点「继续」接着跑。</small></label>${estimateInfo}<p class="drawer-actions">${actions}</p></form>`;
   const form=$('#ai-form');
   // 评估期间/评估后继续编辑的表单内容同步进状态，重新渲染（关闭再打开抽屉）时保留。
   form.oninput=()=>{
@@ -577,7 +600,7 @@ function renderAiForm(doc,notice){
       cur.code=up;$('#ai-code-preview').textContent=up||'XXX';
     }
   };
-  if(done)$('#ai-reestimate').onclick=()=>runAiEstimate(doc,aiFormValues(form));
+  if(done&&!continueFrom)$('#ai-reestimate').onclick=()=>runAiEstimate(doc,aiFormValues(form));
   form.onsubmit=async e=>{
     e.preventDefault();
     const values=aiFormValues(form);
@@ -596,14 +619,21 @@ function renderAiForm(doc,notice){
       if(reqFocus?.type==='doc'&&reqFocus.id===doc.ID&&$('#req-doc-code'))$('#req-doc-code').textContent=code;
     }
     const {requirements,instructions}=aiRequirementPayload(doc,values,code);
-    const payload={requirements,target:{baseUrl:values.baseUrl},context:{instructions},caseCount,timeoutMs:timeoutMinutes*60000};
+    const payload={requirements,target:{baseUrl:values.baseUrl},context:{instructions},caseCount,timeoutMs:timeoutMinutes*60000,
+      ...(continueFrom?{continueFrom}:{})};
     if(values.testAccount||values.testSecret)payload.context.testData={username:values.testAccount||'',password:values.testSecret||''};
     try{
       const job=await serviceRequest('/api/planner/jobs',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
-      aiEstimates.delete(doc.ID);
+      // 提交过的表单留着（新对象，作废仍在跑的评估），失败后重试/继续可以直接用。
+      aiEstimates.set(doc.ID,{status:'done',count:caseCount,code,rationale:est?.rationale||'',values});
+      saveAiForm(doc,values,caseCount,code);
       localStorage.setItem(aiJobKey(doc),job.id);
       routeAiJob(doc,job);
-    }catch(err){toast(err.message,true);btn.disabled=false}
+    }catch(err){
+      toast(err.message,true);btn.disabled=false;
+      // 会话已清理、或这次中断已经被继续过：回到普通表单，别让人反复点一个已经失效的"继续"。
+      if(continueFrom&&err.status===409){localStorage.removeItem(aiJobKey(doc));renderAiForm(doc,'上次的任务已经无法继续，请重新开始设计。')}
+    }
   };
 }
 async function runAiEstimate(doc,values){
@@ -645,7 +675,9 @@ function routeAiJob(doc,job){
   }
   clearAiActive(doc);
   if(job.status==='succeeded')return handleAiSuccess(doc,job);
-  localStorage.removeItem(aiJobKey(doc));
+  // 失败的任务留在 localStorage 里：刷新或重开抽屉后仍能看到失败原因，并选择重试还是继续
+  // （continuable 的会话在服务端还留着）。取消的任务没什么可继续的，直接清掉。
+  if(job.status!=='failed')localStorage.removeItem(aiJobKey(doc));
   if(isAiDrawerOpen(doc))renderAiTerminal(doc,job);
 }
 function renderAiRunning(doc,job){
@@ -693,10 +725,14 @@ function ensureAiStream(doc,jobId){
     aiLogLine(`……${r.message||'更早的进度记录已丢失'}`);
   });
 }
+// 失败后有两条路：重试（同样的表单从头开始）和继续（服务端还留着这次的探索会话，接着往下做）。
+// 超时失败最值得"继续"——探索已经花掉的时间不用再花一遍。
 function renderAiTerminal(doc,job){
   const cancelled=job.status==='cancelled';
-  $('#ai-drawer-body').innerHTML=`<div class="card meta-grid"><span>状态 <b>${aiStageLabel(job)}</b></span></div>${job.error?`<p class="meta">${esc(job.error.code)}：${esc(job.error.message)}</p>`:cancelled?'<p class="meta">任务已取消。</p>':''}<p class="drawer-actions"><button type="button" id="ai-retry">重试</button></p>`;
-  $('#ai-retry').onclick=()=>renderAiForm(doc);
+  const hint=job.continuable?'<p class="meta">中断前的探索还留在服务端：「继续」接着往下做（可以先调大超时时间），「重试」用同样的表单从头开始。</p>':'';
+  $('#ai-drawer-body').innerHTML=`<div class="card meta-grid"><span>状态 <b>${aiStageLabel(job)}</b></span></div>${job.error?`<p class="meta">${esc(job.error.code)}：${esc(job.error.message)}</p>`:cancelled?'<p class="meta">任务已取消。</p>':''}${hint}<p class="drawer-actions"><button type="button"${job.continuable?' class="secondary"':''} id="ai-retry">重试</button>${job.continuable?'<button type="button" id="ai-continue">继续</button>':''}</p>`;
+  $('#ai-retry').onclick=()=>{localStorage.removeItem(aiJobKey(doc));renderAiForm(doc)};
+  if(job.continuable)$('#ai-continue').onclick=()=>renderAiForm(doc,'',job.id);
 }
 // 设计完成后自动创建"用例评审"目录并导入草稿用例，无需人工点击导入。
 async function handleAiSuccess(doc,job){

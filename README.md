@@ -92,6 +92,15 @@ http://<可访问的节点 IP>:30080
 探索耗时取决于被测系统和用例数量，服务端的固定默认值对大需求常常不够。实际生效的时限会显示在任务进行中的面板上，
 最终由 planner 服务按 `PLANNER_MAX_TIMEOUT_MS` 封顶。
 
+「补充说明」是给 planner 的硬性约束，不只是背景说明：可以限定覆盖范围，也可以限制探索行为（例如"提交后确认任务已开始即可，
+不要等待任务运行完成"——有些产品的任务要跑很久，干等会把整段时限耗光）。被约束挡住的验证会作为"未验证范围"返回，
+planner 不会绕开约束去试；同一段文字也会参与"建议覆盖用例数量"的评估。
+
+任务失败后抽屉给两个选择：「重试」用上次提交的表单从头开始，「继续」接着上次的探索往下做（planner 服务在失败任务上标了
+`continuable` 时才出现，超时失败最常见）。两条路都会带出上次提交的表单——URL、补充说明、测试账号、用例数量、需求缩写和超时
+时间都保存在浏览器里，刷新、关标签页后仍在，因此「继续」前可以先把超时时间调大。只有测试账号密码不写进浏览器存储，刷新后
+需要重填，表单里会提示。失败任务本身也留在浏览器里，刷新后重新打开抽屉仍能看到失败原因和这两个按钮。
+
 脚本生成对应 auto-test 的另一个独立服务：准备 `build/generator/setting.json` 后运行 `node server/generator/main.mjs`（默认 4502），CaseHub 通过 `CASEHUB_GENERATOR_URL` 连接。planner 和 generator 是两个进程，可以只启动其中一个；未配置时对应入口会提示服务未配置，其余功能不受影响。
 
 容器中的 localhost 指容器自身；如果 planner / generator 运行在另一容器或主机上，将 `CASEHUB_PLANNER_URL`、`CASEHUB_GENERATOR_URL` 配置为容器可访问的地址。
@@ -105,6 +114,8 @@ http://<可访问的节点 IP>:30080
 ## 回归验证
 
 运行 `go test ./...` 检查业务逻辑、静态资源和 Markdown 记录持久化。
+
+「AI 设计」抽屉的浏览器回归（评估、失败后保留表单、重试与继续）：`node tests/ai-design.cjs`，脚本自带一个假的 planner 服务（默认 127.0.0.1:4598，`CASEHUB_FAKE_PLANNER_PORT` 可改），不需要 auto-test 在场，也不调用模型；启动临时服务时把 `CASEHUB_PLANNER_URL` 指向它：`CASEHUB_STORE=memory PORT=18081 CASEHUB_PLANNER_URL=http://127.0.0.1:4598 go run .`。
 
 自动化管理与脚本生成的浏览器回归：`node tests/automation.cjs`，脚本自带一个假的 generator 服务（默认 127.0.0.1:4599，`CASEHUB_FAKE_GENERATOR_PORT` 可改），不需要 auto-test 在场，也不调用模型；启动临时服务时把 `CASEHUB_GENERATOR_URL` 指向它：`CASEHUB_STORE=memory PORT=18081 CASEHUB_GENERATOR_URL=http://127.0.0.1:4599 go run .`。
 
