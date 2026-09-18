@@ -164,12 +164,14 @@ async function runSimplify(c,isPending,rerender){
   }
 }
 
-function renderFocus(){if(!focus){updateEmptyHint();$('#empty').classList.remove('hidden');$('#detail').classList.add('hidden');return}$('#empty').classList.add('hidden');let d=$('#detail');d.classList.remove('hidden');if(focus.type==='folder'){let f=state.folders.find(x=>x.VersionID===focus.versionID&&x.ID===focus.id);if(!f){focus=null;return renderFocus()}let descendants=descendantFolders(f),count=cases(f.VersionID).filter(c=>c.FolderID===f.ID||descendants.includes(c.FolderID)).length;d.innerHTML=`<div class="detail-head"><div><div class="eyebrow">文件夹 · ${esc(version(f.VersionID).name)}</div><h1>📁 ${esc(f.Name)}</h1></div></div><div class="card meta-grid"><span>用例 <b>${count}</b></span><span>子文件夹 <b>${descendants.length}</b></span><span>创建者 <b>${esc(f.CreatedBy)}</b></span><span>创建时间 <b>${fmt(f.CreatedAt)}</b></span></div>`;return}let c=state.cases.find(x=>x.VersionID===focus.versionID&&x.ID===focus.id);if(!c){focus=null;return renderFocus()}let branch=!version(c.VersionID).mainline,h=state.histories.filter(x=>x.CaseID===c.ID&&x.VersionID===c.VersionID).slice().reverse();d.innerHTML=`<div class="detail-head"><div><div class="eyebrow">${esc(c.ID)} · ${esc(version(c.VersionID).name)} ${c.Dirty?'· 未合并':''}</div><h1>${esc(c.Title)}</h1></div><div class="detail-actions">${branch?'<button id="edit-case" class="secondary">编辑</button>':''}<button id="open-record">测试记录</button></div></div><div class="card case-detail"><div class="meta-grid case-meta"><span>优先级 <b>${esc(c.Priority||'未设置')}</b></span><span>当前结果 <b>${resultName(c.Result)}</b></span><span>更新者 <b>${esc(c.UpdatedBy)}</b></span><span>更新时间 <b>${fmt(c.UpdatedAt)}</b></span><span>基线版本 <b>r${c.BaseRevision||c.Revision}</b></span><button type="button" class="link-button version-toggle" id="case-version-toggle" aria-expanded="false"${h.length?'':' disabled'}>用例版本 <b>${esc(version(c.VersionID).name)}</b><small>${h.length?`${h.length} 条编辑历史 ▾`:'暂无编辑历史'}</small></button></div>${caseDetailBodyHTML(c,false)}${h.length?`<div class="history-list hidden" id="case-history-list">${h.map(x=>`<a class="history-row" href="#history=${encodeURIComponent(x.ID)}&amp;version=${encodeURIComponent(c.VersionID)}"><b>${historyAction(x.Action)}</b> · ${esc(x.Author)} <small>${fmt(x.CreatedAt)}${x.SourceVersionID?` · 来源 ${esc(version(x.SourceVersionID)?.name||x.SourceVersionID)}`:''}</small></a>`).join('')}</div>`:''}</div>`;$('#open-record').onclick=()=>openRecords(c);if(h.length)$('#case-version-toggle').onclick=()=>{let hidden=$('#case-history-list').classList.toggle('hidden');$('#case-version-toggle').setAttribute('aria-expanded',String(!hidden))};bindCaseDetailBody(d,c,false,renderFocus)}
+function renderFocus(){if(!focus){updateEmptyHint();$('#empty').classList.remove('hidden');$('#detail').classList.add('hidden');return}$('#empty').classList.add('hidden');let d=$('#detail');d.classList.remove('hidden');if(focus.type==='folder'){let f=state.folders.find(x=>x.VersionID===focus.versionID&&x.ID===focus.id);if(!f){focus=null;return renderFocus()}let descendants=descendantFolders(f),count=cases(f.VersionID).filter(c=>c.FolderID===f.ID||descendants.includes(c.FolderID)).length;d.innerHTML=`<div class="detail-head"><div><div class="eyebrow">文件夹 · ${esc(version(f.VersionID).name)}</div><h1>📁 ${esc(f.Name)}</h1></div></div><div class="card meta-grid"><span>用例 <b>${count}</b></span><span>子文件夹 <b>${descendants.length}</b></span>${f.Moved?'<span>状态 <b>已移动 · 未合并到主线</b></span>':''}<span>创建者 <b>${esc(f.CreatedBy)}</b></span><span>创建时间 <b>${fmt(f.CreatedAt)}</b></span></div>`;return}let c=state.cases.find(x=>x.VersionID===focus.versionID&&x.ID===focus.id);if(!c){focus=null;return renderFocus()}let branch=!version(c.VersionID).mainline,h=state.histories.filter(x=>x.CaseID===c.ID&&x.VersionID===c.VersionID).slice().reverse();d.innerHTML=`<div class="detail-head"><div><div class="eyebrow">${esc(c.ID)} · ${esc(version(c.VersionID).name)} ${c.Dirty?'· 未合并':''}</div><h1>${esc(c.Title)}</h1></div><div class="detail-actions">${branch?'<button id="edit-case" class="secondary">编辑</button>':''}<button id="open-record">测试记录</button></div></div><div class="card case-detail"><div class="meta-grid case-meta"><span>优先级 <b>${esc(c.Priority||'未设置')}</b></span><span>当前结果 <b>${resultName(c.Result)}</b></span><span>更新者 <b>${esc(c.UpdatedBy)}</b></span><span>更新时间 <b>${fmt(c.UpdatedAt)}</b></span><span>基线版本 <b>r${c.BaseRevision||c.Revision}</b></span><button type="button" class="link-button version-toggle" id="case-version-toggle" aria-expanded="false"${h.length?'':' disabled'}>用例版本 <b>${esc(version(c.VersionID).name)}</b><small>${h.length?`${h.length} 条编辑历史 ▾`:'暂无编辑历史'}</small></button></div>${caseDetailBodyHTML(c,false)}${h.length?`<div class="history-list hidden" id="case-history-list">${h.map(x=>`<a class="history-row" href="#history=${encodeURIComponent(x.ID)}&amp;version=${encodeURIComponent(c.VersionID)}"><b>${historyAction(x.Action)}</b> · ${esc(x.Author)} <small>${fmt(x.CreatedAt)}${x.SourceVersionID?` · 来源 ${esc(version(x.SourceVersionID)?.name||x.SourceVersionID)}`:''}</small></a>`).join('')}</div>`:''}</div>`;$('#open-record').onclick=()=>openRecords(c);if(h.length)$('#case-version-toggle').onclick=()=>{let hidden=$('#case-history-list').classList.toggle('hidden');$('#case-version-toggle').setAttribute('aria-expanded',String(!hidden))};bindCaseDetailBody(d,c,false,renderFocus)}
 function descendantFolders(f){let out=[];function walk(id){state.folders.filter(x=>x.VersionID===f.VersionID&&x.ParentID===id).forEach(x=>{out.push(x.ID);walk(x.ID)})}walk(f.ID);return out}
 function toggleSelect(v,id,on){if(!selected.has(v))selected.set(v,new Set());on?selected.get(v).add(id):selected.get(v).delete(id);updateBulk();updateFolderChecks()}
 function updateBulk(){let entries=[...selected.entries()].filter(([,s])=>s.size);let n=entries.reduce((x,[,s])=>x+s.size,0);$('#bulk').classList.toggle('hidden',!n);$('#selected-count').textContent=`已选 ${n} 项`;}
-function folderMenu(v,f){let branch=!version(v).mainline;if(!branch)return f==='root'?[['搜索',()=>openSearch(v,f)],['创建测试版本',versionModal],['复制飞书思维导图',()=>exportFeishuMindmap([{versionID:v,folderID:f}])]]:[['搜索',()=>openSearch(v,f)],['复制飞书思维导图',()=>exportFeishuMindmap([{versionID:v,folderID:f}])]];let items=[['查看详情',()=>setFocus({type:'folder',versionID:v,id:f})],['新建文件夹',()=>folderModal(v,f)],['新增用例',()=>caseModal(null,v,f)],['创建测试任务',()=>taskFromFolder(v,f)],['重命名空文件夹',()=>renameModal(v,f)],['搜索此目录',()=>openSearch(v,f)],['导出目录',()=>exportCases(v,f)],['复制飞书思维导图',()=>exportFeishuMindmap([{versionID:v,folderID:f}])]];if(f!=='root')items.push(['合并到主线',()=>mergeFolderModal(v,f)],['删除空文件夹',()=>{if(confirm('删除该空文件夹？'))act('deleteFolder',{VersionID:v,FolderID:f})}]);return items}
-function folderOptionsHTML(versionID){let fs=folders(versionID),roots=fs.filter(f=>!f.ParentID||!fs.some(x=>x.ID===f.ParentID));function node(f,depth){let children=fs.filter(x=>x.ParentID===f.ID);return `<option value="${f.ID}">${'　'.repeat(depth)}${esc(f.Name)}</option>`+children.map(ch=>node(ch,depth+1)).join('')}return roots.map(r=>node(r,0)).join('')}
+function folderMenu(v,f){let branch=!version(v).mainline;if(!branch)return f==='root'?[['搜索',()=>openSearch(v,f)],['创建测试版本',versionModal],['复制飞书思维导图',()=>exportFeishuMindmap([{versionID:v,folderID:f}])]]:[['搜索',()=>openSearch(v,f)],['复制飞书思维导图',()=>exportFeishuMindmap([{versionID:v,folderID:f}])]];let items=[['查看详情',()=>setFocus({type:'folder',versionID:v,id:f})],['新建文件夹',()=>folderModal(v,f)],['新增用例',()=>caseModal(null,v,f)],['创建测试任务',()=>taskFromFolder(v,f)],['重命名空文件夹',()=>renameModal(v,f)],['搜索此目录',()=>openSearch(v,f)],['导出目录',()=>exportCases(v,f)],['复制飞书思维导图',()=>exportFeishuMindmap([{versionID:v,folderID:f}])]];if(f!=='root')items.push(['移动到…',()=>moveFolderModal(v,f)],['合并到主线',()=>mergeFolderModal(v,f)],['删除空文件夹',()=>{if(confirm('删除该空文件夹？'))act('deleteFolder',{VersionID:v,FolderID:f})}]);return items}
+function folderOptionsHTML(versionID,exclude=''){let fs=folders(versionID),roots=fs.filter(f=>!f.ParentID||!fs.some(x=>x.ID===f.ParentID));function node(f,depth){if(f.ID===exclude)return '';let children=fs.filter(x=>x.ParentID===f.ID);return `<option value="${f.ID}">${'　'.repeat(depth)}${esc(f.Name)}</option>`+children.map(ch=>node(ch,depth+1)).join('')}return roots.map(r=>node(r,0)).join('')}
+// 移动文件夹：目标下拉里去掉自身及其子文件夹。测试版本中的移动在合并到主线时同步到主线。
+function moveFolderModal(v,f){const folder=state.folders.find(x=>x.VersionID===v&&x.ID===f);showModal('移动文件夹',`<p class="meta">将「${esc(folder?.Name||'')}」连同其中的子文件夹和用例移动到：</p><label>目标文件夹<select name="TargetFolderID">${folderOptionsHTML(v,f)}</select></label>`,x=>act('moveFolder',{VersionID:v,FolderID:f,TargetFolderID:x.TargetFolderID}))}
 function targetFolderModal(title,versionID,onSubmit){showModal(title,`<label>目标文件夹<select name="TargetFolderID">${folderOptionsHTML(versionID)}</select></label>`,x=>onSubmit(x.TargetFolderID))}
 function mergeFolderModal(v,f){targetFolderModal('合并到主线','main',id=>act('mergeFolder',{VersionID:v,FolderID:f,TargetFolderID:id}))}
 function mergeCasesModal(v,ids){targetFolderModal('合并到主线','main',id=>act('mergeCases',{VersionID:v,CaseIDs:ids,TargetFolderID:id}))}
@@ -408,7 +410,7 @@ function renderReqFocus(){
     $('#delete-review-case').onclick=()=>{if(confirm('确定删除这条待评审用例？'))actReview('deletePendingCase',{CaseID:c.ID})};
     $('#approve-review-case').onclick=()=>actReview('reviewPendingCase',{CaseID:c.ID,Review:'passed'});
     $('#reject-review-case').onclick=()=>actReview('reviewPendingCase',{CaseID:c.ID,Review:'rejected'});
-    $('#import-review-case').onclick=()=>importReviewModal([c.ID]);
+    $('#import-review-case').onclick=()=>importReviewModal([c.ID],c.FolderID);
     bindCaseDetailBody(d,c,true,renderReqFocus);
     return;
   }
@@ -757,7 +759,7 @@ function pendingRoots(){return state.pendingFolders.filter(f=>!f.ParentID||!stat
 function pendingDescendantFolders(f){let out=[];function walk(id){pendingChildren(id).forEach(x=>{out.push(x.ID);walk(x.ID)})}walk(f.ID);return out}
 function reviewBadge(c){return c.Review==='passed'?'<span class="result passed" title="评审通过"></span>':c.Review==='rejected'?'<span class="result failed" title="评审不通过"></span>':''}
 // 用例评审树的多选（批量删除）：勾选用例或文件夹（=其下全部用例），顶部批量栏显示已选数量。
-const reviewSelected=new Set();
+const reviewSelected=new Set(), reviewPickedFolders=new Set(); // 勾选过的文件夹：批量导入时用来确定保留的最上层目录
 function reviewCaseRow(c,depth){return `<div class="tree-row case-row" style="padding-left:${8+depth*17}px" data-review-case="${c.ID}" title="${esc(caseLabel(c))}"><input class="review-case-check" type="checkbox" ${reviewSelected.has(c.ID)?'checked':''}><span class="label">${esc(caseLabel(c))}</span>${reviewBadge(c)}</div>`}
 function reviewTreeHTML(){
   function node(f,depth){
@@ -769,6 +771,7 @@ function reviewTreeHTML(){
 function renderReviewTree(){
   const alive=new Set(state.pendingCases.map(c=>c.ID));
   for(const id of [...reviewSelected])if(!alive.has(id))reviewSelected.delete(id); // 已被删除/导入的不再算已选
+  for(const id of [...reviewPickedFolders])if(!pendingFolder(id))reviewPickedFolders.delete(id);
   const box=$('#review-tree');box.innerHTML=reviewTreeHTML();bindReviewTree(box);updateReviewBulk();
 }
 function updateReviewBulk(){
@@ -781,7 +784,22 @@ function updateReviewBulk(){
   });
   $$('#review-tree .review-case-check').forEach(cb=>cb.checked=reviewSelected.has(cb.closest('[data-review-case]').dataset.reviewCase));
 }
-$('#review-bulk [data-review-bulk="clear"]').onclick=()=>{reviewSelected.clear();updateReviewBulk()};
+$('#review-bulk [data-review-bulk="clear"]').onclick=()=>{reviewSelected.clear();reviewPickedFolders.clear();updateReviewBulk()};
+// 批量导入的来源层：优先取勾选过、且恰好覆盖全部已选用例的最上层文件夹（保留该文件夹本身）；
+// 否则取已选用例所在文件夹的最近公共祖先（保留该层）；只选了一条用例时直接放进父目录。
+function reviewImportSource(ids){
+  const sel=new Set(ids);
+  const covering=[...reviewPickedFolders].filter(fid=>{const inside=pendingCaseIdsIn(fid);return inside.length&&inside.every(id=>sel.has(id))&&ids.every(id=>inside.includes(id))});
+  const ancestors=fid=>{const out=[];for(let id=fid,g=0;id&&g<200;g++){out.unshift(id);if(id==='pending-root')break;id=pendingFolder(id)?.ParentID||'pending-root'}return out};
+  if(covering.length){const top=covering.map(ancestors).sort((a,b)=>a.length-b.length)[0];return pendingParentOf(top[top.length-1])}
+  const folderOf=id=>state.pendingCases.find(c=>c.ID===id)?.FolderID||'pending-root';
+  if(ids.length===1)return folderOf(ids[0]);
+  const paths=ids.map(id=>ancestors(folderOf(id)));
+  let lca='pending-root';
+  for(let i=0;i<paths[0].length&&paths.every(p=>p[i]===paths[0][i]);i++)lca=paths[0][i];
+  return pendingParentOf(lca);
+}
+$('#review-bulk [data-review-bulk="import"]').onclick=()=>{const ids=[...reviewSelected];if(ids.length)importReviewModal(ids,reviewImportSource(ids))};
 $('#review-bulk [data-review-bulk="delete"]').onclick=async()=>{
   const ids=[...reviewSelected];
   if(!ids.length||!confirm(`确定删除选中的 ${ids.length} 条待评审用例？删除后无法恢复。`))return;
@@ -790,7 +808,7 @@ $('#review-bulk [data-review-bulk="delete"]').onclick=async()=>{
   toast(`已删除 ${ids.length} 条待评审用例`);
 };
 function bindReviewTree(root){
-  root.querySelectorAll('[data-review-folder]').forEach(e=>{let key=e.dataset.reviewFolder;if(closedReviewFolders.has(key))e.classList.add('closed');e.querySelector('.chev').onclick=x=>{x.stopPropagation();let closed=e.classList.toggle('closed');closed?closedReviewFolders.add(key):closedReviewFolders.delete(key)};const fc=e.querySelector('.review-folder-check');fc.onclick=x=>{x.stopPropagation();pendingCaseIdsIn(e.dataset.reviewFolder).forEach(id=>fc.checked?reviewSelected.add(id):reviewSelected.delete(id));updateReviewBulk()};e.onclick=()=>setReqFocus({type:'reviewFolder',id:e.dataset.reviewFolder});e.oncontextmenu=x=>menu(x,reviewFolderMenu(e.dataset.reviewFolder))});
+  root.querySelectorAll('[data-review-folder]').forEach(e=>{let key=e.dataset.reviewFolder;if(closedReviewFolders.has(key))e.classList.add('closed');e.querySelector('.chev').onclick=x=>{x.stopPropagation();let closed=e.classList.toggle('closed');closed?closedReviewFolders.add(key):closedReviewFolders.delete(key)};const fc=e.querySelector('.review-folder-check');fc.onclick=x=>{x.stopPropagation();const fid=e.dataset.reviewFolder;fc.checked?reviewPickedFolders.add(fid):reviewPickedFolders.delete(fid);pendingCaseIdsIn(fid).forEach(id=>fc.checked?reviewSelected.add(id):reviewSelected.delete(id));updateReviewBulk()};e.onclick=()=>setReqFocus({type:'reviewFolder',id:e.dataset.reviewFolder});e.oncontextmenu=x=>menu(x,reviewFolderMenu(e.dataset.reviewFolder))});
   root.querySelectorAll('[data-review-case]').forEach(e=>{const cb=e.querySelector('.review-case-check');cb.onclick=x=>{x.stopPropagation();cb.checked?reviewSelected.add(e.dataset.reviewCase):reviewSelected.delete(e.dataset.reviewCase);updateReviewBulk()};e.onclick=()=>setReqFocus({type:'reviewCase',id:e.dataset.reviewCase});e.oncontextmenu=x=>menu(x,reviewCaseMenu(e.dataset.reviewCase))});
 }
 function pendingCaseIdsIn(folderId){
@@ -798,18 +816,43 @@ function pendingCaseIdsIn(folderId){
   const scope=f?[f.ID,...pendingDescendantFolders(f)]:[folderId];
   return state.pendingCases.filter(c=>scope.includes(c.FolderID)).map(c=>c.ID);
 }
-function reviewFolderMenu(id){const items=[['查看详情',()=>setReqFocus({type:'reviewFolder',id})],['新建文件夹',()=>pendingFolderModal(id)],['新增用例',()=>pendingCaseModal(null,id)],['导入到版本…',()=>importReviewModal(pendingCaseIdsIn(id))],['重命名空文件夹',()=>renamePendingFolderModal(id)]];if(id!=='pending-root')items.push(['删除空文件夹',()=>{if(confirm('确定删除这个空文件夹？'))actReview('deletePendingFolder',{FolderID:id})}]);return items}
-function reviewCaseMenu(id){return [['查看详情',()=>setReqFocus({type:'reviewCase',id})],['编辑',()=>{const c=state.pendingCases.find(x=>x.ID===id);startCaseEdit(c,true,'case');setReqFocus({type:'reviewCase',id})}],['导入到版本…',()=>importReviewModal([id])],['删除',()=>{if(confirm('确定删除这条待评审用例？'))actReview('deletePendingCase',{CaseID:id})}],['评审通过',()=>actReview('reviewPendingCase',{CaseID:id,Review:'passed'})],['评审不通过',()=>actReview('reviewPendingCase',{CaseID:id,Review:'rejected'})]]}
+function reviewFolderMenu(id){const items=[['查看详情',()=>setReqFocus({type:'reviewFolder',id})],['新建文件夹',()=>pendingFolderModal(id)],['新增用例',()=>pendingCaseModal(null,id)],['导入到版本…',()=>importReviewModal(pendingCaseIdsIn(id),pendingParentOf(id))],['重命名空文件夹',()=>renamePendingFolderModal(id)]];if(id!=='pending-root')items.push(['移动到…',()=>movePendingFolderModal(id)],['删除空文件夹',()=>{if(confirm('确定删除这个空文件夹？'))actReview('deletePendingFolder',{FolderID:id})}]);return items}
+function pendingFolderOptionsHTML(exclude=''){
+  const node=(f,depth)=>f.ID===exclude?'':`<option value="${f.ID}">${'　'.repeat(depth)}${esc(f.Name)}</option>`+pendingChildren(f.ID).map(ch=>node(ch,depth+1)).join('');
+  return pendingRoots().map(r=>node(r,0)).join('');
+}
+function movePendingFolderModal(id){const f=pendingFolder(id);showModal('移动文件夹',`<p class="meta">将「${esc(f?.Name||'')}」连同其中的子文件夹和用例移动到：</p><label>目标文件夹<select name="TargetFolderID">${pendingFolderOptionsHTML(id)}</select></label>`,x=>actReview('movePendingFolder',{FolderID:id,TargetFolderID:x.TargetFolderID}))}
+function reviewCaseMenu(id){return [['查看详情',()=>setReqFocus({type:'reviewCase',id})],['编辑',()=>{const c=state.pendingCases.find(x=>x.ID===id);startCaseEdit(c,true,'case');setReqFocus({type:'reviewCase',id})}],['导入到版本…',()=>importReviewModal([id],state.pendingCases.find(x=>x.ID===id)?.FolderID)],['删除',()=>{if(confirm('确定删除这条待评审用例？'))actReview('deletePendingCase',{CaseID:id})}],['评审通过',()=>actReview('reviewPendingCase',{CaseID:id,Review:'passed'})],['评审不通过',()=>actReview('reviewPendingCase',{CaseID:id,Review:'rejected'})]]}
 function pendingFolderModal(parent){showModal('新建文件夹',`<label>文件夹名称<input name="Name" required></label>`,x=>actReview('createPendingFolder',{...x,ParentID:parent}))}
 function renamePendingFolderModal(id){const f=pendingFolder(id);showModal('重命名文件夹',`<label>文件夹名称<input name="Name" required value="${esc(f.Name)}"></label>`,x=>actReview('renamePendingFolder',{...x,FolderID:id}))}
 function pendingCaseModal(c,folderId){folderId=c?.FolderID||folderId;showModal(c?'编辑待评审用例':'新增待评审用例',`<label>标题<input name="Title" required value="${esc(c?.Title||'')}"></label><label>优先级<select name="Priority">${['P0','P1','P2','P3'].map(x=>`<option ${c?.Priority===x?'selected':''}>${x}</option>`).join('')}</select></label><label>用例描述（评审时人工填写，可选）<textarea name="Description">${esc(c?.Description||'')}</textarea></label><label>前置条件<textarea name="Preconditions">${esc(c?.Preconditions||'')}</textarea></label><label>执行步骤<textarea name="Steps">${esc(c?.Steps||'')}</textarea></label><label>预期结果<textarea name="Expected">${esc(c?.Expected||'')}</textarea></label>`,x=>actReview(c?'editPendingCase':'createPendingCase',{...x,FolderID:folderId,CaseID:c?.ID||''}))}
-function importReviewModal(caseIds){
+// 导入到版本：可选目标版本和父目录（默认"全部用例"）。sourceFolderID 是评审区里"映射到父目录"的那一层，
+// 它下面的子目录原样重建：评审区 A/B/C/D 勾选 B 导入时 sourceFolderID=A，结果为 <父目录>/B/C/D；
+// 单条用例用其所在文件夹作来源，直接放进父目录。
+const pendingParentOf=id=>id==='pending-root'?'pending-root':(pendingFolder(id)?.ParentID||'pending-root');
+function pendingPathNames(fromExclusive,folderID){
+  const names=[];
+  for(let id=folderID,guard=0;id&&id!==fromExclusive&&guard<200;guard++){const f=pendingFolder(id);if(!f||f.ID==='pending-root')break;names.unshift(f.Name);id=f.ParentID}
+  return names;
+}
+function folderPathNames(versionID,folderID){
+  const names=[];
+  for(let id=folderID,guard=0;id&&guard<200;guard++){const f=state.folders.find(x=>x.VersionID===versionID&&x.ID===id);if(!f)break;names.unshift(f.Name);id=f.ParentID}
+  return names;
+}
+function importReviewModal(caseIds,sourceFolderID='pending-root'){
   if(!caseIds.length)return toast('该范围内没有待评审用例',true);
   const unreviewed=state.pendingCases.filter(c=>caseIds.includes(c.ID)&&c.Review!=='passed');
   if(unreviewed.length)return toast(`还有 ${unreviewed.length} 条用例未通过评审，无法导入`,true);
   const branches=state.versions.filter(v=>!v.mainline);
   if(!branches.length)return toast('请先创建一个测试版本作为导入目标',true);
-  showModal('导入到版本',`<label>目标版本<select name="VersionID">${branches.map(v=>`<option value="${v.id}">${esc(v.name)}</option>`).join('')}</select></label><p class="meta">将导入 ${caseIds.length} 条已评审通过的用例，并保持目录结构。</p>`,x=>act('importPendingCases',{...x,CaseIDs:caseIds}).then(()=>{reqFocus=null;renderReqFocus();toast('已导入到目标版本')}))
+  const sample=state.pendingCases.find(c=>c.ID===caseIds[0]);
+  showModal('导入到版本',`<label>目标版本<select name="VersionID">${branches.map(v=>`<option value="${v.id}">${esc(v.name)}</option>`).join('')}</select></label><label>父目录<select name="TargetFolderID"></select></label><p class="meta">将导入 ${caseIds.length} 条已评审通过的用例，保持目录结构放到所选父目录下。</p><p class="meta" id="import-path-preview"></p>`,
+    x=>act('importPendingCases',{VersionID:x.VersionID,TargetFolderID:x.TargetFolderID,SourceFolderID:sourceFolderID,CaseIDs:caseIds}).then(()=>{reqFocus=null;renderReqFocus();toast('已导入到目标版本')}));
+  const vSel=$('#modal-body [name="VersionID"]'),fSel=$('#modal-body [name="TargetFolderID"]');
+  const preview=()=>{$('#import-path-preview').textContent=sample?`例如「${sample.Title}」将放在：${[...folderPathNames(vSel.value,fSel.value),...pendingPathNames(sourceFolderID,sample.FolderID)].join(' / ')}`:''};
+  const fill=()=>{fSel.innerHTML=folderOptionsHTML(vSel.value);fSel.value='root';preview()};
+  vSel.onchange=fill;fSel.onchange=preview;fill();
 }
 $$('#req-sidebar [data-reqview]').forEach(b=>b.onclick=()=>{
   $$('#req-sidebar [data-reqview]').forEach(x=>x.classList.toggle('active',x===b));

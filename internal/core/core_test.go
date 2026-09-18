@@ -969,3 +969,153 @@ func TestDeletePendingCasesInBulk(t *testing.T) {
 		t.Fatalf("expected only %s to remain, got %+v", ids[1], st.PendingCases)
 	}
 }
+
+func folderParent(t *testing.T, state core.State, versionID, id string) string {
+	t.Helper()
+	for _, f := range state.Folders {
+		if f.VersionID == versionID && f.ID == id {
+			return f.ParentID
+		}
+	}
+	t.Fatalf("folder %s not found in %s", id, versionID)
+	return ""
+}
+
+func TestMoveFolderInBranchMergesAndSyncs(t *testing.T) {
+	svc := core.NewService(store.NewMemory())
+	a := branchID(t, apply(t, svc, core.Action{Type: "createVersion", Name: "A", Author: "alice"}), "A")
+	state := apply(t, svc, core.Action{Type: "createFolder", VersionID: a, ParentID: "root", Name: "支付", Author: "alice"})
+	pay := folderID(t, state, a, "支付")
+	apply(t, svc, core.Action{Type: "merge", VersionID: a, Author: "alice"})
+	b := branchID(t, apply(t, svc, core.Action{Type: "createVersion", Name: "B", Author: "bob"}), "B")
+
+	for _, bad := range []core.Action{
+		{Type: "moveFolder", VersionID: "main", FolderID: "auth", TargetFolderID: pay},
+		{Type: "moveFolder", VersionID: a, FolderID: "root", TargetFolderID: pay},
+		{Type: "moveFolder", VersionID: a, FolderID: pay, TargetFolderID: pay},
+		{Type: "moveFolder", VersionID: a, FolderID: "auth", TargetFolderID: "nope"},
+	} {
+		if _, err := svc.Apply(context.Background(), bad); err == nil {
+			t.Fatalf("move must be rejected: %+v", bad)
+		}
+	}
+	state = apply(t, svc, core.Action{Type: "moveFolder", VersionID: a, FolderID: "auth", TargetFolderID: pay, Author: "alice"})
+	if folderParent(t, state, a, "auth") != pay || folderParent(t, state, "main", "auth") != "root" {
+		t.Fatal("move must only affect the branch until merged")
+	}
+	if _, err := svc.Apply(context.Background(), core.Action{Type: "moveFolder", VersionID: a, FolderID: pay, TargetFolderID: "auth"}); err == nil {
+		t.Fatal("moving a folder under its own descendant must be rejected")
+	}
+	state = apply(t, svc, core.Action{Type: "merge", VersionID: a, Author: "alice"})
+	if folderParent(t, state, "main", "auth") != pay {
+		t.Fatal("merge must carry the folder move to mainline")
+	}
+	for _, f := range state.Folders {
+		if f.Moved {
+			t.Fatalf("merge must clear Moved flags: %+v", f)
+		}
+	}
+	// B never moved auth, so sync follows mainline
+	state = apply(t, svc, core.Action{Type: "sync", VersionID: b, Author: "bob"})
+	if folderParent(t, state, b, "auth") != pay {
+		t.Fatal("sync must adopt mainline folder moves for folders the branch did not move")
+	}
+	// B moves auth back to root; syncing again keeps the branch's own move, merging carries it
+	apply(t, svc, core.Action{Type: "moveFolder", VersionID: b, FolderID: "auth", TargetFolderID: "root", Author: "bob"})
+	state = apply(t, svc, core.Action{Type: "sync", VersionID: b, Author: "bob"})
+	if folderParent(t, state, b, "auth") != "root" {
+		t.Fatal("sync must not undo a branch's own folder move")
+	}
+	state = apply(t, svc, core.Action{Type: "merge", VersionID: b, Author: "bob"})
+	if folderParent(t, state, "main", "auth") != "root" {
+		t.Fatal("second merge must carry B's move")
+	}
+}
+
+func TestMovePendingFolderAndImportIntoChosenParent(t *testing.T) {
+	svc := core.NewService(store.NewMemory())
+	pending := func(parent, name string) string {
+		st := apply(t, svc, core.Action{Type: "createPendingFolder", ParentID: parent, Name: name, Author: "pat"})
+		for _, f := range st.PendingFolders {
+			if f.ParentID == parent && f.Name == name {
+				return f.ID
+			}
+		}
+		t.Fatalf("pending folder %s not created", name)
+		return ""
+	}
+	fa := pending("pending-root", "A")
+	fb := pending(fa, "B")
+	fc := pending(fb, "C")
+	fd := pending(fc, "D")
+	other := pending("pending-root", "其他")
+	var ids []string
+	for _, x := range []struct{ folder, title string }{{fb, "b1"}, {fd, "d1"}, {fa, "a1"}} {
+		st := apply(t, svc, core.Action{Type: "createPendingCase", FolderID: x.folder, Title: x.title, Author: "pat"})
+		id := st.PendingCases[len(st.PendingCases)-1].ID
+		ids = append(ids, id)
+		apply(t, svc, core.Action{Type: "reviewPendingCase", CaseID: id, Review: "passed", Author: "bob"})
+	}
+
+	// movePendingFolder validation and effect
+	if _, err := svc.Apply(context.Background(), core.Action{Type: "movePendingFolder", FolderID: fb, TargetFolderID: fd}); err == nil {
+		t.Fatal("moving a review folder under its descendant must be rejected")
+	}
+	if _, err := svc.Apply(context.Background(), core.Action{Type: "movePendingFolder", FolderID: "pending-root", TargetFolderID: fa}); err == nil {
+		t.Fatal("the review root must not move")
+	}
+	st := apply(t, svc, core.Action{Type: "movePendingFolder", FolderID: other, TargetFolderID: fa, Author: "pat"})
+	for _, f := range st.PendingFolders {
+		if f.ID == other && f.ParentID != fa {
+			t.Fatalf("pending folder was not moved: %+v", f)
+		}
+	}
+
+	branch := branchID(t, apply(t, svc, core.Action{Type: "createVersion", Name: "迭代", Author: "bob"}), "迭代")
+	st = apply(t, svc, core.Action{Type: "createFolder", VersionID: branch, ParentID: "root", Name: "目标", Author: "bob"})
+	target := folderID(t, st, branch, "目标")
+
+	if _, err := svc.Apply(context.Background(), core.Action{Type: "importPendingCases", VersionID: branch, CaseIDs: []string{ids[1]}, SourceFolderID: fa, TargetFolderID: "nope"}); err == nil {
+		t.Fatal("an unknown target folder must be rejected")
+	}
+	if _, err := svc.Apply(context.Background(), core.Action{Type: "importPendingCases", VersionID: branch, CaseIDs: []string{ids[0], ids[1]}, SourceFolderID: fc, TargetFolderID: target}); err == nil {
+		t.Fatal("cases outside the source folder must be rejected")
+	}
+	// Review tree A/B/C/D, B ticked: the source is B's parent A, so it lands as <target>/B/C/D.
+	apply(t, svc, core.Action{Type: "importPendingCases", VersionID: branch, CaseIDs: []string{ids[0], ids[1]}, SourceFolderID: fa, TargetFolderID: target, Author: "bob"})
+	// A single case imported with its own folder as source goes straight into the target.
+	apply(t, svc, core.Action{Type: "importPendingCases", VersionID: branch, CaseIDs: []string{ids[2]}, SourceFolderID: fa, TargetFolderID: target, Author: "bob"})
+	st, _ = svc.State(context.Background())
+	path := func(folder string) string {
+		var names []string
+		for id, steps := folder, 0; id != "" && steps < 20; steps++ {
+			parent, found := "", false
+			for _, f := range st.Folders {
+				if f.VersionID == branch && f.ID == id {
+					names = append([]string{f.Name}, names...)
+					parent, found = f.ParentID, true
+				}
+			}
+			if !found {
+				break
+			}
+			id = parent
+		}
+		return strings.Join(names, "/")
+	}
+	got := map[string]string{}
+	for _, c := range st.Cases {
+		if c.VersionID == branch {
+			got[c.Title] = path(c.FolderID)
+		}
+	}
+	want := map[string]string{"b1": "全部用例/目标/B", "d1": "全部用例/目标/B/C/D", "a1": "全部用例/目标"}
+	for title, p := range want {
+		if got[title] != p {
+			t.Fatalf("imported paths = %v, want %v", got, want)
+		}
+	}
+	if _, err := svc.Apply(context.Background(), core.Action{Type: "importPendingCases", VersionID: branch, SourceFolderID: fa}); err == nil {
+		t.Fatal("importing the whole review area with a source folder must be rejected")
+	}
+}

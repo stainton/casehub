@@ -1,7 +1,7 @@
 <!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>CaseHub · API 文档</title><link rel="stylesheet" href="/web/style.css"><link rel="stylesheet" href="/web/overrides.css"></head>
 <body class="docs-page"><header class="topbar"><div class="brand"><span class="mark">C</span><strong>CaseHub · API 文档</strong></div><div class="header-actions"><a class="header-link" href="/">返回用例管理</a><button class="icon-button" id="theme" title="切换主题">◐</button></div></header>
-<div class="api-layout"><nav class="api-nav" aria-label="API 文档导航"><strong>API 文档目录</strong><a href="#state">读取状态</a><a href="#action">执行操作</a><div class="api-operation-links"><a href="#createVersion">创建测试版本<small>createVersion</small></a><a href="#createFolder">新建文件夹<small>createFolder</small></a><a href="#renameFolder">重命名空文件夹<small>renameFolder</small></a><a href="#createCase">新增用例<small>createCase</small></a><a href="#editCase">编辑用例<small>editCase</small></a><a href="#saveRecord">保存测试记录草稿<small>saveRecord</small></a><a href="#submitRecord">提交测试记录<small>submitRecord</small></a><a href="#createTask">创建测试任务<small>createTask</small></a><a href="#sync">拉取主线更新<small>sync</small></a><a href="#merge">合并到主线（整版本）<small>merge</small></a><a href="#mergeFolder">合并文件夹到主线<small>mergeFolder</small></a><a href="#mergeCases">合并用例到主线（平铺）<small>mergeCases</small></a><a href="#deleteFolder">删除空文件夹<small>deleteFolder</small></a><a href="#moveCases">批量移动用例<small>moveCases</small></a><a href="#createPendingFolder">新建待评审文件夹<small>createPendingFolder</small></a><a href="#renamePendingFolder">重命名空待评审文件夹<small>renamePendingFolder</small></a><a href="#createPendingCase">新增待评审用例<small>createPendingCase</small></a><a href="#editPendingCase">编辑待评审用例<small>editPendingCase</small></a><a href="#setReqDocCode">设置需求缩写<small>setReqDocCode</small></a><a href="#describePendingCase">填写待评审用例描述<small>describePendingCase</small></a><a href="#deletePendingCase">删除待评审用例<small>deletePendingCase</small></a><a href="#deletePendingCases">批量删除待评审用例<small>deletePendingCases</small></a><a href="#reviewPendingCase">评审用例<small>reviewPendingCase</small></a><a href="#importPendingCases">导入已评审用例<small>importPendingCases</small></a></div><a href="#planner">AI 设计代理</a><a href="#errors">响应与错误</a></nav><main class="api-docs"><h1>后端 API</h1><p class="meta">当前服务器提供两个 JSON 接口。相对地址与网站同源，目前未启用身份认证。</p>
+<div class="api-layout"><nav class="api-nav" aria-label="API 文档导航"><strong>API 文档目录</strong><a href="#state">读取状态</a><a href="#action">执行操作</a><div class="api-operation-links"><a href="#createVersion">创建测试版本<small>createVersion</small></a><a href="#createFolder">新建文件夹<small>createFolder</small></a><a href="#renameFolder">重命名空文件夹<small>renameFolder</small></a><a href="#createCase">新增用例<small>createCase</small></a><a href="#editCase">编辑用例<small>editCase</small></a><a href="#saveRecord">保存测试记录草稿<small>saveRecord</small></a><a href="#submitRecord">提交测试记录<small>submitRecord</small></a><a href="#createTask">创建测试任务<small>createTask</small></a><a href="#sync">拉取主线更新<small>sync</small></a><a href="#merge">合并到主线（整版本）<small>merge</small></a><a href="#mergeFolder">合并文件夹到主线<small>mergeFolder</small></a><a href="#mergeCases">合并用例到主线（平铺）<small>mergeCases</small></a><a href="#deleteFolder">删除空文件夹<small>deleteFolder</small></a><a href="#moveCases">批量移动用例<small>moveCases</small></a><a href="#moveFolder">移动文件夹<small>moveFolder</small></a><a href="#createPendingFolder">新建待评审文件夹<small>createPendingFolder</small></a><a href="#renamePendingFolder">重命名空待评审文件夹<small>renamePendingFolder</small></a><a href="#createPendingCase">新增待评审用例<small>createPendingCase</small></a><a href="#editPendingCase">编辑待评审用例<small>editPendingCase</small></a><a href="#setReqDocCode">设置需求缩写<small>setReqDocCode</small></a><a href="#movePendingFolder">移动待评审文件夹<small>movePendingFolder</small></a><a href="#describePendingCase">填写待评审用例描述<small>describePendingCase</small></a><a href="#deletePendingCase">删除待评审用例<small>deletePendingCase</small></a><a href="#deletePendingCases">批量删除待评审用例<small>deletePendingCases</small></a><a href="#reviewPendingCase">评审用例<small>reviewPendingCase</small></a><a href="#importPendingCases">导入已评审用例<small>importPendingCases</small></a></div><a href="#planner">AI 设计代理</a><a href="#errors">响应与错误</a></nav><main class="api-docs"><h1>后端 API</h1><p class="meta">当前服务器提供两个 JSON 接口。相对地址与网站同源，目前未启用身份认证。</p>
 <section class="card" id="state"><h2>GET <code>/api/state</code></h2><p>读取完整状态，无请求参数。首次访问时初始化示例主线。</p><a href="/api/state" target="_blank" rel="noopener">查看当前 JSON 状态 ↗</a><pre><code>{
   "mainRevision": 1,
   "versions": [],
@@ -99,6 +99,12 @@
     &quot;CASE-0002&quot;
   ],
   &quot;TargetFolderID&quot;: &quot;主线目标文件夹ID&quot;
+}</code></pre></details><details class="card" id="moveFolder"><summary><code>moveFolder</code> · 移动文件夹</summary><p>仅测试版本。连同子文件夹和用例一起移动到 TargetFolderID 下；根目录不能移动，不能移动到自身或其子文件夹下。移动在「合并到主线」（merge）时同步到主线；「拉取主线」（sync）时，本版本未移动过的文件夹会跟随主线的移动。</p><pre><code>{
+  &quot;Type&quot;: &quot;moveFolder&quot;,
+  &quot;Author&quot;: &quot;本地用户&quot;,
+  &quot;VersionID&quot;: &quot;版本ID&quot;,
+  &quot;FolderID&quot;: &quot;auth&quot;,
+  &quot;TargetFolderID&quot;: &quot;目标文件夹ID&quot;
 }</code></pre></details><details class="card" id="deleteFolder"><summary><code>deleteFolder</code> · 删除空文件夹</summary><p>仅允许删除分支内没有子目录和用例的空文件夹；不能删除根目录 root。主线不能创建目录，因此也没有对应的删除接口。</p><pre><code>{
   &quot;Type&quot;: &quot;deleteFolder&quot;,
   &quot;Author&quot;: &quot;本地用户&quot;,
@@ -143,6 +149,11 @@
   &quot;Steps&quot;: &quot;发起退款&quot;,
   &quot;Expected&quot;: &quot;退款到账&quot;,
   &quot;Description&quot;: &quot;评审时人工填写的用例描述（可选）&quot;
+}</code></pre></details><details class="card" id="movePendingFolder"><summary><code>movePendingFolder</code> · 移动待评审文件夹</summary><p>连同子文件夹和用例一起移动到 TargetFolderID 下；pending-root 不能移动，不能移动到自身或其子文件夹下。</p><pre><code>{
+  &quot;Type&quot;: &quot;movePendingFolder&quot;,
+  &quot;Author&quot;: &quot;本地用户&quot;,
+  &quot;FolderID&quot;: &quot;待评审文件夹ID&quot;,
+  &quot;TargetFolderID&quot;: &quot;pending-root&quot;
 }</code></pre></details><details class="card" id="setReqDocCode"><summary><code>setReqDocCode</code> · 设置需求缩写</summary><p>Code 为 2–12 位大写英文字母或数字、以字母开头、不含 <code>-</code>，不能与其他需求重复；传空字符串清除。它是 AI 设计用例编号 <code>TC-&lt;需求缩写&gt;-&lt;模块&gt;-&lt;类别&gt;-NNN</code> 的第二段，AI 设计抽屉确认时自动保存。</p><pre><code>{
   &quot;Type&quot;: &quot;setReqDocCode&quot;,
   &quot;Author&quot;: &quot;本地用户&quot;,
@@ -166,7 +177,7 @@
   &quot;Author&quot;: &quot;本地用户&quot;,
   &quot;CaseID&quot;: &quot;CASE-ABCDEF&quot;,
   &quot;Review&quot;: &quot;passed&quot;
-}</code></pre></details><details class="card" id="importPendingCases"><summary><code>importPendingCases</code> · 导入已评审用例</summary><p>VersionID 必须是非主线的测试版本。CaseIDs 可选：省略或为空时导入整个待评审区，成功后该区会被清空并重置为空的 pending-root；指定时只导入这些用例（用于按目录或单条用例导入），成功后只移除这些用例，其余待评审用例和目录结构保持不变。要求范围内用例非空且全部评审通过，否则返回 400 并列出未通过的用例。按目录结构合并进目标版本：同名目录复用，用例按标题在对应目录下查重，范围内任意冲突则本次导入整体失败、不写入任何内容。</p><pre><code>{
+}</code></pre></details><details class="card" id="importPendingCases"><summary><code>importPendingCases</code> · 导入已评审用例</summary><p>VersionID 必须是非主线的测试版本。CaseIDs 可选：省略或为空时导入整个待评审区，成功后该区会被清空并重置为空的 pending-root；指定时只导入这些用例（用于按目录或单条用例导入），成功后只移除这些用例，其余待评审用例和目录结构保持不变。要求范围内用例非空且全部评审通过，否则返回 400 并列出未通过的用例。TargetFolderID 可选，为目标版本中的父目录，默认 <code>root</code>（全部用例）。SourceFolderID 可选，为待评审区中映射到该父目录的来源文件夹（默认 pending-root，导入整个待评审区时不可指定），范围内用例必须都在它之下，它下面的子目录原样重建：例如待评审区 A/B/C/D 中勾选 B 导入时传 SourceFolderID=A，结果为 &lt;父目录&gt;/B/C/D。按目录结构合并进目标版本：同名目录复用，用例按标题在对应目录下查重，范围内任意冲突则本次导入整体失败、不写入任何内容。</p><pre><code>{
   &quot;Type&quot;: &quot;importPendingCases&quot;,
   &quot;Author&quot;: &quot;本地用户&quot;,
   &quot;VersionID&quot;: &quot;版本ID&quot;,

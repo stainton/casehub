@@ -33,6 +33,9 @@ type Version struct {
 type Folder struct {
 	ID, VersionID, ParentID, Name, CreatedBy string
 	CreatedAt                                time.Time
+	// Moved marks a branch folder whose ParentID was changed by moveFolder and
+	// not yet merged: merge carries the move to mainline, sync leaves it alone.
+	Moved bool
 }
 
 type TestCase struct {
@@ -134,6 +137,9 @@ type Action struct {
 	DocID, Content, Code                                string
 	Review                                              string
 	TargetFolderID                                      string
+	// importPendingCases: the review folder mapped onto TargetFolderID; its
+	// subfolders are recreated beneath the target. Defaults to pending-root.
+	SourceFolderID string
 	// simplifyCase / simplifyPendingCase: the caller-supplied rewrite to persist.
 	SimplifiedPreconditions, SimplifiedSteps, SimplifiedExpected string
 }
@@ -371,6 +377,10 @@ func (s *Service) Apply(ctx context.Context, a Action) (Result, error) {
 		err = deletePendingCase(&st, a)
 	case "reviewPendingCase":
 		err = reviewPendingCase(&st, a)
+	case "moveFolder":
+		err = moveFolder(&st, a)
+	case "movePendingFolder":
+		err = movePendingFolder(&st, a)
 	case "importPendingCases":
 		err = importPendingCases(&st, a)
 	case "sync":
@@ -743,8 +753,19 @@ func syncVersion(s *State, a Action) ([]string, error) {
 			if f, _ := folderAt(s, v.ID, mf.ID); f == nil {
 				n := mf
 				n.VersionID = v.ID
+				n.Moved = false
 				s.Folders = append(s.Folders, n)
 			}
+		}
+	}
+	// Folders the branch hasn't moved follow mainline moves, unless that would
+	// create a cycle with a move the branch made itself (the branch move wins).
+	for _, mf := range mainFolders {
+		if mf.VersionID != "main" {
+			continue
+		}
+		if bf, _ := folderAt(s, v.ID, mf.ID); bf != nil && !bf.Moved && bf.ParentID != mf.ParentID && !folderCycle(s, v.ID, bf.ID, mf.ParentID) {
+			bf.ParentID = mf.ParentID
 		}
 	}
 	for _, mc := range mainCases {
@@ -805,8 +826,25 @@ func mergeVersion(s *State, a Action) ([]string, error) {
 			if mf, _ := folderAt(s, "main", f.ID); mf == nil {
 				n := f
 				n.VersionID = "main"
+				n.Moved = false
 				s.Folders = append(s.Folders, n)
 			}
+		}
+	}
+	for _, f := range branchFolders {
+		if f.VersionID != v.ID || !f.Moved {
+			continue
+		}
+		if mf, _ := folderAt(s, "main", f.ID); mf != nil && mf.ParentID != f.ParentID {
+			if folderCycle(s, "main", mf.ID, f.ParentID) {
+				return nil, fmt.Errorf("文件夹「%s」的移动与主线目录结构冲突（会形成循环），请先拉取主线后重新移动", f.Name)
+			}
+			mf.ParentID = f.ParentID
+		}
+	}
+	for i := range s.Folders {
+		if s.Folders[i].VersionID == v.ID {
+			s.Folders[i].Moved = false
 		}
 	}
 	branchCases := []TestCase{}
@@ -966,6 +1004,7 @@ func mergeFolder(s *State, a Action) ([]string, error) {
 		}
 		n := bf
 		n.VersionID = "main"
+		n.Moved = false
 		if n.ID == f.ID {
 			n.ParentID = target.ID
 		}
@@ -1132,6 +1171,75 @@ func deleteFolder(s *State, a Action) error {
 
 // moveCases relocates a set of branch cases into a different folder within
 // the same branch, marking them Dirty so a later merge picks up the move.
+// folderCycle reports whether giving folderID the parent newParent would make
+// folderID its own ancestor within the version.
+func folderCycle(s *State, versionID, folderID, newParent string) bool {
+	for id, steps := newParent, 0; id != "" && steps <= len(s.Folders); steps++ {
+		if id == folderID {
+			return true
+		}
+		f, _ := folderAt(s, versionID, id)
+		if f == nil {
+			return false
+		}
+		id = f.ParentID
+	}
+	return false
+}
+
+func moveFolder(s *State, a Action) error {
+	v, err := requireBranch(s, a.VersionID)
+	if err != nil {
+		return err
+	}
+	f, _ := folderAt(s, v.ID, a.FolderID)
+	if f == nil {
+		return errors.New("文件夹不存在")
+	}
+	if f.ParentID == "" {
+		return errors.New("根目录不能移动")
+	}
+	target, _ := folderAt(s, v.ID, a.TargetFolderID)
+	if target == nil {
+		return errors.New("目标文件夹不存在")
+	}
+	if folderCycle(s, v.ID, f.ID, target.ID) {
+		return errors.New("不能移动到自身或其子文件夹下")
+	}
+	if f.ParentID == target.ID {
+		return nil
+	}
+	f.ParentID = target.ID
+	f.Moved = true
+	return nil
+}
+
+func movePendingFolder(s *State, a Action) error {
+	f, _ := pendingFolderAt(s, a.FolderID)
+	if f == nil {
+		return errors.New("文件夹不存在")
+	}
+	if f.ID == "pending-root" || f.ParentID == "" {
+		return errors.New("根目录不能移动")
+	}
+	target, _ := pendingFolderAt(s, a.TargetFolderID)
+	if target == nil {
+		return errors.New("目标文件夹不存在")
+	}
+	for id, steps := target.ID, 0; id != "" && steps <= len(s.PendingFolders); steps++ {
+		if id == f.ID {
+			return errors.New("不能移动到自身或其子文件夹下")
+		}
+		p, _ := pendingFolderAt(s, id)
+		if p == nil {
+			break
+		}
+		id = p.ParentID
+	}
+	f.ParentID = target.ID
+	return nil
+}
+
 func moveCases(s *State, a Action) error {
 	v, err := requireBranch(s, a.VersionID)
 	if err != nil {
@@ -1503,8 +1611,51 @@ func importPendingCases(s *State, a Action) error {
 		return fmt.Errorf("存在未通过评审的用例：%s", strings.Join(unreviewed, "、"))
 	}
 
-	targetFolderID := map[string]string{} // pending folder ID -> resolved target folder ID
-	targetFolderID["pending-root"] = "root"
+	targetRoot := "root"
+	if a.TargetFolderID != "" {
+		targetRoot = a.TargetFolderID
+	}
+	if f, _ := folderAt(s, v.ID, targetRoot); f == nil {
+		return errors.New("目标文件夹不存在")
+	}
+	source := "pending-root"
+	if a.SourceFolderID != "" {
+		source = a.SourceFolderID
+	}
+	if _, i := pendingFolderAt(s, source); i < 0 {
+		return errors.New("来源文件夹不存在")
+	}
+	if !scoped && source != "pending-root" {
+		return errors.New("导入整个待评审区时不能指定来源文件夹")
+	}
+	// inSource reports whether a pending folder is the source or lies beneath it.
+	inSource := func(folderID string) bool {
+		for id, steps := folderID, 0; id != "" && steps <= len(s.PendingFolders); steps++ {
+			if id == source {
+				return true
+			}
+			pf, _ := pendingFolderAt(s, id)
+			if pf == nil {
+				return false
+			}
+			id = pf.ParentID
+		}
+		return false
+	}
+	var outside []string
+	for _, c := range targets {
+		if !inSource(c.FolderID) {
+			outside = append(outside, c.Title)
+		}
+	}
+	if len(outside) > 0 {
+		return fmt.Errorf("用例不在来源文件夹内：%s", strings.Join(outside, "、"))
+	}
+
+	// The source folder maps onto the target folder; folders beneath it are
+	// recreated (or reused by name) under the target, e.g. source A with
+	// cases in A/B/C/D lands as <target>/B/C/D.
+	targetFolderID := map[string]string{source: targetRoot} // pending folder ID -> resolved target folder ID
 	newFolders := []Folder{}
 	var conflicts []string
 	var resolve func(pf PendingFolder) string
@@ -1512,7 +1663,7 @@ func importPendingCases(s *State, a Action) error {
 		if id, ok := targetFolderID[pf.ID]; ok {
 			return id
 		}
-		parentID := "root"
+		parentID := targetRoot
 		if pf.ParentID != "" {
 			if parent, _ := pendingFolderAt(s, pf.ParentID); parent != nil {
 				parentID = resolve(*parent)
@@ -1544,7 +1695,7 @@ func importPendingCases(s *State, a Action) error {
 		}
 	}
 	for _, pc := range targets {
-		folderID := "root"
+		folderID := targetRoot
 		if pf, _ := pendingFolderAt(s, pc.FolderID); pf != nil {
 			folderID = resolve(*pf)
 		}
@@ -1564,7 +1715,7 @@ func importPendingCases(s *State, a Action) error {
 	for _, pc := range targets {
 		folderID, ok := targetFolderID[pc.FolderID]
 		if !ok {
-			folderID = "root"
+			folderID = targetRoot
 		}
 		c := TestCase{ID: pc.ID, VersionID: v.ID, FolderID: folderID, Title: pc.Title, Preconditions: pc.Preconditions, Steps: pc.Steps, Expected: pc.Expected, Description: pc.Description, Priority: pc.Priority, CreatedBy: a.Author, UpdatedBy: a.Author, CreatedAt: t, UpdatedAt: t, Dirty: true,
 			SimplifiedPreconditions: pc.SimplifiedPreconditions, SimplifiedSteps: pc.SimplifiedSteps, SimplifiedExpected: pc.SimplifiedExpected,
