@@ -523,9 +523,17 @@ const aiEstimates=new Map(); // docID -> {status:'running'|'done', startedAt, co
 const REQ_CODE_RE=/^[A-Z][A-Z0-9]{1,11}$/;
 const liveReqDoc=doc=>state.reqDocs.find(x=>x.ID===doc.ID)||doc;
 const AI_DEFAULT_CASE_COUNT=10, AI_MAX_CASE_COUNT=500, AI_CASE_COUNT_SLACK=5;
+// 设计任务的时限由发起人决定：探索耗时取决于被测系统和用例数量，服务端的固定默认值（15 分钟）
+// 对大需求经常不够。服务端接受 1 分钟–4 小时并自行封顶；这里沿用上次填的值（跨需求、跨刷新）。
+const AI_TIMEOUT_KEY='casehub-ai-timeout-minutes';
+const AI_DEFAULT_TIMEOUT_MIN=15, AI_MIN_TIMEOUT_MIN=1, AI_MAX_TIMEOUT_MIN=240;
+function aiTimeoutMinutes(){
+  const n=Number(localStorage.getItem(AI_TIMEOUT_KEY));
+  return Number.isInteger(n)&&n>=AI_MIN_TIMEOUT_MIN&&n<=AI_MAX_TIMEOUT_MIN?n:AI_DEFAULT_TIMEOUT_MIN;
+}
 const AI_ESTIMATE_CLIENT_TIMEOUT_MS=135000; // 服务端评估上限 120 秒，额外留出代理/网络余量
 const aiCaseRange=n=>`${Math.max(1,n-AI_CASE_COUNT_SLACK)}–${n}`;
-function aiFormValues(form){const x=Object.fromEntries(new FormData(form));delete x.caseCount;delete x.reqCode;return x}
+function aiFormValues(form){const x=Object.fromEntries(new FormData(form));delete x.caseCount;delete x.reqCode;delete x.timeoutMinutes;return x}
 function aiRequirementPayload(doc,values,code){
   const d=liveReqDoc(doc);code=code||d.Code||'';
   return {requirements:[{id:d.ID,title:d.Title,content:d.Content||'',...(code?{code}:{})}],instructions:[values.instructions||'',reqRefContext(doc)].filter(Boolean).join('\n\n')};
@@ -553,7 +561,7 @@ function renderAiForm(doc,notice){
     :done?`${est.notice?`<p class="meta">${esc(est.notice)}</p>`:''}${est.rationale?`<p class="meta ai-estimate-rationale">${esc(est.rationale)}</p>`:''}<p class="meta" id="ai-case-range">AI 将输出 ${aiCaseRange(est.count)} 条用例</p>`:'';
   const actions=done?`<button type="button" class="secondary" id="ai-reestimate">重新评估</button><button type="submit">确认并开始设计</button>`
     :`<button type="submit"${running?' disabled':''}>${running?'评估中…':'开始分析'}</button>`;
-  $('#ai-drawer-body').innerHTML=`${notice?`<p class="meta">${esc(notice)}</p>`:''}<form id="ai-form" autocomplete="off"><label>被测系统 URL<input name="baseUrl" required placeholder="https://test.example.com/login" autocomplete="off" value="${esc(v.baseUrl||'')}"></label><label>补充说明（可选）<textarea name="instructions" placeholder="覆盖范围、登录方式等">${esc(v.instructions||'')}</textarea></label><label>测试账号 · 用户名（可选）<input name="testAccount" autocomplete="off" value="${esc(v.testAccount||'')}"></label><label>测试账号 · 密码（可选）<input name="testSecret" type="text" class="fake-password" autocomplete="off" spellcheck="false" value="${esc(v.testSecret||'')}"></label><label>建议覆盖用例数量${countField}</label><label>需求缩写（用例编号 TC-<b id="ai-code-preview">${esc((done&&est.code)||savedCode||'XXX')}</b>-模块-类别-001）${codeField}</label>${estimateInfo}<p class="drawer-actions">${actions}</p></form>`;
+  $('#ai-drawer-body').innerHTML=`${notice?`<p class="meta">${esc(notice)}</p>`:''}<form id="ai-form" autocomplete="off"><label>被测系统 URL<input name="baseUrl" required placeholder="https://test.example.com/login" autocomplete="off" value="${esc(v.baseUrl||'')}"></label><label>补充说明（可选）<textarea name="instructions" placeholder="覆盖范围、登录方式等">${esc(v.instructions||'')}</textarea></label><label>测试账号 · 用户名（可选）<input name="testAccount" autocomplete="off" value="${esc(v.testAccount||'')}"></label><label>测试账号 · 密码（可选）<input name="testSecret" type="text" class="fake-password" autocomplete="off" spellcheck="false" value="${esc(v.testSecret||'')}"></label><label>建议覆盖用例数量${countField}</label><label>需求缩写（用例编号 TC-<b id="ai-code-preview">${esc((done&&est.code)||savedCode||'XXX')}</b>-模块-类别-001）${codeField}</label><label>任务超时时间（分钟）<input name="timeoutMinutes" type="number" min="${AI_MIN_TIMEOUT_MIN}" max="${AI_MAX_TIMEOUT_MIN}" step="1" required value="${aiTimeoutMinutes()}"><small class="meta">探索时间取决于被测系统和用例数量；超时任务会以 JOB_TIMEOUT 失败，已产出的草稿不会保留。</small></label>${estimateInfo}<p class="drawer-actions">${actions}</p></form>`;
   const form=$('#ai-form');
   // 评估期间/评估后继续编辑的表单内容同步进状态，重新渲染（关闭再打开抽屉）时保留。
   form.oninput=()=>{
@@ -578,6 +586,9 @@ function renderAiForm(doc,notice){
     if(!Number.isInteger(caseCount)||caseCount<1||caseCount>AI_MAX_CASE_COUNT){toast(`建议覆盖用例数量需为 1–${AI_MAX_CASE_COUNT} 的整数`,true);return}
     const code=form.elements.reqCode.value.trim();
     if(!REQ_CODE_RE.test(code)){toast('需求缩写需为 2–12 位大写英文字母或数字，以字母开头，不含 -',true);return}
+    const timeoutMinutes=Number(form.elements.timeoutMinutes.value);
+    if(!Number.isInteger(timeoutMinutes)||timeoutMinutes<AI_MIN_TIMEOUT_MIN||timeoutMinutes>AI_MAX_TIMEOUT_MIN){toast(`任务超时时间需为 ${AI_MIN_TIMEOUT_MIN}–${AI_MAX_TIMEOUT_MIN} 分钟的整数`,true);return}
+    try{localStorage.setItem(AI_TIMEOUT_KEY,String(timeoutMinutes))}catch{} // 下次设计沿用这次的时限
     const btn=form.querySelector('button[type="submit"]');btn.disabled=true;
     if(code!==(liveReqDoc(doc).Code||'')){
       try{await act('setReqDocCode',{DocID:doc.ID,Code:code})}catch{btn.disabled=false;return} // act 已提示原因（如缩写重复）
@@ -585,7 +596,7 @@ function renderAiForm(doc,notice){
       if(reqFocus?.type==='doc'&&reqFocus.id===doc.ID&&$('#req-doc-code'))$('#req-doc-code').textContent=code;
     }
     const {requirements,instructions}=aiRequirementPayload(doc,values,code);
-    const payload={requirements,target:{baseUrl:values.baseUrl},context:{instructions},caseCount};
+    const payload={requirements,target:{baseUrl:values.baseUrl},context:{instructions},caseCount,timeoutMs:timeoutMinutes*60000};
     if(values.testAccount||values.testSecret)payload.context.testData={username:values.testAccount||'',password:values.testSecret||''};
     try{
       const job=await serviceRequest('/api/planner/jobs',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
@@ -638,7 +649,8 @@ function routeAiJob(doc,job){
   if(isAiDrawerOpen(doc))renderAiTerminal(doc,job);
 }
 function renderAiRunning(doc,job){
-  $('#ai-drawer-body').innerHTML=`<div class="card meta-grid"><span>状态 <b>${aiStageLabel(job)}</b></span></div><div id="ai-log" class="ai-log"></div><p class="drawer-actions"><button type="button" class="secondary" id="ai-cancel">取消任务</button></p>`;
+  const limit=job.timeoutMs?`<span>时限 <b>${Math.round(job.timeoutMs/60000)} 分钟</b></span>`:'';
+  $('#ai-drawer-body').innerHTML=`<div class="card meta-grid"><span>状态 <b>${aiStageLabel(job)}</b></span>${limit}</div><div id="ai-log" class="ai-log"></div><p class="drawer-actions"><button type="button" class="secondary" id="ai-cancel">取消任务</button></p>`;
   $('#ai-cancel').onclick=async()=>{
     try{await serviceRequest(`/api/planner/jobs/${job.id}`,{method:'DELETE'})}catch(e){toast(e.message,true)}
   };

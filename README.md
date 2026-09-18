@@ -88,6 +88,10 @@ http://<可访问的节点 IP>:30080
 
 先在 auto-test 中准备 `build/planner/setting.json` 并运行 `node server/planner/main.mjs`，再启动 CaseHub，即可从需求管理的「AI 设计」抽屉调用 planner，以及在任意用例详情页生成「阅读友好版」（调用同一服务的 `/v1/planner/simplify`）。本机使用默认地址，无需 Token；分开部署时只设置 `CASEHUB_PLANNER_URL`。两个服务均支持浏览器跨域调用。
 
+「AI 设计」抽屉里可以设置本次设计任务的超时时间（分钟，1–240，默认 15，沿用上次填写的值），随请求的 `timeoutMs` 一起提交；
+探索耗时取决于被测系统和用例数量，服务端的固定默认值对大需求常常不够。实际生效的时限会显示在任务进行中的面板上，
+最终由 planner 服务按 `PLANNER_MAX_TIMEOUT_MS` 封顶。
+
 脚本生成对应 auto-test 的另一个独立服务：准备 `build/generator/setting.json` 后运行 `node server/generator/main.mjs`（默认 4502），CaseHub 通过 `CASEHUB_GENERATOR_URL` 连接。planner 和 generator 是两个进程，可以只启动其中一个；未配置时对应入口会提示服务未配置，其余功能不受影响。
 
 容器中的 localhost 指容器自身；如果 planner / generator 运行在另一容器或主机上，将 `CASEHUB_PLANNER_URL`、`CASEHUB_GENERATOR_URL` 配置为容器可访问的地址。
