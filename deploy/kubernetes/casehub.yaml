@@ -32,6 +32,8 @@ spec:
               value: ""
             - name: CASEHUB_PLANNER_URL
               value: http://planner:4501
+            - name: CASEHUB_GENERATOR_URL
+              value: http://generator:4502
           volumeMounts:
             - name: data
               mountPath: /app/data

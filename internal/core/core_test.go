@@ -1119,3 +1119,127 @@ func TestMovePendingFolderAndImportIntoChosenParent(t *testing.T) {
 		t.Fatal("importing the whole review area with a source folder must be rejected")
 	}
 }
+
+// ---- Automation scripts (自动化管理) ----
+
+func caseByID(t *testing.T, state core.State, versionID, id string) core.TestCase {
+	t.Helper()
+	for _, c := range state.Cases {
+		if c.VersionID == versionID && c.ID == id {
+			return c
+		}
+	}
+	t.Fatalf("case %q not found", id)
+	return core.TestCase{}
+}
+
+func scriptFor(t *testing.T, state core.State, versionID, caseID string) core.Script {
+	t.Helper()
+	for _, s := range state.Scripts {
+		if s.VersionID == versionID && s.CaseID == caseID {
+			return s
+		}
+	}
+	t.Fatalf("script for %s not found", caseID)
+	return core.Script{}
+}
+
+func TestSaveScriptUpsertsPerCaseAndTracksSourceText(t *testing.T) {
+	service := core.NewService(store.NewMemory())
+	state := apply(t, service, core.Action{Type: "createVersion", Name: "v1"})
+	branch := branchID(t, state, "v1")
+	state = apply(t, service, core.Action{Type: "saveScript", VersionID: branch, CaseID: "CASE-0001",
+		ScriptCode: "import { test } from '@playwright/test';", ScriptSummary: "验证登录成功", ScriptJobID: "job-1",
+		ScriptDeviations: []core.RiskNote{{Risk: "medium", Summary: "错误提示文案不同"}}})
+	script := scriptFor(t, state, branch, "CASE-0001")
+	if script.FileName != "CASE-0001.spec.ts" || script.Language != "typescript" || script.Status != "generated" {
+		t.Fatalf("unexpected defaults: %+v", script)
+	}
+	source := caseByID(t, state, branch, "CASE-0001")
+	if script.FromSteps != source.Steps || script.FromPreconditions != source.Preconditions || script.FromExpected != source.Expected {
+		t.Fatalf("script did not snapshot the case text it was generated from: %+v", script)
+	}
+	if script.Title != source.Title || len(script.Deviations) != 1 {
+		t.Fatalf("script lost its case title or deviations: %+v", script)
+	}
+
+	// Regenerating replaces in place: one case has exactly one script.
+	state = apply(t, service, core.Action{Type: "saveScript", VersionID: branch, CaseID: "CASE-0001",
+		ScriptCode: "import { test } from '@playwright/test'; // v2", ScriptSummary: "重新生成"})
+	if len(state.Scripts) != 1 {
+		t.Fatalf("expected one script after regeneration, got %d", len(state.Scripts))
+	}
+	if id := scriptFor(t, state, branch, "CASE-0001").ID; id != script.ID {
+		t.Fatalf("regeneration changed the script ID: %s -> %s", script.ID, id)
+	}
+
+	// Editing the case leaves the snapshot behind, which is how the UI marks a script stale.
+	state = apply(t, service, core.Action{Type: "editCase", VersionID: branch, CaseID: "CASE-0001",
+		Title: "正确账号密码登录", Steps: "1. 打开登录页\n2. 提交新的步骤", Expected: "进入系统首页"})
+	if scriptFor(t, state, branch, "CASE-0001").FromSteps == "1. 打开登录页\n2. 提交新的步骤" {
+		t.Fatal("editing a case must not update the script's source snapshot")
+	}
+}
+
+func TestSaveScriptValidatesStatusAndDeviations(t *testing.T) {
+	service := core.NewService(store.NewMemory())
+	state := apply(t, service, core.Action{Type: "createVersion", Name: "v1"})
+	branch := branchID(t, state, "v1")
+	for _, invalid := range []core.Action{
+		{Type: "saveScript", VersionID: branch, CaseID: "CASE-NOPE", ScriptCode: "x"},
+		{Type: "saveScript", VersionID: branch, CaseID: "CASE-0001", ScriptCode: ""},
+		{Type: "saveScript", VersionID: branch, CaseID: "CASE-0001", ScriptCode: "x", ScriptStatus: "done"},
+		{Type: "saveScript", VersionID: branch, CaseID: "CASE-0001", ScriptCode: "x", ScriptDeviations: []core.RiskNote{{Risk: "unknown", Summary: "x"}}},
+		{Type: "saveScript", VersionID: branch, CaseID: "CASE-0001", ScriptCode: "x", ScriptDeviations: []core.RiskNote{{Risk: "low", Summary: " "}}},
+	} {
+		if _, err := service.Apply(context.Background(), invalid); err == nil {
+			t.Fatalf("expected %+v to be rejected", invalid)
+		}
+	}
+	// A blocked case is stored with its reason and no code: that is the reviewer's answer to "why no script".
+	state = apply(t, service, core.Action{Type: "saveScript", VersionID: branch, CaseID: "CASE-0001",
+		ScriptStatus: "blocked", ScriptSummary: "缺少测试账号"})
+	if script := scriptFor(t, state, branch, "CASE-0001"); script.Code != "" || script.Summary != "缺少测试账号" {
+		t.Fatalf("blocked script not stored as expected: %+v", script)
+	}
+}
+
+func TestScriptsFollowTheirCaseAndVersionOnDelete(t *testing.T) {
+	service := core.NewService(store.NewMemory())
+	state := apply(t, service, core.Action{Type: "createVersion", Name: "v1"})
+	branch := branchID(t, state, "v1")
+	for _, id := range []string{"CASE-0001", "CASE-0002"} {
+		state = apply(t, service, core.Action{Type: "saveScript", VersionID: branch, CaseID: id, ScriptCode: "import '@playwright/test';", ScriptSummary: "x"})
+	}
+	// Mainline is read-only for cases but a script is a regenerable asset, so it may be stored and deleted there.
+	state = apply(t, service, core.Action{Type: "saveScript", VersionID: "main", CaseID: "CASE-0001", ScriptCode: "import '@playwright/test';", ScriptSummary: "x"})
+	state = apply(t, service, core.Action{Type: "deleteScripts", VersionID: "main", CaseIDs: []string{"CASE-0001"}})
+	if len(state.Scripts) != 2 {
+		t.Fatalf("expected the mainline script to be deleted, got %d", len(state.Scripts))
+	}
+	if _, err := service.Apply(context.Background(), core.Action{Type: "deleteScripts", VersionID: branch, CaseIDs: []string{"CASE-NOPE"}}); err == nil {
+		t.Fatal("deleting an unknown script must fail")
+	}
+	state = apply(t, service, core.Action{Type: "deleteCases", VersionID: branch, CaseIDs: []string{"CASE-0001"}})
+	if len(state.Scripts) != 1 || state.Scripts[0].CaseID != "CASE-0002" {
+		t.Fatalf("a deleted case must take its script with it: %+v", state.Scripts)
+	}
+	state = apply(t, service, core.Action{Type: "deleteVersion", VersionID: branch})
+	if len(state.Scripts) != 0 {
+		t.Fatalf("deleting a version must delete its scripts: %+v", state.Scripts)
+	}
+}
+
+func TestCreatingAVersionDoesNotCopyScripts(t *testing.T) {
+	service := core.NewService(store.NewMemory())
+	state := apply(t, service, core.Action{Type: "createVersion", Name: "v1"})
+	branch := branchID(t, state, "v1")
+	state = apply(t, service, core.Action{Type: "saveScript", VersionID: branch, CaseID: "CASE-0001", ScriptCode: "import '@playwright/test';", ScriptSummary: "x"})
+	state = apply(t, service, core.Action{Type: "createVersion", Name: "v2"})
+	other := branchID(t, state, "v2")
+	for _, s := range state.Scripts {
+		if s.VersionID == other {
+			t.Fatal("a new version must not inherit scripts: a spec is only valid for the case text it was generated from")
+		}
+	}
+}

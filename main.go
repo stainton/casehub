@@ -12,8 +12,8 @@ import (
 	"time"
 
 	"casehub/internal/core"
-	"casehub/internal/planner"
 	"casehub/internal/store"
+	"casehub/internal/upstream"
 )
 
 //go:embed web/*
@@ -52,14 +52,26 @@ func (a *api) action(w http.ResponseWriter, r *http.Request) {
 	}
 	jsonOut(w, 200, out)
 }
-func routes(a *api, plannerProxy http.Handler, plannerEnabled bool) http.Handler {
+
+// service is one upstream auto-test service: its /api/<name>/ proxy plus the
+// status endpoint the frontend checks before offering the feature.
+type service struct {
+	name    string
+	proxy   http.Handler
+	enabled bool
+}
+
+func routes(a *api, services ...service) http.Handler {
 	m := http.NewServeMux()
 	m.HandleFunc("GET /api/state", a.state)
 	m.HandleFunc("POST /api/action", a.action)
-	m.HandleFunc("GET /api/planner/status", func(w http.ResponseWriter, r *http.Request) {
-		jsonOut(w, 200, map[string]bool{"enabled": plannerEnabled})
-	})
-	m.Handle("/api/planner/", plannerProxy)
+	for _, s := range services {
+		enabled := s.enabled
+		m.HandleFunc("GET /api/"+s.name+"/status", func(w http.ResponseWriter, r *http.Request) {
+			jsonOut(w, 200, map[string]bool{"enabled": enabled})
+		})
+		m.Handle("/api/"+s.name+"/", s.proxy)
+	}
 	fs := http.FileServerFS(assets)
 	m.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/" {
@@ -108,9 +120,12 @@ func main() {
 		defer closeDB()
 	}
 	port := env("PORT", "8080")
-	plannerProxy, plannerEnabled := planner.New(env("CASEHUB_PLANNER_URL", "http://localhost:4501"))
-	log.Printf("CaseHub listening on :%s (store=%s, planner=%v)", port, kind, plannerEnabled)
-	log.Fatal(http.ListenAndServe(":"+port, routes(&api{service: core.NewService(repo)}, plannerProxy, plannerEnabled)))
+	plannerProxy, plannerEnabled := upstream.New(env("CASEHUB_PLANNER_URL", "http://localhost:4501"), "planner")
+	generatorProxy, generatorEnabled := upstream.New(env("CASEHUB_GENERATOR_URL", "http://localhost:4502"), "generator")
+	log.Printf("CaseHub listening on :%s (store=%s, planner=%v, generator=%v)", port, kind, plannerEnabled, generatorEnabled)
+	log.Fatal(http.ListenAndServe(":"+port, routes(&api{service: core.NewService(repo)},
+		service{name: "planner", proxy: plannerProxy, enabled: plannerEnabled},
+		service{name: "generator", proxy: generatorProxy, enabled: generatorEnabled})))
 }
 func storageKind(kind, databaseURL string) string {
 	if kind != "" {

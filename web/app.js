@@ -9,10 +9,10 @@ const esc=s=>String(s??'').replace(/[&<>'"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&
 const fmt=s=>s?new Date(s).toLocaleString():'—';
 const version=id=>state.versions.find(v=>v.id===id), folders=id=>state.folders.filter(f=>f.VersionID===id), cases=id=>state.cases.filter(c=>c.VersionID===id);
 async function request(path,options){let r=await fetch(path,options),x=await r.json();if(!r.ok){let e=Error(x.error||'请求失败');e.status=r.status;e.conflicts=x.conflicts;throw e}return x}
-function normalizeState(s){s=s||{};for(const key of ['versions','folders','cases','histories','records','tasks','reqFolders','reqDocs','pendingFolders','pendingCases'])if(!Array.isArray(s[key]))s[key]=[];return s}
+function normalizeState(s){s=s||{};for(const key of ['versions','folders','cases','histories','records','tasks','reqFolders','reqDocs','pendingFolders','pendingCases','scripts'])if(!Array.isArray(s[key]))s[key]=[];return s}
 async function refresh(){state=normalizeState(await request('/api/state'));render();}
 async function act(type,data={},retry=false){try{let out=await request('/api/action',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({Type:type,Author:'本地用户',...data})});state=normalizeState(out.state);if(out.warnings?.length)toast(out.warnings.join('；'));render();return out}catch(e){if(e.status===409&&type.startsWith('merge')){alert(`${e.message}\n冲突用例：${(e.conflicts||[]).join(', ')}\n请拉取主线，然后打开冲突用例编辑并确认人工处理。`)}else if(e.status===409&&!retry&&confirm(`${e.message}\n冲突用例：${(e.conflicts||[]).join(', ')}\n是否以当前编辑内容作为人工解决结果？`))return act(type,{...data,Force:true},true);toast(e.message,true);throw e}}
-function render(){ renderVersions();renderTasks();renderFocus();if(recordTask)$('#edit-case')?.remove();updateBulk();if(location.hash)renderHistoryRoute();renderReqTree();renderReviewTree(); }
+function render(){ renderVersions();renderTasks();renderFocus();if(recordTask)$('#edit-case')?.remove();updateBulk();if(location.hash)renderHistoryRoute();renderReqTree();renderReviewTree();renderScriptTree();renderAutoFocus(); }
 function renderVersions(){let box=$('#versions');box.innerHTML=state.versions.map(v=>`<div class="version" data-version="${v.id}"><div class="version-title"><span class="chev">⌄</span><span>${esc(v.name)}</span><span class="badge">${v.mainline?'只读主线':'测试版本'}</span>${v.mainline?'':`<span class="version-actions"><button data-sync="${v.id}">拉取主线</button><button data-merge="${v.id}">合并</button><button data-delete-version="${v.id}" class="danger">删除</button></span>`}</div><div class="version-body">${tree(v.id)}</div></div>`).join('');bindTree(box);}
 function tree(vid,onlyIDs=null,taskID=''){let fs=folders(vid),cs=cases(vid),roots=fs.filter(f=>!f.ParentID||!fs.some(x=>x.ID===f.ParentID));let branch=!version(vid).mainline,showCheck=branch&&!taskID;function node(f,depth){let children=fs.filter(x=>x.ParentID===f.ID),own=cs.filter(c=>c.FolderID===f.ID);let visible=!onlyIDs||own.some(c=>onlyIDs.has(c.ID))||children.some(ch=>hasHit(ch));if(!visible)return'';return `<div class="tree-row folder-row" style="padding-left:${8+depth*17}px" data-folder="${f.ID}" data-version="${vid}">${showCheck?'<input class="folder-check" type="checkbox">':''}<span class="chev">▾</span><span>📁</span><span class="label">${esc(f.Name)}</span></div><div>${own.filter(c=>!onlyIDs||onlyIDs.has(c.ID)).map(c=>caseRow(c,depth+1,branch&&!taskID,taskID)).join('')}${children.map(ch=>node(ch,depth+1)).join('')}</div>`}function hasHit(f){return cs.some(c=>c.FolderID===f.ID&&onlyIDs.has(c.ID))||fs.filter(x=>x.ParentID===f.ID).some(hasHit)}return roots.map(r=>node(r,0)).join('')||'<p class="meta">空版本</p>'}
 // 用例树（版本树、测试任务、用例评审）显示"<用例编号> <用例名称>"，完整内容也放在悬停提示里（名称过长会被截断）。
@@ -148,7 +148,7 @@ async function runSimplify(c,isPending,rerender){
   try{
     let friendly;
     try{
-      friendly=await plannerRequest('/api/planner/simplify',{method:'POST',headers:{'Content-Type':'application/json'},signal:controller.signal,
+      friendly=await serviceRequest('/api/planner/simplify',{method:'POST',headers:{'Content-Type':'application/json'},signal:controller.signal,
         body:JSON.stringify({title:c.Title||'',preconditions:c.Preconditions||'',steps:c.Steps||'',expected:c.Expected||''})});
     }catch(e){toast(controller.signal.aborted?'生成超时，请稍后重试':`生成失败：${e.message}`,true);return}
     clearTimeout(abortTimer);
@@ -168,7 +168,7 @@ function renderFocus(){if(!focus){updateEmptyHint();$('#empty').classList.remove
 function descendantFolders(f){let out=[];function walk(id){state.folders.filter(x=>x.VersionID===f.VersionID&&x.ParentID===id).forEach(x=>{out.push(x.ID);walk(x.ID)})}walk(f.ID);return out}
 function toggleSelect(v,id,on){if(!selected.has(v))selected.set(v,new Set());on?selected.get(v).add(id):selected.get(v).delete(id);updateBulk();updateFolderChecks()}
 function updateBulk(){let entries=[...selected.entries()].filter(([,s])=>s.size);let n=entries.reduce((x,[,s])=>x+s.size,0);$('#bulk').classList.toggle('hidden',!n);$('#selected-count').textContent=`已选 ${n} 项`;}
-function folderMenu(v,f){let branch=!version(v).mainline;if(!branch)return f==='root'?[['搜索',()=>openSearch(v,f)],['创建测试版本',versionModal],['复制飞书思维导图',()=>exportFeishuMindmap([{versionID:v,folderID:f}])]]:[['搜索',()=>openSearch(v,f)],['复制飞书思维导图',()=>exportFeishuMindmap([{versionID:v,folderID:f}])]];let items=[['查看详情',()=>setFocus({type:'folder',versionID:v,id:f})],['新建文件夹',()=>folderModal(v,f)],['新增用例',()=>caseModal(null,v,f)],['创建测试任务',()=>taskFromFolder(v,f)],['重命名空文件夹',()=>renameModal(v,f)],['搜索此目录',()=>openSearch(v,f)],['导出目录',()=>exportCases(v,f)],['复制飞书思维导图',()=>exportFeishuMindmap([{versionID:v,folderID:f}])]];if(f!=='root')items.push(['移动到…',()=>moveFolderModal(v,f)],['合并到主线',()=>mergeFolderModal(v,f)],['删除空文件夹',()=>{if(confirm('删除该空文件夹？'))act('deleteFolder',{VersionID:v,FolderID:f})}]);return items}
+function folderMenu(v,f){let branch=!version(v).mainline;if(!branch)return f==='root'?[['搜索',()=>openSearch(v,f)],['创建测试版本',versionModal],['脚本生成',()=>generateForFolder(v,f)],['复制飞书思维导图',()=>exportFeishuMindmap([{versionID:v,folderID:f}])]]:[['搜索',()=>openSearch(v,f)],['脚本生成',()=>generateForFolder(v,f)],['复制飞书思维导图',()=>exportFeishuMindmap([{versionID:v,folderID:f}])]];let items=[['查看详情',()=>setFocus({type:'folder',versionID:v,id:f})],['新建文件夹',()=>folderModal(v,f)],['新增用例',()=>caseModal(null,v,f)],['创建测试任务',()=>taskFromFolder(v,f)],['脚本生成',()=>generateForFolder(v,f)],['重命名空文件夹',()=>renameModal(v,f)],['搜索此目录',()=>openSearch(v,f)],['导出目录',()=>exportCases(v,f)],['复制飞书思维导图',()=>exportFeishuMindmap([{versionID:v,folderID:f}])]];if(f!=='root')items.push(['移动到…',()=>moveFolderModal(v,f)],['合并到主线',()=>mergeFolderModal(v,f)],['删除空文件夹',()=>{if(confirm('删除该空文件夹？'))act('deleteFolder',{VersionID:v,FolderID:f})}]);return items}
 function folderOptionsHTML(versionID,exclude=''){let fs=folders(versionID),roots=fs.filter(f=>!f.ParentID||!fs.some(x=>x.ID===f.ParentID));function node(f,depth){if(f.ID===exclude)return '';let children=fs.filter(x=>x.ParentID===f.ID);return `<option value="${f.ID}">${'　'.repeat(depth)}${esc(f.Name)}</option>`+children.map(ch=>node(ch,depth+1)).join('')}return roots.map(r=>node(r,0)).join('')}
 // 移动文件夹：目标下拉里去掉自身及其子文件夹。测试版本中的移动在合并到主线时同步到主线。
 function moveFolderModal(v,f){const folder=state.folders.find(x=>x.VersionID===v&&x.ID===f);showModal('移动文件夹',`<p class="meta">将「${esc(folder?.Name||'')}」连同其中的子文件夹和用例移动到：</p><label>目标文件夹<select name="TargetFolderID">${folderOptionsHTML(v,f)}</select></label>`,x=>act('moveFolder',{VersionID:v,FolderID:f,TargetFolderID:x.TargetFolderID}))}
@@ -176,7 +176,7 @@ function targetFolderModal(title,versionID,onSubmit){showModal(title,`<label>目
 function mergeFolderModal(v,f){targetFolderModal('合并到主线','main',id=>act('mergeFolder',{VersionID:v,FolderID:f,TargetFolderID:id}))}
 function mergeCasesModal(v,ids){targetFolderModal('合并到主线','main',id=>act('mergeCases',{VersionID:v,CaseIDs:ids,TargetFolderID:id}))}
 function moveCasesModal(v,ids){targetFolderModal('移动用例',v,id=>act('moveCases',{VersionID:v,CaseIDs:ids,TargetFolderID:id}))}
-function caseMenu(v,id){let c=state.cases.find(x=>x.VersionID===v&&x.ID===id),items=[['查看详情',()=>setFocus({type:'case',versionID:v,id})],['测试记录',()=>openRecords(c)]];if(!version(v).mainline)items.push(['编辑用例',()=>{startCaseEdit(c,false,'case');setFocus({type:'case',versionID:v,id})}],['删除用例',()=>{if(confirm('确定删除这条用例？测试记录和历史也会一并删除，且无法恢复。'))act('deleteCases',{VersionID:v,CaseIDs:[id]})}]);return items}
+function caseMenu(v,id){let c=state.cases.find(x=>x.VersionID===v&&x.ID===id),items=[['查看详情',()=>setFocus({type:'case',versionID:v,id})],['测试记录',()=>openRecords(c)],['脚本生成',()=>startGeneration(v,[id],caseLabel(c))]];if(!version(v).mainline)items.push(['编辑用例',()=>{startCaseEdit(c,false,'case');setFocus({type:'case',versionID:v,id})}],['删除用例',()=>{if(confirm('确定删除这条用例？测试记录和历史也会一并删除，且无法恢复。'))act('deleteCases',{VersionID:v,CaseIDs:[id]})}]);return items}
 function menu(e,items){e.preventDefault();let m=$('#context-menu');m.innerHTML=items.map((x,i)=>`<button data-i="${i}"${x[2]?` class="${x[2]}"`:''}>${esc(x[0])}</button>`).join('');m.style.left=Math.min(e.clientX,innerWidth-205)+'px';m.style.top=Math.min(e.clientY,innerHeight-items.length*38-10)+'px';m.classList.remove('hidden');m.querySelectorAll('button').forEach(b=>b.onclick=()=>{m.classList.add('hidden');items[+b.dataset.i][1]()})}
 function showModal(title,html,save){$('#modal-title').textContent=title;$('#modal-body').innerHTML=html;modalSave=save;$('#modal').showModal()}
 function versionModal(){showModal('创建测试版本',`<label>版本名称<input name="Name" required placeholder="例如：v2.4.0 回归"></label>`,x=>act('createVersion',x))}
@@ -258,16 +258,17 @@ function toast(msg,bad=false){let t=$('#toast');t.textContent=msg;t.style.backgr
 $('#create-version').onclick=versionModal;$('#theme').onclick=()=>{document.documentElement.classList.toggle('dark');localStorage.setItem('casehub-theme',document.documentElement.classList.contains('dark')?'dark':'light');if(recordEditor){$('#record-editor').classList.toggle('toastui-editor-dark',document.documentElement.classList.contains('dark'));renderRecordHistory()}if(reqEditor)$('#req-editor').classList.toggle('toastui-editor-dark',document.documentElement.classList.contains('dark'))};$('#collapse').onclick=()=>setSidebarCollapsed(true);$('#expand').onclick=$('#empty-expand').onclick=()=>setSidebarCollapsed(false);
 $$('[data-view]').forEach(b=>b.onclick=()=>{$$('[data-view]').forEach(x=>x.classList.toggle('active',x===b));view=b.dataset.view;$('#case-view').classList.toggle('hidden',view!=='cases');$('#task-view').classList.toggle('hidden',view!=='tasks');updateEmptyHint()});document.addEventListener('click',e=>{if(!e.target.closest('#context-menu'))$('#context-menu').classList.add('hidden')});
 $('#modal-close').onclick=$('#modal-cancel').onclick=()=>$('#modal').close();$('#modal-form').onsubmit=async e=>{e.preventDefault();try{await modalSave(Object.fromEntries(new FormData(e.target)));$('#modal').close()}catch{}};$('#drawer-close').onclick=closeRecordDrawer;$('#record-version').onchange=()=>{recordHistoryLimit=3;$('#record-history').replaceChildren();renderRecordHistory()};$('#record-form').onsubmit=async e=>{e.preventDefault();try{await saveRecord('submitRecord')}catch{}};$('#save-draft').onclick=()=>saveRecord('saveRecord').catch(()=>{});$('#close-search').onclick=()=>{$('#search-panel').classList.add('hidden');$('#workspace').style.gridTemplateColumns='var(--side) 5px minmax(0,1fr)'};$('#run-search').onclick=runSearch;
-$$('[data-bulk]').forEach(b=>b.onclick=()=>{if(b.dataset.bulk==='feishu'){exportFeishuMindmap([...selected.entries()].filter(([,ids])=>ids.size).map(([versionID,ids])=>({versionID,ids:[...ids]})));return}let entries=[...selected.entries()].find(([,s])=>s.size);if(!entries)return;let[v,ids]=[entries[0],[...entries[1]]];if(b.dataset.bulk==='export')exportSelected(v,ids);else if(b.dataset.bulk==='task')taskModal(v,ids);else if(b.dataset.bulk==='move')moveCasesModal(v,ids);else if(b.dataset.bulk==='merge')mergeCasesModal(v,ids);else if(b.dataset.bulk==='delete'){if(confirm(`确定删除选中的 ${ids.length} 条用例？测试记录和历史也会一并删除，且无法恢复。`))act('deleteCases',{VersionID:v,CaseIDs:ids}).then(()=>{selected.delete(v);updateBulk()}).catch(()=>{})}});function exportSelected(v,ids){let data=cases(v).filter(c=>ids.includes(c.ID)).map(exportableCase),a=document.createElement('a');a.href=URL.createObjectURL(new Blob([JSON.stringify(data,null,2)],{type:'application/json'}));a.download='casehub-selected.json';a.click()}
+$$('[data-bulk]').forEach(b=>b.onclick=()=>{if(b.dataset.bulk==='feishu'){exportFeishuMindmap([...selected.entries()].filter(([,ids])=>ids.size).map(([versionID,ids])=>({versionID,ids:[...ids]})));return}let entries=[...selected.entries()].find(([,s])=>s.size);if(!entries)return;let[v,ids]=[entries[0],[...entries[1]]];if(b.dataset.bulk==='export')exportSelected(v,ids);else if(b.dataset.bulk==='task')taskModal(v,ids);else if(b.dataset.bulk==='script')startGeneration(v,ids,`已选 ${ids.length} 条用例`);else if(b.dataset.bulk==='move')moveCasesModal(v,ids);else if(b.dataset.bulk==='merge')mergeCasesModal(v,ids);else if(b.dataset.bulk==='delete'){if(confirm(`确定删除选中的 ${ids.length} 条用例？测试记录和历史也会一并删除，且无法恢复。`))act('deleteCases',{VersionID:v,CaseIDs:ids}).then(()=>{selected.delete(v);updateBulk()}).catch(()=>{})}});function exportSelected(v,ids){let data=cases(v).filter(c=>ids.includes(c.ID)).map(exportableCase),a=document.createElement('a');a.href=URL.createObjectURL(new Blob([JSON.stringify(data,null,2)],{type:'application/json'}));a.download='casehub-selected.json';a.click()}
 let resizing=false,lastX=340,resizeVar='--side',resizeCollapse='#collapse';
 function bindResizer(handleSel,collapseSel,cssVar){$(handleSel).onmousedown=()=>{resizing=true;resizeVar=cssVar;resizeCollapse=collapseSel;$(handleSel).classList.add('dragging')}}
 bindResizer('#resize-left','#collapse','--side');
 bindResizer('#req-resize-left','#req-collapse','--req-side');
+bindResizer('#auto-resize-left','#auto-collapse','--auto-side');
 document.onmousemove=e=>{if(resizing){lastX=e.clientX;document.documentElement.style.setProperty(resizeVar,Math.max(0,Math.min(600,e.clientX))+'px')}};
 document.onmouseup=()=>{if(resizing&&lastX<70)$(resizeCollapse).click();else if(resizing&&lastX<220)document.documentElement.style.setProperty(resizeVar,'220px');resizing=false;$$('.resizer').forEach(r=>r.classList.remove('dragging'))};
 document.documentElement.classList.toggle('dark',localStorage.getItem('casehub-theme')==='dark');
 window.addEventListener('hashchange',renderHistoryRoute);
-refresh().catch(e=>toast(e.message,true));
+refresh().then(resumeGenTasks).catch(e=>toast(e.message,true));
 
 function resetRecordEditor(initialValue='') {
   if(recordEditor){recordEditor.setMarkdown(initialValue);return}
@@ -467,10 +468,12 @@ function syncAiButton(){
   btn.classList.toggle('ai-running',isAiActive(doc));
 }
 function closeAiStream(){aiSource?.close();aiSource=null;aiSourceJobId=null}
-async function plannerRequest(path,options){
+// 两个 auto-test 服务（planner / generator）共用：它们的错误体格式相同，CaseHub 的代理在
+// 服务未配置或不可达时也返回同样的形状。
+async function serviceRequest(path,options){
   const r=await fetch(path,options),ct=r.headers.get('content-type')||'';
   const x=ct.includes('application/json')?await r.json():null;
-  if(!r.ok){const e=Error(x?.error?.message||'AI 设计服务请求失败');e.status=r.status;e.code=x?.error?.code;throw e}
+  if(!r.ok){const e=Error(x?.error?.message||'服务请求失败');e.status=r.status;e.code=x?.error?.code;throw e}
   return x;
 }
 function isAiDrawerOpen(doc){return aiDoc?.ID===doc.ID&&!$('#ai-drawer').classList.contains('hidden')}
@@ -486,7 +489,7 @@ async function renderAiDrawer(doc){
   const body=$('#ai-drawer-body');
   body.innerHTML='<p class="meta">正在检查 AI 设计服务…</p>';
   if(aiPlannerEnabled===null){
-    try{aiPlannerEnabled=(await plannerRequest('/api/planner/status')).enabled}
+    try{aiPlannerEnabled=(await serviceRequest('/api/planner/status')).enabled}
     catch{aiPlannerEnabled=false}
   }
   if(aiDoc?.ID!==doc.ID)return; // drawer moved to another doc while awaiting
@@ -504,7 +507,7 @@ async function checkAiJob(doc){
     return;
   }
   try{
-    const job=await plannerRequest(`/api/planner/jobs/${jobId}`);
+    const job=await serviceRequest(`/api/planner/jobs/${jobId}`);
     routeAiJob(doc,job);
   }catch(e){
     localStorage.removeItem(aiJobKey(doc));
@@ -585,7 +588,7 @@ function renderAiForm(doc,notice){
     const payload={requirements,target:{baseUrl:values.baseUrl},context:{instructions},caseCount};
     if(values.testAccount||values.testSecret)payload.context.testData={username:values.testAccount||'',password:values.testSecret||''};
     try{
-      const job=await plannerRequest('/api/planner/jobs',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+      const job=await serviceRequest('/api/planner/jobs',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
       aiEstimates.delete(doc.ID);
       localStorage.setItem(aiJobKey(doc),job.id);
       routeAiJob(doc,job);
@@ -602,7 +605,7 @@ async function runAiEstimate(doc,values){
   let next;
   try{
     const {requirements,instructions}=aiRequirementPayload(doc,values);
-    const r=await plannerRequest('/api/planner/estimate',{method:'POST',headers:{'Content-Type':'application/json'},signal:controller.signal,
+    const r=await serviceRequest('/api/planner/estimate',{method:'POST',headers:{'Content-Type':'application/json'},signal:controller.signal,
       body:JSON.stringify({requirements,context:{instructions}})});
     next={count:r.suggestedCaseCount,code:r.requirementCodes?.find(x=>x.requirement===doc.ID)?.code||liveReqDoc(doc).Code||'',rationale:r.rationale||''};
   }catch(e){
@@ -637,7 +640,7 @@ function routeAiJob(doc,job){
 function renderAiRunning(doc,job){
   $('#ai-drawer-body').innerHTML=`<div class="card meta-grid"><span>状态 <b>${aiStageLabel(job)}</b></span></div><div id="ai-log" class="ai-log"></div><p class="drawer-actions"><button type="button" class="secondary" id="ai-cancel">取消任务</button></p>`;
   $('#ai-cancel').onclick=async()=>{
-    try{await plannerRequest(`/api/planner/jobs/${job.id}`,{method:'DELETE'})}catch(e){toast(e.message,true)}
+    try{await serviceRequest(`/api/planner/jobs/${job.id}`,{method:'DELETE'})}catch(e){toast(e.message,true)}
   };
 }
 function aiLogLine(msg){
@@ -670,7 +673,7 @@ function ensureAiStream(doc,jobId){
       if(badge)badge.textContent=aiStageLabel(ev);
       aiLogLine(`[${fmt(ev.createdAt)}] ${ev.stage||''} ${ev.message||''}${ev.tool?` (${ev.tool} ${ev.toolStatus||''})`:''}`.trim());
     }
-    if(['succeeded','failed','cancelled'].includes(ev.status))plannerRequest(`/api/planner/jobs/${jobId}`).then(job=>routeAiJob(doc,job));
+    if(['succeeded','failed','cancelled'].includes(ev.status))serviceRequest(`/api/planner/jobs/${jobId}`).then(job=>routeAiJob(doc,job));
   });
   source.addEventListener('reset',e=>{
     if(!isAiDrawerOpen(doc))return;
@@ -689,7 +692,7 @@ async function handleAiSuccess(doc,job){
   aiHandlingJobId=job.id;
   if(isAiDrawerOpen(doc))$('#ai-drawer-body').innerHTML='<p class="meta">设计已完成，正在自动导入到"用例评审"…</p>';
   try{
-    const result=await plannerRequest(`/api/planner/jobs/${job.id}/result`);
+    const result=await serviceRequest(`/api/planner/jobs/${job.id}/result`);
     await importAiResult(doc,result);
     const summary={count:result.cases.length,limitations:result.limitations||[],issues:result.issues||[]};
     localStorage.setItem(aiResultKey(doc),JSON.stringify(summary));
@@ -892,10 +895,414 @@ $('#req-expand').onclick=$('#req-empty-expand').onclick=()=>setReqSidebarCollaps
 function setPage(p){
   page=p;
   $$('.page-tab').forEach(b=>{const active=b.dataset.app===p;b.classList.toggle('active',active);b.setAttribute('aria-selected',String(active))});
-  const isReq=p==='requirements';
-  $('#app-subtitle').textContent=isReq?'需求文档管理':'测试用例管理';
-  $('#workspace').classList.toggle('hidden',isReq);
-  $('#req-workspace').classList.toggle('hidden',!isReq);
-  if(isReq)updateReqEmptyHint();
+  $('#app-subtitle').textContent={requirements:'需求文档管理',automation:'自动化脚本管理'}[p]||'测试用例管理';
+  $('#workspace').classList.toggle('hidden',p!=='cases');
+  $('#req-workspace').classList.toggle('hidden',p!=='requirements');
+  $('#auto-workspace').classList.toggle('hidden',p!=='automation');
+  if(p==='requirements')updateReqEmptyHint();
+  if(p==='automation')updateAutoEmptyHint();
 }
 $$('.page-tab').forEach(b=>b.onclick=()=>setPage(b.dataset.app));
+
+// ---- 自动化管理（脚本树）----------------------------------------------------
+// 脚本与用例一一对应，按 (版本, 用例) 存在 state.scripts 里。这里不维护第二套目录：
+// 目录结构直接取用例当前所在的文件夹，所以两棵树天然同名同构，用例移动/改名后脚本树
+// 自动跟随。树上只显示已经生成过脚本的用例，空目录不出现。
+let autoFocus=null, autoSidebarWidth=null;
+const scriptsIn=vid=>state.scripts.filter(s=>s.VersionID===vid);
+const scriptFor=(vid,caseID)=>state.scripts.find(s=>s.VersionID===vid&&s.CaseID===caseID);
+const caseOfScript=s=>state.cases.find(c=>c.VersionID===s.VersionID&&c.ID===s.CaseID);
+// 用例内容改动后，脚本断言的就不再是当前用例：FromXxx 是生成时的用例原文快照，
+// 与当前用例逐字段比较即可判断，和"阅读友好版"用的是同一套机制。
+function scriptStale(s){const c=caseOfScript(s);return !!c&&(s.FromPreconditions!==(c.Preconditions||'')||s.FromSteps!==(c.Steps||'')||s.FromExpected!==(c.Expected||''))}
+const scriptStatusName=s=>s.Status==='blocked'?'未生成（受阻）':'已生成';
+function scriptBadges(s){
+  return `${s.Status==='blocked'?'<span class="result failed" title="受阻未生成"></span>':'<span class="result passed" title="已生成"></span>'}${scriptStale(s)?'<span class="risk-tag risk-medium script-stale-tag" title="用例内容已变更">过时</span>':''}`;
+}
+function scriptTreeHTML(vid){
+  const fs=folders(vid),cs=cases(vid),list=scriptsIn(vid);
+  if(!list.length)return '';
+  const byFolder=new Map();
+  for(const s of list){
+    const c=cs.find(x=>x.ID===s.CaseID),fid=c?c.FolderID:'root';
+    if(!byFolder.has(fid))byFolder.set(fid,[]);
+    byFolder.get(fid).push(s);
+  }
+  const has=f=>(byFolder.get(f.ID)?.length||0)>0||fs.filter(x=>x.ParentID===f.ID).some(has);
+  function node(f,depth){
+    if(!has(f))return '';
+    const own=byFolder.get(f.ID)||[],children=fs.filter(x=>x.ParentID===f.ID);
+    return `<div class="tree-row folder-row" style="padding-left:${8+depth*17}px" data-script-folder="${f.ID}" data-script-version="${vid}"><span class="chev">▾</span><span>📁</span><span class="label">${esc(f.Name)}</span></div><div>${own.map(s=>scriptRow(s,depth+1)).join('')}${children.map(ch=>node(ch,depth+1)).join('')}</div>`;
+  }
+  const roots=fs.filter(f=>!f.ParentID||!fs.some(x=>x.ID===f.ParentID));
+  return roots.map(r=>node(r,0)).join('');
+}
+function scriptRow(s,depth){
+  const label=`${s.CaseID} ${s.Title||caseOfScript(s)?.Title||''}`;
+  return `<div class="tree-row case-row" style="padding-left:${8+depth*17}px" data-script-case="${s.CaseID}" data-script-version="${s.VersionID}" title="${esc(label)}"><span class="label">${esc(label)}</span>${scriptBadges(s)}</div>`;
+}
+function renderScriptTree(){
+  const box=$('#script-tree');
+  if(!box)return;
+  const withScripts=state.versions.filter(v=>scriptsIn(v.id).length);
+  box.innerHTML=withScripts.map(v=>`<div class="version" data-version="${v.id}"><div class="version-title"><span class="chev">⌄</span><span>${esc(v.name)}</span><span class="badge">${scriptsIn(v.id).length} 个脚本</span></div><div class="version-body">${scriptTreeHTML(v.id)}</div></div>`).join('')
+    ||'<p class="meta script-tree-empty">还没有生成脚本。在「用例管理」里右键目录或用例，选择「脚本生成」，生成结果会自动同步到这里。</p>';
+  bindScriptTree(box);
+}
+function bindScriptTree(root){
+  root.querySelectorAll('.version-title').forEach(e=>{
+    const v=e.parentElement,key=`script:${v.dataset.version}`;
+    if(closedVersions.has(key))v.classList.add('closed');
+    e.onclick=()=>{const closed=v.classList.toggle('closed');closed?closedVersions.add(key):closedVersions.delete(key)};
+  });
+  root.querySelectorAll('[data-script-folder]').forEach(e=>{
+    const key=`script:${e.dataset.scriptVersion}:${e.dataset.scriptFolder}`;
+    if(closedFolders.has(key))e.classList.add('closed');
+    e.querySelector('.chev').onclick=x=>{x.stopPropagation();const closed=e.classList.toggle('closed');closed?closedFolders.add(key):closedFolders.delete(key)};
+    e.onclick=x=>{if(x.target.closest('.chev'))return;setAutoFocus({type:'folder',versionID:e.dataset.scriptVersion,id:e.dataset.scriptFolder})};
+    e.oncontextmenu=x=>menu(x,scriptFolderMenu(e.dataset.scriptVersion,e.dataset.scriptFolder));
+  });
+  root.querySelectorAll('[data-script-case]').forEach(e=>{
+    e.onclick=()=>setAutoFocus({type:'script',versionID:e.dataset.scriptVersion,id:e.dataset.scriptCase});
+    e.oncontextmenu=x=>menu(x,scriptMenu(e.dataset.scriptVersion,e.dataset.scriptCase));
+  });
+}
+// 目录下（含子目录）已有脚本的用例，用于按目录重新生成/删除。
+function scriptCaseIdsIn(vid,folderId){
+  const f=state.folders.find(x=>x.VersionID===vid&&x.ID===folderId);
+  if(!f)return [];
+  const scope=[f.ID,...descendantFolders(f)];
+  return scriptsIn(vid).filter(s=>{const c=caseOfScript(s);return c&&scope.includes(c.FolderID)}).map(s=>s.CaseID);
+}
+function scriptFolderMenu(vid,folderId){
+  const ids=scriptCaseIdsIn(vid,folderId);
+  return [['查看详情',()=>setAutoFocus({type:'folder',versionID:vid,id:folderId})],
+    [`重新生成（${ids.length}）`,()=>ids.length?startGeneration(vid,ids,`重新生成 · ${state.folders.find(x=>x.VersionID===vid&&x.ID===folderId)?.Name||''}`):toast('该目录下没有脚本',true)],
+    ['在用例管理中打开',()=>{setPage('cases');setFocus({type:'folder',versionID:vid,id:folderId})}],
+    ['删除目录下的脚本',()=>{if(ids.length&&confirm(`确定删除该目录下的 ${ids.length} 个脚本？用例本身不受影响，可以重新生成。`))act('deleteScripts',{VersionID:vid,CaseIDs:ids}).then(()=>{if(autoFocus?.type==='script')autoFocus=null;toast('脚本已删除')}).catch(()=>{})},'danger']];
+}
+function scriptMenu(vid,caseID){
+  return [['查看详情',()=>setAutoFocus({type:'script',versionID:vid,id:caseID})],
+    ['重新生成',()=>startGeneration(vid,[caseID],caseID)],
+    ['在用例管理中打开',()=>openCaseFromScript(vid,caseID)],
+    ['删除脚本',()=>{if(confirm('确定删除这个脚本？用例本身不受影响，可以重新生成。'))act('deleteScripts',{VersionID:vid,CaseIDs:[caseID]}).then(()=>{if(autoFocus?.id===caseID)autoFocus=null;toast('脚本已删除')}).catch(()=>{})},'danger']];
+}
+function openCaseFromScript(vid,caseID){
+  if(!state.cases.some(c=>c.VersionID===vid&&c.ID===caseID))return toast('对应用例已不存在',true);
+  setPage('cases');setFocus({type:'case',versionID:vid,id:caseID});
+}
+function setAutoFocus(x){autoFocus=x;renderScriptTree();renderAutoFocus()}
+function renderAutoFocus(){
+  const box=$('#auto-detail');
+  if(!box)return;
+  if(!autoFocus){updateAutoEmptyHint();$('#auto-empty').classList.remove('hidden');box.classList.add('hidden');return}
+  if(autoFocus.type==='folder'){
+    const f=state.folders.find(x=>x.VersionID===autoFocus.versionID&&x.ID===autoFocus.id);
+    if(!f){autoFocus=null;return renderAutoFocus()}
+    const ids=scriptCaseIdsIn(f.VersionID,f.ID),scripts=ids.map(id=>scriptFor(f.VersionID,id));
+    $('#auto-empty').classList.add('hidden');box.classList.remove('hidden');
+    box.innerHTML=`<div class="detail-head"><div><div class="eyebrow">脚本目录 · ${esc(version(f.VersionID)?.name||'')}</div><h1>📁 ${esc(f.Name)}</h1></div><div class="detail-actions"><button id="auto-folder-regen"${ids.length?'':' disabled'}>重新生成全部</button></div></div><div class="card meta-grid"><span>脚本 <b>${ids.length}</b></span><span>已生成 <b>${scripts.filter(s=>s.Status!=='blocked').length}</b></span><span>受阻 <b>${scripts.filter(s=>s.Status==='blocked').length}</b></span><span>已过时 <b>${scripts.filter(scriptStale).length}</b></span></div>`;
+    const btn=$('#auto-folder-regen');
+    if(btn)btn.onclick=()=>startGeneration(f.VersionID,ids,`重新生成 · ${f.Name}`);
+    return;
+  }
+  const s=scriptFor(autoFocus.versionID,autoFocus.id);
+  if(!s){autoFocus=null;return renderAutoFocus()}
+  $('#auto-empty').classList.add('hidden');box.classList.remove('hidden');
+  const c=caseOfScript(s),stale=scriptStale(s),blocked=s.Status==='blocked';
+  const deviations=s.Deviations?.length?`<div class="card"><h3>与用例预期的实测偏差 <small class="meta">脚本按实测行为断言，并在对应行标注 // deviation:</small></h3>${aiRiskListHTML(s.Deviations.map(d=>({risk:d.Risk,summary:d.Summary})),d=>esc(d.summary))}</div>`:'';
+  const staleHint=stale?`<div class="card script-stale"><b>用例内容已变更</b><p class="meta">这个脚本是按变更前的用例生成的，断言可能已经不符合当前用例。确认用例后可以重新生成。</p><p class="drawer-actions"><button type="button" id="script-regen-stale">重新生成</button></p></div>`:'';
+  const body=blocked
+    ?`<div class="card"><h3>未能生成脚本</h3><p>${esc(s.Summary||'生成器未说明原因')}</p><p class="meta">生成器在缺少必需输入（账号、令牌、素材等）或流程不可达时不会写出脚本，也不会用 skip/占位断言绕过。补齐所需输入后重新生成即可。</p></div>`
+    :`<div class="card script-code-card"><div class="script-code-head"><b>${esc(s.FileName)}</b><span class="meta">${s.Code.split('\n').length} 行</span><button type="button" class="secondary" id="script-copy">复制</button><button type="button" class="secondary" id="script-download">下载</button></div><pre class="script-code">${esc(s.Code)}</pre></div>`;
+  box.innerHTML=`<div class="detail-head"><div><div class="eyebrow">${esc(s.CaseID)} · ${esc(version(s.VersionID)?.name||'')}</div><h1>${esc(s.Title||c?.Title||s.CaseID)}</h1></div><div class="detail-actions"><button class="secondary" id="script-open-case">查看用例</button><button id="script-regen">重新生成</button></div></div><div class="card meta-grid"><span>状态 <b>${scriptStatusName(s)}${stale?' · 已过时':''}</b></span><span>文件 <b>${esc(s.FileName)}</b></span><span>更新时间 <b>${fmt(s.UpdatedAt)}</b></span><span>生成者 <b>${esc(s.UpdatedBy||'—')}</b></span></div>${s.Summary&&!blocked?`<div class="card"><h3>脚本验证的内容</h3><p>${esc(s.Summary)}</p></div>`:''}${staleHint}${deviations}${body}`;
+  $('#script-open-case').onclick=()=>openCaseFromScript(s.VersionID,s.CaseID);
+  const regen=()=>startGeneration(s.VersionID,[s.CaseID],s.CaseID);
+  $('#script-regen').onclick=regen;
+  $('#script-regen-stale')?.addEventListener('click',regen);
+  $('#script-copy')?.addEventListener('click',async()=>{
+    try{await navigator.clipboard.writeText(s.Code);toast('脚本已复制')}catch{toast('复制失败，请手动选择复制',true)}
+  });
+  $('#script-download')?.addEventListener('click',()=>{
+    const a=document.createElement('a');
+    a.href=URL.createObjectURL(new Blob([s.Code],{type:'text/plain;charset=utf-8'}));
+    a.download=s.FileName;a.click();URL.revokeObjectURL(a.href);
+  });
+}
+function updateAutoEmptyHint(){
+  const collapsed=$('#auto-sidebar').classList.contains('hidden');
+  $('#auto-empty-title').textContent=collapsed?'展开侧栏，继续浏览':'从一个脚本开始';
+  $('#auto-empty-expand').classList.toggle('hidden',!collapsed);
+}
+function setAutoSidebarCollapsed(collapsed){
+  if(collapsed&&!$('#auto-sidebar').classList.contains('hidden')){
+    const width=$('#auto-sidebar').getBoundingClientRect().width;
+    if(width>=220)autoSidebarWidth=width;
+  }
+  document.documentElement.style.setProperty('--auto-side',collapsed?'0px':`${autoSidebarWidth||340}px`);
+  $('#auto-workspace').classList.toggle('sidebar-collapsed',collapsed);
+  $('#auto-sidebar').classList.toggle('hidden',collapsed);
+  $('#auto-resize-left').classList.toggle('hidden',collapsed);
+  $('#auto-expand').classList.toggle('hidden',!collapsed);
+  updateAutoEmptyHint();
+}
+$('#auto-collapse').onclick=()=>setAutoSidebarCollapsed(true);
+$('#auto-expand').onclick=$('#auto-empty-expand').onclick=()=>setAutoSidebarCollapsed(false);
+
+// ---- 脚本生成抽屉（对接 auto-test generator HTTP 服务）------------------------
+// 与"AI 设计"抽屉的单任务模型不同：脚本生成天然是批量的（一个目录几十条用例），
+// 所以抽屉里是一个任务列表，每个任务一个可展开选项卡，可以同时跑多个、关掉抽屉后
+// 继续在后台跑，重新打开按 ID 恢复查看。任务清单存在 localStorage，脚本本身存在
+// 服务端 state 里（saveScript）。
+const GEN_TASKS_KEY='casehub-gen-tasks';
+// 上次填过的目标信息，下次生成默认带出；密码不保存，每次重新输入。
+const GEN_TARGET_KEY='casehub-gen-target';
+const GEN_MAX_CASES=50; // generator 单任务上限，超出自动拆成多个任务
+const GEN_TERMINAL=['succeeded','failed','cancelled'];
+let genTasks=loadGenTasks(), genDraft=null, genEnabled=null;
+const genRuntime=new Map(); // jobId -> {source, log:[], stage, status}
+const genOpen=new Set();    // 展开的选项卡（'draft' 或 jobId）
+function loadGenTasks(){try{const x=JSON.parse(localStorage.getItem(GEN_TASKS_KEY));return Array.isArray(x)?x:[]}catch{return []}}
+function saveGenTasks(){try{localStorage.setItem(GEN_TASKS_KEY,JSON.stringify(genTasks.slice(0,30)))}catch{}}
+function loadGenTarget(){try{return JSON.parse(localStorage.getItem(GEN_TARGET_KEY))||{}}catch{return {}}}
+function saveGenTarget(v){try{localStorage.setItem(GEN_TARGET_KEY,JSON.stringify({baseUrl:v.baseUrl||'',instructions:v.instructions||'',testAccount:v.testAccount||'',reqDoc:v.reqDoc||'auto'}))}catch{}}
+const isGenDrawerOpen=()=>!$('#gen-drawer').classList.contains('hidden');
+const genTask=jobId=>genTasks.find(t=>t.jobId===jobId);
+const genRunning=()=>genTasks.filter(t=>!GEN_TERMINAL.includes(t.status));
+
+function generateForFolder(vid,folderId){
+  const f=state.folders.find(x=>x.VersionID===vid&&x.ID===folderId);
+  if(!f)return;
+  const scope=[f.ID,...descendantFolders(f)];
+  const ids=cases(vid).filter(c=>scope.includes(c.FolderID)).map(c=>c.ID);
+  if(!ids.length)return toast('该目录没有用例',true);
+  startGeneration(vid,ids,f.Name);
+}
+// 生成的输入是用例本身（planner 设计、评审后导入的那份原文），可选附带需求文档做背景。
+function startGeneration(vid,caseIDs,label){
+  const usable=caseIDs.filter(id=>{const c=state.cases.find(x=>x.VersionID===vid&&x.ID===id);return c&&(c.Steps||'').trim()});
+  if(!usable.length)return toast('选中的用例没有执行步骤，无法生成脚本',true);
+  genDraft={versionID:vid,caseIDs:usable,skipped:caseIDs.length-usable.length,label:label||`${usable.length} 条用例`};
+  genOpen.add('draft');
+  openGenDrawer();
+}
+function openGenDrawer(){
+  $('#gen-drawer').classList.remove('hidden');
+  renderGenDrawer();
+}
+$('#gen-drawer-close').onclick=()=>$('#gen-drawer').classList.add('hidden');
+
+async function renderGenDrawer(){
+  const body=$('#gen-drawer-body');
+  if(genEnabled===null){
+    body.innerHTML='<p class="meta">正在检查脚本生成服务…</p>';
+    try{genEnabled=(await serviceRequest('/api/generator/status')).enabled}catch{genEnabled=false}
+  }
+  $('#gen-drawer-sub').textContent=genRunning().length?`${genRunning().length} 个任务进行中`:`${genTasks.length} 个任务`;
+  if(!genEnabled){
+    body.innerHTML='<p class="meta">脚本生成服务未配置（缺少 CASEHUB_GENERATOR_URL），暂时无法使用。</p>';
+    return;
+  }
+  body.innerHTML=`${genDraft?genDraftHTML():''}${genTasks.length?genTasks.map(genTaskHTML).join(''):(genDraft?'':'<p class="meta">还没有生成任务。在「用例管理」里右键目录或用例，选择「脚本生成」。</p>')}`;
+  bindGenDraft();
+  bindGenTasks();
+}
+const genCaseCount=t=>t.caseIDs.length;
+function genDraftHTML(){
+  const v=loadGenTarget(),d=genDraft;
+  const existing=d.caseIDs.filter(id=>scriptFor(d.versionID,id)).length;
+  const batches=Math.ceil(d.caseIDs.length/GEN_MAX_CASES);
+  const docs=state.reqDocs.map(x=>`<option value="${x.ID}"${v.reqDoc===x.ID?' selected':''}>${esc(x.Title)}${x.Code?`（${esc(x.Code)}）`:''}</option>`).join('');
+  return `<details class="gen-task" data-gen-panel="draft"${genOpen.has('draft')?' open':''}>
+    <summary><span class="gen-task-title">新建生成任务 · ${esc(d.label)}</span><span class="gen-chip">${d.caseIDs.length} 条用例</span></summary>
+    <form id="gen-form" autocomplete="off">
+      <p class="meta">脚本按用例原文（前置条件 / 步骤 / 预期结果）生成，一条用例一个 spec 文件，结果自动同步到「自动化管理」。${existing?`其中 ${existing} 条已有脚本，会被覆盖。`:''}${d.skipped?`已跳过 ${d.skipped} 条没有执行步骤的用例。`:''}${batches>1?`超过单任务上限，将拆成 ${batches} 个任务依次提交。`:''}</p>
+      <label>被测系统 URL<input name="baseUrl" required placeholder="https://test.example.com" value="${esc(v.baseUrl||'')}"></label>
+      <label>参考需求文档<select name="reqDoc"><option value="auto"${(v.reqDoc||'auto')==='auto'?' selected':''}>自动匹配（按用例编号前缀）</option><option value=""${v.reqDoc===''?' selected':''}>不附带需求文档</option>${docs}</select></label>
+      <label>补充说明（可选）<textarea name="instructions" placeholder="登录方式、数据约束、需要避免的操作等">${esc(v.instructions||'')}</textarea></label>
+      <label>测试账号 · 用户名（可选）<input name="testAccount" autocomplete="off" value="${esc(v.testAccount||'')}"></label>
+      <label>测试账号 · 密码（可选）<input name="testSecret" type="text" class="fake-password" autocomplete="off" spellcheck="false"></label>
+      <p class="drawer-actions"><button type="button" class="secondary" id="gen-cancel-draft">取消</button><button type="submit">开始生成</button></p>
+    </form>
+  </details>`;
+}
+function bindGenDraft(){
+  const form=$('#gen-form');
+  if(!form)return;
+  $('#gen-cancel-draft').onclick=()=>{genDraft=null;genOpen.delete('draft');renderGenDrawer()};
+  form.onsubmit=async e=>{
+    e.preventDefault();
+    const values=Object.fromEntries(new FormData(form));
+    if(!values.baseUrl.trim())return toast('请填写被测系统 URL',true);
+    saveGenTarget(values);
+    const btn=form.querySelector('button[type="submit"]');btn.disabled=true;
+    const d=genDraft,chunks=[];
+    for(let i=0;i<d.caseIDs.length;i+=GEN_MAX_CASES)chunks.push(d.caseIDs.slice(i,i+GEN_MAX_CASES));
+    try{
+      for(const [i,ids] of chunks.entries()){
+        const label=chunks.length>1?`${d.label}（${i+1}/${chunks.length}）`:d.label;
+        await submitGenJob(d.versionID,ids,label,values);
+      }
+      genDraft=null;genOpen.delete('draft');
+      toast(chunks.length>1?`已提交 ${chunks.length} 个生成任务`:'生成任务已提交');
+    }catch(err){toast(err.message,true);btn.disabled=false}
+    renderGenDrawer();
+  };
+}
+// 用例编号 TC-<需求缩写>-… 的第二段就是需求缩写，用它自动匹配需求文档；匹配不到就不附带。
+function reqDocForCase(c){
+  const m=/^TC-([A-Z][A-Z0-9]{1,11})-/.exec(c.ID||'');
+  return m?state.reqDocs.find(d=>d.Code===m[1]):undefined;
+}
+function genPayload(vid,ids,values){
+  const picked=ids.map(id=>state.cases.find(c=>c.VersionID===vid&&c.ID===id)).filter(Boolean);
+  const docs=new Map();
+  const cases=picked.map(c=>{
+    const doc=values.reqDoc==='auto'?reqDocForCase(c):(values.reqDoc?state.reqDocs.find(d=>d.ID===values.reqDoc):undefined);
+    if(doc&&(doc.Content||'').trim())docs.set(doc.ID,{id:doc.ID,title:doc.Title,content:doc.Content});
+    return {id:c.ID,title:c.Title,priority:c.Priority||'',...(doc&&docs.has(doc.ID)?{requirement:doc.ID}:{}),
+      precondition:c.Preconditions||'',steps:c.Steps||'',expects:c.Expected||''};
+  });
+  const payload={cases,target:{baseUrl:values.baseUrl.trim()},context:{}};
+  if(docs.size)payload.requirements=[...docs.values()];
+  if((values.instructions||'').trim())payload.context.instructions=values.instructions.trim();
+  if(values.testAccount||values.testSecret)payload.context.testData={username:values.testAccount||'',password:values.testSecret||''};
+  return payload;
+}
+async function submitGenJob(vid,ids,label,values){
+  const job=await serviceRequest('/api/generator/jobs',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify(genPayload(vid,ids,values))});
+  const task={jobId:job.id,versionID:vid,versionName:version(vid)?.name||'',caseIDs:ids,label,createdAt:job.createdAt||new Date().toISOString(),status:job.status,stage:job.stage};
+  genTasks.unshift(task);saveGenTasks();
+  genOpen.add(job.id);
+  routeGenJob(task,job);
+}
+function genStatusText(task){
+  const status={queued:'排队中',running:'进行中',succeeded:'已完成',failed:'失败',cancelled:'已取消',importing:'正在保存脚本'}[task.status]||task.status;
+  return task.stage&&!GEN_TERMINAL.includes(task.status)?`${status} · ${esc(task.stage)}`:status;
+}
+function genTaskHTML(task){
+  const runtime=genRuntime.get(task.jobId);
+  const done=task.saved?`<div class="card meta-grid"><span>已生成 <b>${task.saved.generated}</b></span><span>受阻 <b>${task.saved.blocked}</b></span>${task.saved.failed?`<span>保存失败 <b>${task.saved.failed}</b></span>`:''}</div>`:'';
+  const limitations=task.limitations?.length?`<div class="card"><h3>未生成的用例 <small class="meta">按风险从高到低</small></h3>${aiRiskListHTML(task.limitations,l=>esc(l.summary))}</div>`:'';
+  const error=task.error?`<p class="meta">${esc(task.error.code||'')}${task.error.code?'：':''}${esc(task.error.message||'')}</p>`:'';
+  const actions=GEN_TERMINAL.includes(task.status)
+    ?`<button type="button" class="secondary" data-gen-forget="${task.jobId}">移除记录</button>${task.status==='succeeded'&&!task.saved?`<button type="button" data-gen-import="${task.jobId}">重试保存</button>`:''}${task.status!=='succeeded'?`<button type="button" data-gen-retry="${task.jobId}">重新生成</button>`:''}`
+    :`<button type="button" class="secondary" data-gen-cancel="${task.jobId}">取消任务</button>`;
+  return `<details class="gen-task" data-gen-panel="${task.jobId}"${genOpen.has(task.jobId)?' open':''}>
+    <summary><span class="gen-task-title">${esc(task.label)}</span><span class="gen-chip">${genCaseCount(task)} 条</span><span class="gen-chip gen-status-${GEN_TERMINAL.includes(task.status)?task.status:'running'}" data-gen-status="${task.jobId}">${genStatusText(task)}</span></summary>
+    <p class="meta">${esc(task.versionName||'')} · 提交于 ${fmt(task.createdAt)}</p>
+    ${done}${limitations}${error}
+    <div class="ai-log" data-gen-log="${task.jobId}">${(runtime?.log||[]).map(line=>`<div>${esc(line)}</div>`).join('')}</div>
+    <p class="drawer-actions">${actions}</p>
+  </details>`;
+}
+function bindGenTasks(){
+  $$('#gen-drawer-body [data-gen-panel]').forEach(el=>{
+    el.ontoggle=()=>{el.open?genOpen.add(el.dataset.genPanel):genOpen.delete(el.dataset.genPanel)};
+  });
+  $$('#gen-drawer-body [data-gen-cancel]').forEach(b=>b.onclick=async()=>{
+    b.disabled=true;
+    try{await serviceRequest(`/api/generator/jobs/${b.dataset.genCancel}`,{method:'DELETE'})}catch(e){toast(e.message,true);b.disabled=false}
+  });
+  $$('#gen-drawer-body [data-gen-import]').forEach(b=>b.onclick=()=>{const t=genTask(b.dataset.genImport);if(t)importGenResult(t)});
+  $$('#gen-drawer-body [data-gen-retry]').forEach(b=>b.onclick=()=>{const t=genTask(b.dataset.genRetry);if(t)startGeneration(t.versionID,t.caseIDs,t.label)});
+  $$('#gen-drawer-body [data-gen-forget]').forEach(b=>b.onclick=()=>{
+    const id=b.dataset.genForget;
+    closeGenStream(id);
+    genTasks=genTasks.filter(t=>t.jobId!==id);saveGenTasks();genRuntime.delete(id);genOpen.delete(id);
+    renderGenDrawer();
+  });
+}
+function genLogLine(jobId,msg){
+  const runtime=genRuntime.get(jobId)||{log:[]};
+  runtime.log.push(msg);
+  if(runtime.log.length>200)runtime.log.shift();
+  genRuntime.set(jobId,runtime);
+  const box=$(`#gen-drawer-body [data-gen-log="${jobId}"]`);
+  if(!box)return;
+  const atBottom=box.scrollTop+box.clientHeight>=box.scrollHeight-4;
+  const line=document.createElement('div');line.textContent=msg;box.appendChild(line);
+  while(box.childElementCount>200)box.removeChild(box.firstChild);
+  if(atBottom)box.scrollTop=box.scrollHeight;
+}
+function updateGenStatusChip(task){
+  const chip=$(`#gen-drawer-body [data-gen-status="${task.jobId}"]`);
+  if(chip){chip.textContent=genStatusText(task);chip.className=`gen-chip gen-status-${GEN_TERMINAL.includes(task.status)?task.status:'running'}`}
+  $('#gen-drawer-sub').textContent=genRunning().length?`${genRunning().length} 个任务进行中`:`${genTasks.length} 个任务`;
+}
+function closeGenStream(jobId){const r=genRuntime.get(jobId);r?.source?.close();if(r)r.source=null}
+// 任务状态的唯一分发点：抽屉关不关都会更新任务列表、维持 SSE，并在完成时自动保存脚本。
+function routeGenJob(task,job){
+  task.status=job.status;task.stage=job.stage;task.error=job.error;
+  saveGenTasks();
+  updateGenStatusChip(task);
+  if(!GEN_TERMINAL.includes(job.status))return ensureGenStream(task);
+  closeGenStream(task.jobId);
+  if(job.status==='succeeded'&&!task.saved)return importGenResult(task);
+  if(isGenDrawerOpen())renderGenDrawer();
+}
+function ensureGenStream(task){
+  const runtime=genRuntime.get(task.jobId)||{log:[]};
+  if(runtime.source)return;
+  const source=new EventSource(`/api/generator/jobs/${task.jobId}/events`);
+  runtime.source=source;genRuntime.set(task.jobId,runtime);
+  source.addEventListener('snapshot',e=>{
+    const job=JSON.parse(e.data);
+    task.status=job.status;task.stage=job.stage;task.error=job.error;saveGenTasks();updateGenStatusChip(task);
+    if(GEN_TERMINAL.includes(job.status))routeGenJob(task,job);
+  });
+  source.addEventListener('progress',e=>{
+    const ev=JSON.parse(e.data);
+    task.stage=ev.stage;updateGenStatusChip(task);
+    genLogLine(task.jobId,`[${fmt(ev.createdAt)}] ${ev.stage||''} ${ev.message||''}${ev.tool?` (${ev.tool} ${ev.toolStatus||''})`:''}`.trim());
+    if(GEN_TERMINAL.includes(ev.status))serviceRequest(`/api/generator/jobs/${task.jobId}`).then(job=>routeGenJob(task,job)).catch(()=>{});
+  });
+  source.addEventListener('reset',e=>{
+    const r=JSON.parse(e.data);
+    genLogLine(task.jobId,`……${r.message||'更早的进度记录已丢失'}`);
+  });
+  source.onerror=()=>{/* EventSource 会自己重连；终态时服务端关闭连接，routeGenJob 已经停止订阅 */};
+}
+// 生成完成后自动把脚本写进 CaseHub（saveScript），无需人工点击导入；受阻的用例也照样
+// 保存，它带着"为什么没生成"的原因，正是评审人需要看到的。
+async function importGenResult(task){
+  if(task.importing)return;
+  task.importing=true;task.status='importing';updateGenStatusChip(task);
+  try{
+    const result=await serviceRequest(`/api/generator/jobs/${task.jobId}/result`);
+    let failed=0;
+    for(const sc of result.scripts||[]){
+      try{
+        await act('saveScript',{VersionID:task.versionID,CaseID:sc.caseId,ScriptFileName:sc.fileName,ScriptLanguage:sc.language,
+          ScriptCode:sc.code||'',ScriptStatus:sc.status,ScriptSummary:sc.summary||'',ScriptJobID:task.jobId,
+          ScriptDeviations:(sc.deviations||[]).map(d=>({Risk:d.risk,Summary:d.summary}))});
+      }catch{failed++} // act 已提示失败原因（例如用例在生成期间被删除）
+    }
+    task.status='succeeded';
+    task.saved={generated:result.generated??0,blocked:result.blocked??0,failed};
+    task.limitations=result.limitations||[];
+    toast(`「${task.label}」生成完成：${task.saved.generated} 个脚本已保存${task.saved.blocked?`，${task.saved.blocked} 条用例未生成`:''}`);
+  }catch(e){
+    task.status='succeeded'; // 任务本身成功了，只是结果还没保存下来
+    task.error={code:'SAVE_FAILED',message:`保存脚本失败：${e.message}`};
+    toast(task.error.message,true);
+  }finally{
+    task.importing=false;saveGenTasks();
+    if(isGenDrawerOpen())renderGenDrawer();
+  }
+}
+// 刷新页面后恢复未完成的任务：按 ID 查状态，继续订阅或补做保存。
+async function resumeGenTasks(){
+  for(const task of genTasks){
+    if(GEN_TERMINAL.includes(task.status)&&task.saved)continue;
+    try{
+      const job=await serviceRequest(`/api/generator/jobs/${task.jobId}`);
+      routeGenJob(task,job);
+    }catch(e){
+      if(!GEN_TERMINAL.includes(task.status)){
+        task.status='failed';task.error={code:e.code||'JOB_LOST',message:e.message||'任务状态已失效'};saveGenTasks();
+      }
+    }
+  }
+}

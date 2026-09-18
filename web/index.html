@@ -17,6 +17,7 @@
   <nav class="page-tabs" role="tablist">
     <button type="button" class="page-tab active" role="tab" aria-selected="true" data-app="cases">🗂 用例管理</button>
     <button type="button" class="page-tab" role="tab" aria-selected="false" data-app="requirements">📄 需求管理</button>
+    <button type="button" class="page-tab" role="tab" aria-selected="false" data-app="automation">🤖 自动化管理</button>
   </nav>
   <main id="workspace">
     <aside id="sidebar">
@@ -24,7 +25,7 @@
         <div class="segmented"><button class="active" data-view="cases">用例树</button><button data-view="tasks">测试任务</button></div>
         <button class="icon-button" id="collapse" title="折叠">‹</button>
       </div>
-      <div id="bulk" class="bulk hidden"><span id="selected-count"></span><button data-bulk="export">导出</button><button data-bulk="feishu">复制飞书思维导图</button><button data-bulk="task">创建任务</button><button data-bulk="move">移动到</button><button data-bulk="merge">合并到主线</button><button data-bulk="delete" class="danger">删除</button></div>
+      <div id="bulk" class="bulk hidden"><span id="selected-count"></span><button data-bulk="export">导出</button><button data-bulk="feishu">复制飞书思维导图</button><button data-bulk="task">创建任务</button><button data-bulk="script">脚本生成</button><button data-bulk="move">移动到</button><button data-bulk="merge">合并到主线</button><button data-bulk="delete" class="danger">删除</button></div>
       <div id="case-view"><div id="versions" class="versions"></div><button class="create-version" id="create-version">＋ 创建测试版本</button></div>
       <div id="task-view" class="hidden"><div id="tasks"></div></div>
     </aside>
@@ -63,10 +64,26 @@
       <div id="req-detail" class="hidden"></div>
     </section>
   </main>
+  <main id="auto-workspace" class="hidden">
+    <aside id="auto-sidebar">
+      <div class="sidebar-head">
+        <div class="segmented"><button class="active" data-autoview="scripts">脚本树</button></div>
+        <button class="icon-button" id="auto-collapse" title="折叠">‹</button>
+      </div>
+      <div id="script-tree" class="versions"></div>
+    </aside>
+    <div id="auto-resize-left" class="resizer"></div>
+    <button id="auto-expand" class="expand hidden" title="展开侧栏" aria-label="展开侧栏" aria-controls="auto-sidebar">›</button>
+    <section id="auto-content">
+      <div id="auto-empty" class="empty"><div class="empty-icon">🤖</div><h2 id="auto-empty-title">从一个脚本开始</h2><p id="auto-empty-hint">选择左侧的目录或脚本，即可在这里查看详情。脚本由用例管理里的「脚本生成」产生，与用例一一对应。</p><button type="button" id="auto-empty-expand" class="hidden">展开脚本树</button></div>
+      <div id="auto-detail" class="hidden"></div>
+    </section>
+  </main>
   <div id="context-menu" class="context-menu hidden"></div>
   <dialog id="modal"><form id="modal-form"><div class="modal-head"><h3 id="modal-title"></h3><button type="button" class="icon-button" id="modal-close">×</button></div><div id="modal-body"></div><p class="modal-actions"><button type="button" class="secondary" id="modal-cancel">取消</button><button type="submit">保存</button></p></form></dialog>
   <aside id="drawer" class="drawer hidden"><div class="panel-head"><div><strong>测试记录</strong><small id="drawer-case"></small></div><button class="icon-button" id="drawer-close">×</button></div><div id="drawer-case-desc" class="drawer-case-desc"></div><div id="record-history"></div><form id="record-form"><label>提交到版本<select id="record-version"></select></label><label>测试结果<select name="result" required><option value="passed">通过</option><option value="failed">失败</option><option value="blocked">阻塞</option></select></label><div class="record-editor-label" id="record-editor-label">执行备注 · Markdown / 富文本</div><div id="record-editor" aria-labelledby="record-editor-label"></div><div class="drawer-actions"><button type="button" class="secondary" id="save-draft">保存草稿</button><button type="submit">提交记录</button></div></form></aside>
   <aside id="ai-drawer" class="drawer hidden"><div class="panel-head"><div><strong>AI 设计</strong><small id="ai-drawer-doc"></small></div><button class="icon-button" id="ai-drawer-close">×</button></div><div id="ai-drawer-body" class="ai-drawer-body"><p class="meta">AI 设计能力即将上线，敬请期待。</p></div></aside>
+  <aside id="gen-drawer" class="drawer hidden"><div class="panel-head"><div><strong>脚本生成</strong><small id="gen-drawer-sub"></small></div><button class="icon-button" id="gen-drawer-close">×</button></div><div id="gen-drawer-body" class="ai-drawer-body"></div></aside>
   <dialog id="feishu-export" aria-labelledby="feishu-export-title">
     <div class="modal-head"><h3 id="feishu-export-title">复制飞书思维导图</h3><button type="button" class="icon-button" id="feishu-export-close" aria-label="关闭">×</button></div>
     <p>复制后，进入飞书云文档中的白板编辑模式，点击画布空白处，再按 Ctrl+V（Mac：⌘V），生成可编辑的思维导图。</p>

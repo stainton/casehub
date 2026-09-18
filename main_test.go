@@ -9,8 +9,8 @@ import (
 	"testing"
 
 	"casehub/internal/core"
-	"casehub/internal/planner"
 	"casehub/internal/store"
+	"casehub/internal/upstream"
 )
 
 func TestStorageKind(t *testing.T) {
@@ -29,9 +29,28 @@ func TestStorageKind(t *testing.T) {
 	}
 }
 
+// Both upstream services are optional; with neither configured the app still serves
+// its own pages and API, and each status endpoint reports its own service disabled.
+func disabledServices() []service {
+	planner, plannerEnabled := upstream.New("", "planner")
+	generator, generatorEnabled := upstream.New("", "generator")
+	return []service{{name: "planner", proxy: planner, enabled: plannerEnabled},
+		{name: "generator", proxy: generator, enabled: generatorEnabled}}
+}
+
+func TestUpstreamServiceStatusIsReportedPerService(t *testing.T) {
+	handler := routes(&api{service: core.NewService(store.NewMemory())}, disabledServices()...)
+	for _, name := range []string{"planner", "generator"} {
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/"+name+"/status", nil))
+		if w.Code != 200 || !strings.Contains(w.Body.String(), `"enabled":false`) {
+			t.Fatalf("%s status: %d %s", name, w.Code, w.Body.String())
+		}
+	}
+}
+
 func TestFrontendAssetsAndMarkdownRecord(t *testing.T) {
-	plannerProxy, plannerEnabled := planner.New("")
-	handler := routes(&api{service: core.NewService(store.NewMemory())}, plannerProxy, plannerEnabled)
+	handler := routes(&api{service: core.NewService(store.NewMemory())}, disabledServices()...)
 	for _, path := range []string{"/", "/web/api.html", "/web/api.js", "/web/vendor/toastui-editor-all.min.js", "/web/vendor/toastui-editor.min.css", "/web/vendor/toastui-editor-dark.min.css", "/web/vendor/zh-cn.js"} {
 		w := httptest.NewRecorder()
 		handler.ServeHTTP(w, httptest.NewRequest(http.MethodGet, path, nil))
@@ -72,8 +91,7 @@ func TestFrontendAssetsAndMarkdownRecord(t *testing.T) {
 }
 
 func TestCrossOriginRequests(t *testing.T) {
-	proxy, enabled := planner.New("")
-	handler := routes(&api{service: core.NewService(store.NewMemory())}, proxy, enabled)
+	handler := routes(&api{service: core.NewService(store.NewMemory())}, disabledServices()...)
 	for _, method := range []string{http.MethodOptions, http.MethodGet} {
 		r := httptest.NewRequest(method, "/api/state", nil)
 		r.Header.Set("Origin", "http://localhost:4501")

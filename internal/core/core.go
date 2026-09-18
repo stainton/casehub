@@ -113,6 +113,39 @@ type PendingCase struct {
 	SimplifiedAt                                                             time.Time
 }
 
+// Script is the automation asset of one test case: the Playwright spec the
+// auto-test generator produced for it. Scripts and cases are one to one, keyed
+// by (VersionID, CaseID) — the 自动化管理 page derives the script tree from the
+// case's own folder, so the two trees stay identically named and structured
+// without a second folder hierarchy to keep in sync. A script belongs to the
+// version its case lives in: it is not copied when a version is created and not
+// carried by sync/merge, because a generated spec is only meaningful for the
+// case text it was generated from, and it is deleted with its case or version.
+type Script struct {
+	// ID is stable per (VersionID, CaseID) so regenerating replaces in place.
+	ID, VersionID, CaseID string
+	// Title snapshots the case title so a script row reads correctly on its own.
+	Title, FileName, Language, Code string
+	// Status is "generated" or "blocked"; Summary says what the script verifies,
+	// or for a blocked case what input the generator was missing.
+	Status, Summary string
+	// Deviations are places where the live app contradicted the case's expected
+	// result; the spec asserts the observed behaviour (risk + short summary).
+	Deviations []RiskNote
+	// From* snapshots the exact case text the script was generated from, so the
+	// frontend detects a stale script with a plain string comparison after the
+	// case is edited — the same mechanism as TestCase.SimplifiedFrom*.
+	FromPreconditions, FromSteps, FromExpected string
+	JobID, CreatedBy, UpdatedBy                string
+	CreatedAt, UpdatedAt                       time.Time
+}
+
+// RiskNote is the risk-ranked one-line note shape both auto-test services use
+// (planner limitations/issues, generator deviations).
+type RiskNote struct {
+	Risk, Summary string
+}
+
 type State struct {
 	MainRevision   int64           `json:"mainRevision"`
 	Versions       []Version       `json:"versions"`
@@ -125,6 +158,7 @@ type State struct {
 	ReqDocs        []ReqDoc        `json:"reqDocs"`
 	PendingFolders []PendingFolder `json:"pendingFolders"`
 	PendingCases   []PendingCase   `json:"pendingCases"`
+	Scripts        []Script        `json:"scripts"`
 }
 
 type Action struct {
@@ -142,6 +176,12 @@ type Action struct {
 	SourceFolderID string
 	// simplifyCase / simplifyPendingCase: the caller-supplied rewrite to persist.
 	SimplifiedPreconditions, SimplifiedSteps, SimplifiedExpected string
+	// saveScript: the generated spec to persist against CaseID in VersionID.
+	// Prefixed because the plain names collide with requirement Code and record
+	// Result/Note above; the frontend sends exactly these keys.
+	ScriptFileName, ScriptLanguage, ScriptCode string
+	ScriptStatus, ScriptSummary, ScriptJobID   string
+	ScriptDeviations                           []RiskNote
 }
 
 type Result struct {
@@ -235,6 +275,7 @@ func Seed() State {
 		Histories:    []History{},
 		Records:      []Record{},
 		Tasks:        []Task{},
+		Scripts:      []Script{},
 	}
 	s.Versions = []Version{{ID: "main", Name: "主线", Mainline: true, BaseMainRevision: 1, CreatedBy: "system", CreatedAt: t}}
 	s.Folders = []Folder{{ID: "root", VersionID: "main", Name: "全部用例", CreatedBy: "system", CreatedAt: t}, {ID: "auth", VersionID: "main", ParentID: "root", Name: "登录与认证", CreatedBy: "system", CreatedAt: t}}
@@ -283,6 +324,9 @@ func normalizeState(state *State) {
 	}
 	if state.PendingCases == nil {
 		state.PendingCases = []PendingCase{}
+	}
+	if state.Scripts == nil {
+		state.Scripts = []Script{}
 	}
 	hasPendingRoot := false
 	for _, f := range state.PendingFolders {
@@ -339,6 +383,10 @@ func (s *Service) Apply(ctx context.Context, a Action) (Result, error) {
 		warnings, err = editCase(&st, a)
 	case "simplifyCase":
 		err = simplifyCase(&st, a)
+	case "saveScript":
+		err = saveScript(&st, a)
+	case "deleteScripts":
+		err = deleteScripts(&st, a)
 	case "deletePendingCases":
 		err = deletePendingCases(&st, a)
 	case "simplifyPendingCase":
@@ -506,6 +554,13 @@ func deleteVersion(s *State, a Action) error {
 		}
 	}
 	s.Cases = cases
+	scripts := make([]Script, 0, len(s.Scripts))
+	for _, x := range s.Scripts {
+		if x.VersionID != id {
+			scripts = append(scripts, x)
+		}
+	}
+	s.Scripts = scripts
 	tasks := make([]Task, 0, len(s.Tasks))
 	for _, t := range s.Tasks {
 		if t.VersionID != id {
@@ -662,6 +717,105 @@ func simplifyCase(s *State, a Action) error {
 	c.SimplifiedFromSteps = c.Steps
 	c.SimplifiedFromExpected = c.Expected
 	c.SimplifiedAt = now()
+	return nil
+}
+
+func scriptAt(s *State, versionID, caseID string) (*Script, int) {
+	for i := range s.Scripts {
+		if s.Scripts[i].VersionID == versionID && s.Scripts[i].CaseID == caseID {
+			return &s.Scripts[i], i
+		}
+	}
+	return nil, -1
+}
+
+// saveScript stores the Playwright spec the auto-test generator produced for one
+// case. It is an upsert keyed by (VersionID, CaseID): regenerating a script
+// replaces the previous one in place, since a case has exactly one script.
+// Allowed on mainline too — a script is a generated asset of the case, not a
+// case edit, so it touches neither Dirty nor Revision and needs no branch.
+// From* snapshots the case's CURRENT text (never trusted from the caller) so the
+// frontend can tell a stale script from a fresh one by string comparison after a
+// later edit. A blocked result is stored as well: it carries the reason the
+// generator could not automate the case, which is what the reviewer needs to see.
+func saveScript(s *State, a Action) error {
+	c, _ := caseAt(s, a.VersionID, a.CaseID)
+	if c == nil {
+		return errors.New("用例不存在")
+	}
+	status := strings.TrimSpace(a.ScriptStatus)
+	if status == "" {
+		status = "generated"
+	}
+	if status != "generated" && status != "blocked" {
+		return errors.New("脚本状态必须是 generated 或 blocked")
+	}
+	code := strings.TrimSpace(a.ScriptCode)
+	if status == "generated" && code == "" {
+		return errors.New("脚本内容不能为空")
+	}
+	for _, d := range a.ScriptDeviations {
+		if d.Risk != "high" && d.Risk != "medium" && d.Risk != "low" {
+			return errors.New("偏差风险必须是 high、medium 或 low")
+		}
+		if strings.TrimSpace(d.Summary) == "" {
+			return errors.New("偏差说明不能为空")
+		}
+	}
+	fileName := strings.TrimSpace(a.ScriptFileName)
+	if fileName == "" {
+		fileName = c.ID + ".spec.ts"
+	}
+	language := strings.TrimSpace(a.ScriptLanguage)
+	if language == "" {
+		language = "typescript"
+	}
+	t := now()
+	script, _ := scriptAt(s, a.VersionID, a.CaseID)
+	if script == nil {
+		s.Scripts = append(s.Scripts, Script{ID: ID(), VersionID: a.VersionID, CaseID: c.ID, CreatedBy: a.Author, CreatedAt: t})
+		script = &s.Scripts[len(s.Scripts)-1]
+	}
+	script.Title = c.Title
+	script.FileName = fileName
+	script.Language = language
+	script.Code = code
+	script.Status = status
+	script.Summary = strings.TrimSpace(a.ScriptSummary)
+	script.Deviations = append([]RiskNote(nil), a.ScriptDeviations...)
+	script.FromPreconditions = c.Preconditions
+	script.FromSteps = c.Steps
+	script.FromExpected = c.Expected
+	script.JobID = a.ScriptJobID
+	script.UpdatedBy = a.Author
+	script.UpdatedAt = t
+	return nil
+}
+
+// deleteScripts removes the scripts of the given cases in one version. Unlike
+// case deletion this is allowed on mainline: the script is a regenerable asset,
+// not case content.
+func deleteScripts(s *State, a Action) error {
+	if len(a.CaseIDs) == 0 {
+		return errors.New("请选择脚本")
+	}
+	ids := make(map[string]bool, len(a.CaseIDs))
+	for _, id := range a.CaseIDs {
+		ids[id] = true
+	}
+	kept := make([]Script, 0, len(s.Scripts))
+	removed := 0
+	for _, x := range s.Scripts {
+		if x.VersionID == a.VersionID && ids[x.CaseID] {
+			removed++
+			continue
+		}
+		kept = append(kept, x)
+	}
+	if removed == 0 {
+		return errors.New("脚本不存在")
+	}
+	s.Scripts = kept
 	return nil
 }
 
@@ -1110,6 +1264,14 @@ func deleteCases(s *State, a Action) error {
 		return errors.New("用例不存在")
 	}
 	s.Cases = cases
+	scripts := make([]Script, 0, len(s.Scripts))
+	for _, x := range s.Scripts {
+		if x.VersionID == v.ID && ids[x.CaseID] {
+			continue
+		}
+		scripts = append(scripts, x)
+	}
+	s.Scripts = scripts
 	records := make([]Record, 0, len(s.Records))
 	for _, r := range s.Records {
 		if r.VersionID == v.ID && ids[r.CaseID] {

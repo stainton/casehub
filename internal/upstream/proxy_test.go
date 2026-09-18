@@ -1,4 +1,4 @@
-package planner_test
+package upstream_test
 
 import (
 	"bufio"
@@ -9,11 +9,11 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"casehub/internal/planner"
+	"casehub/internal/upstream"
 )
 
 func TestDisabledWithoutBaseURL(t *testing.T) {
-	handler, enabled := planner.New("")
+	handler, enabled := upstream.New("", "planner")
 	if enabled {
 		t.Fatal("expected disabled proxy")
 	}
@@ -29,19 +29,50 @@ func TestDisabledWithoutBaseURL(t *testing.T) {
 	if out["error"]["code"] != "PLANNER_DISABLED" {
 		t.Fatalf("unexpected error body: %s", w.Body.String())
 	}
+	handler, enabled = upstream.New("", "generator")
+	if enabled {
+		t.Fatal("expected disabled proxy")
+	}
+	w = httptest.NewRecorder()
+	handler.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/generator/jobs/abc", nil))
+	if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil {
+		t.Fatal(err)
+	}
+	if w.Code != http.StatusServiceUnavailable || out["error"]["code"] != "GENERATOR_DISABLED" {
+		t.Fatalf("generator proxy must report its own disabled code: status=%d body=%s", w.Code, w.Body.String())
+	}
+}
+
+// Each service is reached under its own prefix and forwarded to its own /v1 path.
+func TestGeneratorPrefixIsForwardedToTheGeneratorService(t *testing.T) {
+	var gotPath string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	defer server.Close()
+	handler, enabled := upstream.New(server.URL, "generator")
+	if !enabled {
+		t.Fatal("expected enabled proxy")
+	}
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/api/generator/jobs", nil))
+	if gotPath != "/v1/generator/jobs" {
+		t.Fatalf("upstream path = %q, want /v1/generator/jobs", gotPath)
+	}
 }
 
 func TestForwardsWithoutTokenAndRewritesPath(t *testing.T) {
 	var gotPath, gotAuth string
-	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotPath = r.URL.Path
 		gotAuth = r.Header.Get("Authorization")
 		w.WriteHeader(http.StatusCreated)
 		_, _ = w.Write([]byte(`{"ok":true}`))
 	}))
-	defer upstream.Close()
+	defer server.Close()
 
-	handler, enabled := planner.New(upstream.URL)
+	handler, enabled := upstream.New(server.URL, "planner")
 	if !enabled {
 		t.Fatal("expected enabled proxy")
 	}
@@ -61,7 +92,7 @@ func TestForwardsWithoutTokenAndRewritesPath(t *testing.T) {
 }
 
 func TestStreamsSSEWithoutBuffering(t *testing.T) {
-	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/v1/planner/jobs/job-1/events" {
 			http.NotFound(w, r)
 			return
@@ -74,9 +105,9 @@ func TestStreamsSSEWithoutBuffering(t *testing.T) {
 		_, _ = fmt.Fprintf(w, "id: 1\nevent: progress\ndata: {\"message\":\"exploring\"}\n\n")
 		flusher.Flush()
 	}))
-	defer upstream.Close()
+	defer server.Close()
 
-	handler, _ := planner.New(upstream.URL)
+	handler, _ := upstream.New(server.URL, "planner")
 	proxyServer := httptest.NewServer(handler)
 	defer proxyServer.Close()
 
@@ -100,7 +131,7 @@ func TestStreamsSSEWithoutBuffering(t *testing.T) {
 }
 
 func TestUnreachableUpstreamReturnsStructuredError(t *testing.T) {
-	handler, enabled := planner.New("http://127.0.0.1:1")
+	handler, enabled := upstream.New("http://127.0.0.1:1", "planner")
 	if !enabled {
 		t.Fatal("expected enabled")
 	}

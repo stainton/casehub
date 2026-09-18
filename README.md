@@ -39,7 +39,7 @@ kubectl rollout status deployment/casehub
 
 `DATABASE_URL` 留空时使用 `/app/data/casehub.json`，默认挂载 `emptyDir`，Pod 删除或重建后这份临时数据会丢失。也可通过启动参数 `-database-url` 指定数据库连接串；配置了数据库但连接失败时会报错，便于检查配置。
 
-清单已将 `CASEHUB_PLANNER_URL` 设置为 `http://planner:4501`，可直接连接同 namespace 中的 auto-test planner 服务。跨 namespace 时改成对应 Service 地址。
+清单已将 `CASEHUB_PLANNER_URL` 设置为 `http://planner:4501`、`CASEHUB_GENERATOR_URL` 设置为 `http://generator:4502`，可直接连接同 namespace 中的 auto-test planner 与 generator 服务。跨 namespace 时改成对应 Service 地址。
 
 ### 集群外访问
 
@@ -63,6 +63,9 @@ http://<可访问的节点 IP>:30080
 - 标题/ID 模糊搜索、字段包含搜索、按测试结果过滤、平铺/目录两种结果视图
 - 分支内空文件夹删除、勾选用例批量移动、整个测试版本删除（主线除外）、单条/批量删除分支用例（主线除外）
 - 测试任务界面按版本分组（一个版本一个文件夹），任务作为其下唯一一级子文件夹，任务内用例平铺展示，不还原原目录结构
+- 自动化管理页：脚本树与用例树同名同构（目录取自用例当前所在目录），脚本与用例一一对应，用例改动后脚本自动标记为"已过时"
+- 脚本生成：在用例管理中右键目录（目录下全部用例）、右键单条用例或勾选后批量触发，调用 auto-test 的 generator 生成 Playwright 脚本，
+  结果自动同步到自动化管理；每个生成任务是"脚本生成"抽屉中的一个可展开选项卡，可并行、可取消，关闭抽屉或刷新页面后按任务 ID 恢复
 - 可拖动/折叠用例树、文件夹与用例右键菜单、测试记录抽屉、主题切换
 - 所有用例详情页（用例树、测试任务、用例评审）都可切换「阅读友好版」与「Planner 原始内容」；阅读友好版由 auto-test 的
   `/v1/planner/simplify` 改写生成，和用例本身一样持久化存储（非浏览器缓存），用例内容变更后会自动判定为过时并提示重新生成
@@ -77,6 +80,7 @@ http://<可访问的节点 IP>:30080
 | `CASEHUB_DATA` | `data/casehub.json` | 文件存储路径 |
 | `DATABASE_URL` | — | PostgreSQL 连接串；可通过 `-database-url` 启动参数覆盖 |
 | `CASEHUB_PLANNER_URL` | `http://localhost:4501` | auto-test planner 服务地址；Kubernetes 清单使用 `http://planner:4501` |
+| `CASEHUB_GENERATOR_URL` | `http://localhost:4502` | auto-test generator 服务地址；Kubernetes 中为 `http://generator:4502` |
 
 当前默认主线带有两条示例用例，因为设计文档尚未定义首次导入主线的来源与格式。
 
@@ -84,7 +88,9 @@ http://<可访问的节点 IP>:30080
 
 先在 auto-test 中准备 `build/planner/setting.json` 并运行 `node server/planner/main.mjs`，再启动 CaseHub，即可从需求管理的「AI 设计」抽屉调用 planner，以及在任意用例详情页生成「阅读友好版」（调用同一服务的 `/v1/planner/simplify`）。本机使用默认地址，无需 Token；分开部署时只设置 `CASEHUB_PLANNER_URL`。两个服务均支持浏览器跨域调用。
 
-容器中的 localhost 指容器自身；如果 planner 运行在另一容器或主机上，将 `CASEHUB_PLANNER_URL` 配置为容器可访问的地址。
+脚本生成对应 auto-test 的另一个独立服务：准备 `build/generator/setting.json` 后运行 `node server/generator/main.mjs`（默认 4502），CaseHub 通过 `CASEHUB_GENERATOR_URL` 连接。planner 和 generator 是两个进程，可以只启动其中一个；未配置时对应入口会提示服务未配置，其余功能不受影响。
+
+容器中的 localhost 指容器自身；如果 planner / generator 运行在另一容器或主机上，将 `CASEHUB_PLANNER_URL`、`CASEHUB_GENERATOR_URL` 配置为容器可访问的地址。
 
 ## 前端追加功能
 
@@ -95,6 +101,8 @@ http://<可访问的节点 IP>:30080
 ## 回归验证
 
 运行 `go test ./...` 检查业务逻辑、静态资源和 Markdown 记录持久化。
+
+自动化管理与脚本生成的浏览器回归：`node tests/automation.cjs`，脚本自带一个假的 generator 服务（默认 127.0.0.1:4599，`CASEHUB_FAKE_GENERATOR_PORT` 可改），不需要 auto-test 在场，也不调用模型；启动临时服务时把 `CASEHUB_GENERATOR_URL` 指向它：`CASEHUB_STORE=memory PORT=18081 CASEHUB_GENERATOR_URL=http://127.0.0.1:4599 go run .`。
 
 浏览器回归脚本需要 Node.js、Playwright 和 Chromium。先在独立终端以 `CASEHUB_STORE=memory PORT=18081 go run .` 启动临时服务，再运行 `node tests/frontend.cjs`。可用 `PLAYWRIGHT_MODULE` 指定已有 Playwright 安装路径，用 `CASEHUB_TEST_URL` 指定临时服务地址。脚本会创建测试数据，请仅对临时内存服务执行。
 

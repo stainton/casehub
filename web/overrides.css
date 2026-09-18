@@ -116,3 +116,37 @@ table{border-collapse:collapse;width:100%}th,td{text-align:left;vertical-align:t
 #feishu-export { width:min(760px,92vw); }
 #feishu-export > p:not(.modal-actions), #feishu-export-preview { margin:16px 20px; }
 #feishu-export-preview { max-height:45vh; overflow:auto; white-space:pre-wrap; padding:12px; background:var(--surface2); border:1px solid var(--line); border-radius:7px; }
+
+/* 自动化管理页：与 #workspace / #req-workspace 相同的栅格与侧栏行为。 */
+:root{--auto-side:340px}
+#auto-workspace{height:calc(100vh - 60px - var(--tabs-h));display:grid;grid-template-columns:var(--auto-side) 5px minmax(0,1fr);position:relative}
+#auto-sidebar{background:var(--surface);overflow:auto;border-right:1px solid var(--line);grid-column:1;grid-row:1}
+#auto-resize-left{grid-column:2;grid-row:1}
+#auto-content{overflow:auto;padding:28px 36px;background:var(--bg);grid-column:3;grid-row:1;min-width:0}
+#auto-workspace.sidebar-collapsed #auto-content{padding-left:44px}
+#auto-empty p{max-width:460px;line-height:1.8}#auto-empty-expand{justify-self:center;margin-top:12px}
+.script-tree-empty{padding:16px;line-height:1.8}
+.script-stale-tag{margin-left:6px}
+.script-stale{border:1px solid #f59e0b55}
+.script-stale p{margin:6px 0 0}
+.script-code-card{padding-bottom:0}
+.script-code-head{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:10px}
+.script-code-head .meta{margin:0;flex:1}
+.script-code-head button{padding:4px 10px;font-size:12px}
+.script-code{margin:0;max-height:60vh;overflow:auto;padding:14px;border-radius:8px;background:var(--surface2);font-size:12px;line-height:1.6;white-space:pre;overflow-wrap:normal}
+
+/* 脚本生成抽屉：每个生成任务一个可展开选项卡。 */
+.gen-task{border:1px solid var(--line);border-radius:10px;padding:10px 14px;margin-bottom:12px}
+.gen-task[open]{padding-bottom:14px}
+.gen-task>summary{cursor:pointer;display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-weight:600}
+.gen-task>summary:focus-visible{outline:2px solid var(--brand);outline-offset:3px}
+.gen-task-title{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.gen-chip{flex:none;font-size:11px;font-weight:600;padding:2px 8px;border-radius:10px;background:var(--surface2);color:var(--muted)}
+.gen-status-running{background:#fef3c7;color:#92400e}
+.gen-status-succeeded{background:#dcfce7;color:#166534}
+.gen-status-failed,.gen-status-cancelled{background:#fee2e2;color:#b91c1c}
+.dark .gen-status-running{background:#78350f55;color:#fcd34d}
+.dark .gen-status-succeeded{background:#14532d55;color:#86efac}
+.dark .gen-status-failed,.dark .gen-status-cancelled{background:#7f1d1d55;color:#fca5a5}
+.gen-task .meta-grid{margin-top:10px}
+.gen-task .ai-log{max-height:220px}
