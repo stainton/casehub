@@ -561,14 +561,18 @@ function aiEstimateStatusText(est){
   return `正在评估这份需求至少需要多少条用例覆盖…${seconds?`（已等待 ${seconds} 秒，最长约 120 秒）`:''}`;
 }
 // 每种 agent 提供自己的参数表单；未来接入时在此注册独立的表单/提交实现。
+const agentSettingsFields=[
+  {name:'baseUrl',label:'默认被测系统 URL',type:'url',placeholder:'https://test.example.com/login'},
+  {name:'instructions',label:'默认补充说明',type:'textarea',placeholder:'默认覆盖范围、登录方式或探索约束'},
+  {name:'testAccount',label:'默认用户名',type:'text'},
+  {name:'testSecret',label:'默认密码',type:'text'},
+  {name:'timeoutMinutes',label:'默认任务时长（分钟）',type:'number',min:AI_MIN_TIMEOUT_MIN,max:AI_MAX_TIMEOUT_MIN,required:true}
+];
 const aiDesignAgents=[{id:'playwright',label:'aigc用例设计',render:renderPlaywrightAiForm,enabled:()=>aiPlannerEnabled,
-  settingsFields:[
-    {name:'baseUrl',label:'默认被测系统 URL',type:'url',placeholder:'https://test.example.com/login'},
-    {name:'instructions',label:'默认补充说明',type:'textarea',placeholder:'默认覆盖范围、登录方式或探索约束'},
-    {name:'testAccount',label:'默认用户名',type:'text'},
-    {name:'testSecret',label:'默认密码',type:'text'},
-    {name:'timeoutMinutes',label:'默认任务时长（分钟）',type:'number',min:AI_MIN_TIMEOUT_MIN,max:AI_MAX_TIMEOUT_MIN,required:true}
-  ]}];
+  settingsFields:agentSettingsFields}];
+// 设置弹窗里可配置的 agent：用例设计（planner）和脚本生成（generator）。两者的配置都存在 CaseHub 的
+// agent 配置表里，发起任务时随请求下发，agent 据此覆写自己的 setting.json。
+const configurableAgents=[...aiDesignAgents,{id:'generator',label:'脚本生成',settingsFields:agentSettingsFields}];
 const agentDefaultsCache=new Map();
 async function loadAgentDefaults(id){
   const config=await request(`/api/agent-settings/${encodeURIComponent(id)}`);
@@ -581,14 +585,14 @@ function agentDefaults(agent){
 let agentSettingsDrafts=new Map(),agentRuntimeFiles=new Map(),agentSettingsGeneration=0;
 function renderAgentSettings(agent){
   const values=agentSettingsDrafts.get(agent.id)||agentDefaults(agent),runtime=agentRuntimeFiles.get(agent.id);
-  $('#settings-agents').innerHTML=aiDesignAgents.map(item=>`<button type="button" data-settings-agent="${esc(item.id)}" aria-current="${item.id===agent.id}">${esc(item.label)}</button>`).join('');
-  $('#settings-content').innerHTML=`<h2>${esc(agent.label)}</h2><p class="meta">配置保存在服务端，所有设备共享。以下两部分分别保存。</p>
+  $('#settings-agents').innerHTML=configurableAgents.map(item=>`<button type="button" data-settings-agent="${esc(item.id)}" aria-current="${item.id===agent.id}">${esc(item.label)}</button>`).join('');
+  $('#settings-content').innerHTML=`<h2>${esc(agent.label)}</h2><p class="meta">配置存在 CaseHub 数据库里，所有设备共享，agent 重建或回滚都不会丢。以下两部分分别保存。</p>
     <section class="settings-section"><h3>业务默认参数</h3><p class="meta">新设计任务选择此 agent 后自动带入，已有任务保留自己的参数。</p>
     <form id="agent-settings-form" autocomplete="off">${agent.settingsFields.map(field=>`<label>${esc(field.label)}${field.type==='textarea'?`<textarea name="${field.name}" placeholder="${esc(field.placeholder||'')}">${esc(values[field.name])}</textarea>`:`<input name="${field.name}" type="${field.type}" value="${esc(values[field.name])}" placeholder="${esc(field.placeholder||'')}"${field.required?' required':''}${field.type==='number'?` min="${field.min}" max="${field.max}" step="1"`:''} autocomplete="off">`}</label>`).join('')}
     <p class="settings-status" id="agent-settings-status" role="status"></p><div class="settings-actions"><button type="button" class="secondary" id="agent-settings-reset">恢复初始值</button><button type="submit">保存业务默认参数</button></div></form></section>
-    <section class="settings-section settings-restart-required"><h3>Agent 配置 · setting.json <span class="settings-restart-mark" aria-label="修改后需重启">*</span></h3><p class="meta">完整预填文件内容，可修改、添加或删除任意参数。保存后直接写回文件；重启 agent 服务可确保全部配置生效。</p><p class="meta settings-path">${esc(runtime.path)}</p>${!runtime.exists?'<p class="meta" id="agent-runtime-missing">文件尚不存在，保存时创建。</p>':''}
-    <form id="agent-runtime-form"><label>完整 JSON 配置 <span class="settings-restart-mark" aria-hidden="true">*</span><textarea aria-describedby="agent-runtime-restart-hint" id="agent-runtime-json" name="content" spellcheck="false" rows="16">${esc(runtime.draft??runtime.content)}</textarea></label><p class="settings-restart-hint" id="agent-runtime-restart-hint"><span aria-hidden="true">*</span> 修改后请在后台重启 agent 服务，以确保全部配置生效；在 AI 设计中重新选择 agent 不会重启服务。</p><p class="settings-status" id="agent-runtime-status" role="status"></p><div class="settings-actions"><button type="button" class="secondary" id="agent-runtime-reload">重新读取文件</button><button type="submit">保存 setting.json</button></div></form></section>`;
-  $$('#settings-agents [data-settings-agent]').forEach(button=>button.onclick=()=>renderAgentSettings(aiDesignAgents.find(item=>item.id===button.dataset.settingsAgent)));
+    <section class="settings-section"><h3>Agent 配置 · setting.json</h3><p class="meta">模型地址、密钥、model 等 Claude 配置的完整正文，可修改、添加或删除任意参数。${runtime.exists?`当前版本号 ${esc(runtime.revision)}。`:''}</p>${!runtime.exists?'<p class="meta" id="agent-runtime-missing">尚未下发配置，agent 使用镜像内自带的 setting.json；保存后以这里为准。</p>':''}
+    <form id="agent-runtime-form"><label>完整 JSON 配置<textarea aria-describedby="agent-runtime-apply-hint" id="agent-runtime-json" name="content" spellcheck="false" rows="16">${esc(runtime.draft??runtime.content??'')}</textarea></label><p class="meta" id="agent-runtime-apply-hint">保存后版本号递增，下次发起的任务会带着这份配置下发给 agent，由 agent 覆写自己的 setting.json，无需重启；已运行的 Claude 进程继续使用原配置。</p><p class="settings-status" id="agent-runtime-status" role="status"></p><div class="settings-actions"><button type="button" class="secondary" id="agent-runtime-reload">重新读取</button><button type="submit">保存配置</button></div></form></section>`;
+  $$('#settings-agents [data-settings-agent]').forEach(button=>button.onclick=()=>renderAgentSettings(configurableAgents.find(item=>item.id===button.dataset.settingsAgent)));
   const form=$('#agent-settings-form');
   form.oninput=()=>{agentSettingsDrafts.set(agent.id,Object.fromEntries(new FormData(form)));$('#agent-settings-status').textContent='有未保存的修改'};
   $('#agent-settings-reset').onclick=()=>{
@@ -625,7 +629,7 @@ function renderAgentSettings(agent){
       const saved=await request(`/api/agent-settings/${agent.id}/runtime`,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({content,revision:runtime.revision})});
       if(generation!==agentSettingsGeneration)return;
       runtime.content=saved.content;runtime.revision=saved.revision;runtime.exists=true;$('#agent-runtime-missing')?.remove();
-      status.textContent='setting.json 已保存；重启 agent 服务可确保全部配置生效';
+      status.textContent=`配置已保存（版本 ${saved.revision}），下次发起任务时下发给 agent，无需重启`;
     }catch(error){status.textContent=`保存失败：${error.message}`}finally{button.disabled=false}
   };
 }
@@ -633,8 +637,8 @@ $('#settings-open').onclick=async()=>{
   const generation=++agentSettingsGeneration;agentSettingsDrafts=new Map();agentRuntimeFiles=new Map();
   $('#settings-agents').replaceChildren();$('#settings-content').innerHTML='<p class="meta">正在读取 agent 配置…</p>';$('#settings-dialog').showModal();
   try{
-    await Promise.all(aiDesignAgents.map(async agent=>{const [,runtime]=await Promise.all([loadAgentDefaults(agent.id),request(`/api/agent-settings/${agent.id}/runtime`)]);if(generation===agentSettingsGeneration)agentRuntimeFiles.set(agent.id,runtime)}));
-    if(generation===agentSettingsGeneration&&$('#settings-dialog').open)renderAgentSettings(aiDesignAgents[0]);
+    await Promise.all(configurableAgents.map(async agent=>{const [,runtime]=await Promise.all([loadAgentDefaults(agent.id),request(`/api/agent-settings/${agent.id}/runtime`)]);if(generation===agentSettingsGeneration)agentRuntimeFiles.set(agent.id,runtime)}));
+    if(generation===agentSettingsGeneration&&$('#settings-dialog').open)renderAgentSettings(configurableAgents[0]);
   }catch(error){if(generation!==agentSettingsGeneration)return;$('#settings-content').innerHTML=`<p class="meta">读取配置失败：${esc(error.message)}</p><button type="button" id="settings-retry">重试</button>`;$('#settings-retry').onclick=()=>{$('#settings-dialog').close();$('#settings-open').click()}}
 };
 $('#settings-close').onclick=()=>$('#settings-dialog').close();
@@ -1243,6 +1247,8 @@ async function renderGenDrawer(){
   if(genEnabled===null){
     body.innerHTML='<p class="meta">正在检查脚本生成服务…</p>';
     try{genEnabled=(await serviceRequest('/api/generator/status')).enabled}catch{genEnabled=false}
+    // 生成任务的表单默认值来自 generator 自己那份业务默认参数（设置里保存），本机草稿优先。
+    try{await loadAgentDefaults('generator')}catch{}
   }
   $('#gen-drawer-sub').textContent=genRunning().length?`${genRunning().length} 个任务进行中`:`${genTasks.length} 个任务`;
   if(!genEnabled){
@@ -1254,8 +1260,15 @@ async function renderGenDrawer(){
   bindGenTasks();
 }
 const genCaseCount=t=>t.caseIDs.length;
+// 本机上次填过的值优先，留空的字段回落到设置里保存的 generator 默认参数。
+function genValues(){
+  const saved=loadGenTarget(),defaults=agentDefaultsCache.get('generator')||{};
+  const pick=name=>((saved[name]??'')!==''?saved[name]:(defaults[name]??''));
+  return {baseUrl:pick('baseUrl'),instructions:pick('instructions'),testAccount:pick('testAccount'),
+    testSecret:defaults.testSecret??'',reqDoc:saved.reqDoc||'auto'};
+}
 function genDraftHTML(){
-  const v=loadGenTarget(),d=genDraft;
+  const v=genValues(),d=genDraft;
   const existing=d.caseIDs.filter(id=>scriptFor(d.versionID,id)).length;
   const batches=Math.ceil(d.caseIDs.length/GEN_MAX_CASES);
   const docs=state.reqDocs.map(x=>`<option value="${x.ID}"${v.reqDoc===x.ID?' selected':''}>${esc(x.Title)}${x.Code?`（${esc(x.Code)}）`:''}</option>`).join('');
@@ -1267,7 +1280,7 @@ function genDraftHTML(){
       <label>参考需求文档<select name="reqDoc"><option value="auto"${(v.reqDoc||'auto')==='auto'?' selected':''}>自动匹配（按用例编号前缀）</option><option value=""${v.reqDoc===''?' selected':''}>不附带需求文档</option>${docs}</select></label>
       <label>补充说明（可选）<textarea name="instructions" placeholder="登录方式、数据约束、需要避免的操作等">${esc(v.instructions||'')}</textarea></label>
       <label>测试账号 · 用户名（可选）<input name="testAccount" autocomplete="off" value="${esc(v.testAccount||'')}"></label>
-      <label>测试账号 · 密码（可选）<input name="testSecret" type="text" class="fake-password" autocomplete="off" spellcheck="false"></label>
+      <label>测试账号 · 密码（可选）<input name="testSecret" type="text" class="fake-password" autocomplete="off" spellcheck="false" value="${esc(v.testSecret||'')}"></label>
       <p class="drawer-actions"><button type="button" class="secondary" id="gen-cancel-draft">取消</button><button type="submit">开始生成</button></p>
     </form>
   </details>`;

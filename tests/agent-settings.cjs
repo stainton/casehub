@@ -1,4 +1,5 @@
-// Only run against a temporary CASEHUB_STORE=memory server with CASEHUB_PLANNER_SETTINGS pointing to a test file.
+// Only run against a temporary CASEHUB_STORE=memory server: every agent configuration this writes
+// lives in that server's store, so nothing outside it is touched.
 const {chromium}=require(process.env.PLAYWRIGHT_MODULE||'playwright');
 const assert=require('node:assert/strict');
 const base=process.env.CASEHUB_TEST_URL||'http://127.0.0.1:18081';
@@ -23,13 +24,15 @@ const base=process.env.CASEHUB_TEST_URL||'http://127.0.0.1:18081';
   assert.equal(await field('timeoutMinutes').evaluate(el=>el.validity.valid),false);
   await field('timeoutMinutes').fill('25');await save();
   assert.equal(await field('testSecret').inputValue(),'default-password');
+  assert.equal(await page.locator('.settings-restart-mark').count(),0);
+  assert.match(await page.locator('#agent-runtime-apply-hint').innerText(),/无需重启/);
   const runtimeEditor=page.locator('#agent-runtime-json');
   const original=JSON.parse(await runtimeEditor.inputValue());
   assert.equal(original.model,'fixture-model');assert.equal(original.env.CUSTOM,'keep-me');
   original.model='configured-model';original.env.NEW_OPTION='new-value';original.custom={nested:[true,2,'preserved']};
   await runtimeEditor.fill(JSON.stringify(original,null,2));
   await page.locator('#agent-runtime-form [type="submit"]').click();
-  await page.locator('#agent-runtime-status').filter({hasText:'setting.json 已保存'}).waitFor();
+  await page.locator('#agent-runtime-status').filter({hasText:'配置已保存'}).waitFor();
   await runtimeEditor.fill('{bad json');await page.locator('#agent-runtime-form [type="submit"]').click();
   await page.locator('#agent-runtime-status').filter({hasText:'有效的 JSON'}).waitFor();
   await runtimeEditor.fill(JSON.stringify(original,null,2));
@@ -67,7 +70,7 @@ const base=process.env.CASEHUB_TEST_URL||'http://127.0.0.1:18081';
   const snapshot=await (await page.request.get(endpoint)).json();
   await page.request.put(endpoint,{data:{content:'{"model":"another-device"}',revision:snapshot.revision}});
   await runtimeEditor.fill('{"model":"my-draft"}');await page.locator('#agent-runtime-form [type="submit"]').click();
-  await page.locator('#agent-runtime-status').filter({hasText:'文件已被其他设备'}).waitFor();
+  await page.locator('#agent-runtime-status').filter({hasText:'配置已被其他设备'}).waitFor();
   assert.equal(await runtimeEditor.inputValue(),'{"model":"my-draft"}');
   page.once('dialog',dialog=>dialog.accept());await page.locator('#agent-runtime-reload').click();
   await page.waitForFunction(()=>document.querySelector('#agent-runtime-json').value.includes('another-device'));
@@ -75,6 +78,18 @@ const base=process.env.CASEHUB_TEST_URL||'http://127.0.0.1:18081';
   assert.equal(await field('testSecret').inputValue(),'');assert.equal(await field('timeoutMinutes').inputValue(),'15');
   await save();
   const reset=await (await page.request.get(base+'/api/agent-settings/playwright')).json();assert.equal(reset.testSecret,'');assert.equal(reset.baseUrl,'');
+  // 脚本生成 agent 有自己的一行配置：切过去是空的，保存后不影响用例设计那份。
+  await page.locator('[data-settings-agent="generator"]').click();
+  await page.locator('#agent-runtime-form').waitFor();
+  assert.equal(await page.locator('#agent-runtime-json').inputValue(),'');
+  assert.equal(await page.locator('#agent-settings-form [name="baseUrl"]').inputValue(),'');
+  await page.locator('#agent-runtime-json').fill('{"model":"generator-model"}');
+  await page.locator('#agent-runtime-form [type="submit"]').click();
+  await page.locator('#agent-runtime-status').filter({hasText:'配置已保存'}).waitFor();
+  const stored=await Promise.all(['playwright','generator'].map(async id=>(await (await page.request.get(`${base}/api/agent-settings/${id}/runtime`)).json())));
+  assert.equal(JSON.parse(stored[1].content).model,'generator-model');
+  assert.notEqual(stored[0].content,stored[1].content);
+  await page.locator('[data-settings-agent="playwright"]').click();await page.locator('#agent-runtime-form').waitFor();
   await page.setViewportSize({width:390,height:844});
   assert.equal(await page.locator('#settings-dialog').evaluate(el=>el.scrollWidth<=el.clientWidth),true);
   assert.deepEqual(errors,[]);console.log('agent 设置回归通过');

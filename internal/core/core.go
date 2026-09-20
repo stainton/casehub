@@ -19,6 +19,12 @@ var ErrNotFound = errors.New("state not found")
 type Repository interface {
 	Load(context.Context) (State, error)
 	Save(context.Context, State) error
+	// AgentConfig reads one agent's stored configuration, ErrNotFound when it has none yet.
+	AgentConfig(ctx context.Context, id string) (AgentConfig, error)
+	// UpdateAgentConfig applies mutate to that configuration (the zero value when there is none) and
+	// stores the result, serialised against other updates of the same agent so a revision check inside
+	// mutate is meaningful. A mutate error is returned as-is and nothing is stored.
+	UpdateAgentConfig(ctx context.Context, id string, mutate func(AgentConfig) (AgentConfig, error)) (AgentConfig, error)
 }
 
 type Version struct {
@@ -147,6 +153,8 @@ type RiskNote struct {
 }
 
 type State struct {
+	// AgentSettings held the agents' business defaults before they moved into their own table.
+	// Read once per agent to carry an existing deployment over, never written again.
 	AgentSettings  map[string]AgentSettings `json:"agentSettings,omitempty"`
 	MainRevision   int64                    `json:"mainRevision"`
 	Versions       []Version                `json:"versions"`

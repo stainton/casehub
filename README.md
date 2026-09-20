@@ -80,7 +80,6 @@ http://<可访问的节点 IP>:30080
 | `CASEHUB_DATA` | `data/casehub.json` | 文件存储路径 |
 | `DATABASE_URL` | — | PostgreSQL 连接串；可通过 `-database-url` 启动参数覆盖 |
 | `CASEHUB_PLANNER_URL` | `http://localhost:4501` | auto-test planner 服务地址；Kubernetes 清单使用 `http://planner:4501` |
-| `CASEHUB_PLANNER_SETTINGS` | `../auto-test/build/planner/setting.json` | 设置页直接读写的 agent 配置文件路径，需与 agent 共享同一文件 |
 | `CASEHUB_GENERATOR_URL` | `http://localhost:4502` | auto-test generator 服务地址；Kubernetes 中为 `http://generator:4502` |
 
 当前默认主线带有两条示例用例，因为设计文档尚未定义首次导入主线的来源与格式。
@@ -91,14 +90,22 @@ http://<可访问的节点 IP>:30080
 
 「AI 设计」抽屉先选择 agent，再显示对应参数。目前可选 aigc用例设计，选择后填写被测系统 URL、补充说明和测试账号等参数；重试与继续会恢复原 agent，旧版任务按 aigc用例设计 处理。
 
-头像旁的「设置」打开 agent 设置弹窗：左侧选择 agent，右侧分为两部分，分别保存：
+头像旁的「设置」打开 agent 设置弹窗：左侧选择 agent（aigc用例设计 / 脚本生成，各自一份配置），右侧分为两部分，分别保存：
 
-- **业务默认参数**：默认被测系统 URL、补充说明、用户名、密码和任务时长，保存在 CaseHub 服务端，随文件/PostgreSQL 存储持久化（memory 模式仅在进程内保存），不同设备共享。新设计任务选择 agent 后自动带入，已有任务保留原参数。默认密码可预填、修改和清空。
-- **setting.json**：完整预填原文件内容，JSON 编辑器支持修改所有参数，包括任意 `env`、模型、权限及扩展字段；保存后直接写回文件，不通过任务请求传递模型配置。保存会校验 JSON 格式及 `env`/`model` 基本类型，并检查文件是否被其他设备修改，避免覆盖新内容。重启 agent 服务可确保全部配置生效。
+- **业务默认参数**：默认被测系统 URL、补充说明、用户名、密码和任务时长，新任务选择该 agent 后自动带入，已有任务保留原参数。默认密码可预填、修改和清空。保存业务默认参数不会改变配置版本号，agent 不会因此改写自己的 setting.json。
+- **setting.json**：agent 的完整 Claude 配置正文（任意 `env`、模型、权限及扩展字段），按原文保存，CaseHub 不认识的字段照样保留。保存会校验 JSON 格式及 `env`/`model` 基本类型，并用版本号检查是否有人在此期间保存过，避免覆盖新内容。
 
-通过 `CASEHUB_PLANNER_SETTINGS` 指定 CaseHub 可读写的 agent 配置文件，默认 `../auto-test/build/planner/setting.json`，适用于两个仓库并排的本机开发。文件不存在时显示空对象，保存时创建。容器或分开部署时，需要将 agent 实际使用的配置目录以可写方式共享给 CaseHub，并让此变量与 agent 的 `PLANNER_CLAUDE_SETTINGS` 指向同一份文件；只连接 planner HTTP 地址不能访问其文件系统。镜像里安装的文件通常是 `/app/config/claude/settings.json`，它与构建目录的源文件不是同一份文件。设置页显示实际编辑路径。
+两部分都存在 CaseHub 的 agent 配置表里（PostgreSQL 为 `casehub_agent_settings`，文件存储为状态文件旁的 `casehub-agents.json`，memory 模式仅在进程内），不同设备共享。
 
-业务配置接口为 `GET/PUT /api/agent-settings/playwright`；文件配置为 `GET/PUT /api/agent-settings/playwright/runtime`（`content` 为完整 JSON 文本，保存时带上读取到的 `revision`）。关闭弹窗会放弃未保存的修改，「恢复初始值」需保存后生效。用例数量与需求缩写仍根据具体需求评估。
+### 配置如何到达 agent
+
+CaseHub 不读写 agent 的文件系统，也不需要共享目录：每次发起任务（设计、评估、阅读友好版、脚本生成）时，代理会把该 agent 存着的配置连同版本号放进请求体的 `agentSettings`（`{revision, content}`）。agent 在任务开始前把自己的 `setting.json` 对齐成这份 `content`（内容一致就不写盘），随后每次调用 Claude CLI 都读这份配置，无需重启。已运行的 Claude 进程不受影响。
+
+因此 agent 那边的文件只是落地结果：镜像重建、回滚到旧镜像或有人手工改过，下一次任务都会把 CaseHub 里的配置重新写回去，不需要持久卷，也不需要先在 CaseHub 改一次配置来触发。尚未在 CaseHub 保存过配置时（版本号 0），请求不带 `agentSettings`，agent 继续使用镜像内自带的 `setting.json`。CaseHub 读不到自己的配置表时，该请求直接以 `PLANNER_SETTINGS_UNAVAILABLE` / `GENERATOR_SETTINGS_UNAVAILABLE` 失败，不会拿一份来源不明的配置去跑任务。
+
+升级到本机制之前保存过的业务默认参数会自动迁移到新表；旧的状态文档里那份保留不动，作为回退。
+
+业务配置接口为 `GET/PUT /api/agent-settings/{agent}`（`playwright`、`generator`）；setting.json 为 `GET/PUT /api/agent-settings/{agent}/runtime`（`content` 为完整 JSON 文本，保存时带上读取到的 `revision`，版本号不一致返回 409）。关闭弹窗会放弃未保存的修改，「恢复初始值」需保存后生效。用例数量与需求缩写仍根据具体需求评估。
 
 「AI 设计」抽屉里可以设置本次设计任务的超时时间（分钟，1–240，新任务采用 agent 业务默认时长，初始为 15），随请求的 `timeoutMs` 一起提交；
 探索耗时取决于被测系统和用例数量，服务端的固定默认值对大需求常常不够。实际生效的时限会显示在任务进行中的面板上，
@@ -131,7 +138,7 @@ planner 不会绕开约束去试；同一段文字也会参与"建议覆盖用�
 
 自动化管理与脚本生成的浏览器回归：`node tests/automation.cjs`，脚本自带一个假的 generator 服务（默认 127.0.0.1:4599，`CASEHUB_FAKE_GENERATOR_PORT` 可改），不需要 auto-test 在场，也不调用模型；启动临时服务时把 `CASEHUB_GENERATOR_URL` 指向它：`CASEHUB_STORE=memory PORT=18081 CASEHUB_GENERATOR_URL=http://127.0.0.1:4599 go run .`。
 
-agent 设置弹窗回归：`node tests/agent-settings.cjs`。临时服务需设置 `CASEHUB_STORE=memory`，并将 `CASEHUB_PLANNER_SETTINGS` 指向临时测试文件，避免修改实际 agent 配置。
+agent 设置弹窗回归：`node tests/agent-settings.cjs`。临时服务需设置 `CASEHUB_STORE=memory`，配置只写入该进程内的存储，不会动到实际 agent 的配置。
 
 浏览器回归脚本需要 Node.js、Playwright 和 Chromium。先在独立终端以 `CASEHUB_STORE=memory PORT=18081 go run .` 启动临时服务，再运行 `node tests/frontend.cjs`。可用 `PLAYWRIGHT_MODULE` 指定已有 Playwright 安装路径，用 `CASEHUB_TEST_URL` 指定临时服务地址。脚本会创建测试数据，请仅对临时内存服务执行。
 
