@@ -559,7 +559,7 @@ function aiEstimateStatusText(est){
   return `正在评估这份需求至少需要多少条用例覆盖…${seconds?`（已等待 ${seconds} 秒，最长约 120 秒）`:''}`;
 }
 // 每种 agent 提供自己的参数表单；未来接入时在此注册独立的表单/提交实现。
-const aiDesignAgents=[{id:'playwright',label:'Playwright agent',render:renderPlaywrightAiForm,enabled:()=>aiPlannerEnabled}];
+const aiDesignAgents=[{id:'playwright',label:'aigc用例设计',render:renderPlaywrightAiForm,enabled:()=>aiPlannerEnabled}];
 const aiSelectedAgents=new Map();
 function renderAiForm(doc,notice,continueFrom){
   const est=aiFormState(doc,Boolean(continueFrom));
