@@ -171,3 +171,9 @@ table{border-collapse:collapse;width:100%}th,td{text-align:left;vertical-align:t
 .settings-section h3{margin:0;font-size:15px}
 .settings-path{overflow-wrap:anywhere}
 #agent-runtime-json{min-height:330px;font:12px/1.6 ui-monospace,SFMono-Regular,Consolas,monospace;tab-size:2;white-space:pre;overflow:auto}
+
+.settings-restart-mark,.settings-restart-hint{color:var(--danger)}
+.settings-restart-mark{font-weight:700}
+.settings-restart-hint{font-size:12px;line-height:1.6}
+.settings-restart-required #agent-runtime-json{border:2px solid var(--danger)}
+.settings-restart-required #agent-runtime-json:focus-visible{outline:2px solid var(--danger);outline-offset:2px}
