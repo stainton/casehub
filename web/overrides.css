@@ -150,3 +150,24 @@ table{border-collapse:collapse;width:100%}th,td{text-align:left;vertical-align:t
 .dark .gen-status-failed,.dark .gen-status-cancelled{background:#7f1d1d55;color:#fca5a5}
 .gen-task .meta-grid{margin-top:10px}
 .gen-task .ai-log{max-height:220px}
+
+/* Agent settings dialog. */
+.header-settings{background:transparent;color:inherit;border:1px solid #ffffff40}
+#settings-dialog{width:min(900px,94vw);max-height:88vh}
+.settings-layout{display:grid;grid-template-columns:210px minmax(0,1fr);height:min(650px,72vh)}
+.settings-sidebar{padding:18px 12px;background:var(--surface2);border-right:1px solid var(--line);overflow:auto}
+.settings-sidebar h4{margin:0 10px 14px;color:var(--muted);font-size:12px}
+.settings-sidebar button{display:block;width:100%;text-align:left;background:transparent;color:var(--text);margin-bottom:4px;overflow-wrap:anywhere}
+.settings-sidebar button[aria-current="true"]{background:var(--brand-soft);color:var(--brand);font-weight:600}
+.settings-content{padding:20px 26px;overflow:auto;min-width:0}
+.settings-content h2{margin:0 0 6px;font-size:20px}
+.settings-content textarea{min-height:110px}
+.settings-actions{display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end;margin-top:22px}
+.settings-status{min-height:20px;color:var(--muted);font-size:12px}
+@media(max-width:600px){.settings-layout{grid-template-columns:140px minmax(0,1fr)}.settings-sidebar{padding:14px 6px}.settings-content{padding:16px}.settings-actions{justify-content:flex-start}}
+
+
+.settings-section{padding:12px 0 24px;border-bottom:1px solid var(--line)}
+.settings-section h3{margin:0;font-size:15px}
+.settings-path{overflow-wrap:anywhere}
+#agent-runtime-json{min-height:330px;font:12px/1.6 ui-monospace,SFMono-Regular,Consolas,monospace;tab-size:2;white-space:pre;overflow:auto}

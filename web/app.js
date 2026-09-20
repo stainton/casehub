@@ -501,6 +501,8 @@ async function renderAiDrawer(doc){
     catch{aiPlannerEnabled=false}
   }
   if(aiDoc?.ID!==doc.ID)return; // drawer moved to another doc while awaiting
+  try{await loadAgentDefaults('playwright')}catch(e){body.innerHTML=`<p class="meta">读取 agent 默认配置失败：${esc(e.message)}</p><button type="button" id="ai-settings-retry">重试</button>`;$('#ai-settings-retry').onclick=()=>renderAiDrawer(doc);return}
+  if(aiDoc?.ID!==doc.ID)return;
   await checkAiJob(doc);
 }
 async function checkAiJob(doc){
@@ -559,7 +561,84 @@ function aiEstimateStatusText(est){
   return `正在评估这份需求至少需要多少条用例覆盖…${seconds?`（已等待 ${seconds} 秒，最长约 120 秒）`:''}`;
 }
 // 每种 agent 提供自己的参数表单；未来接入时在此注册独立的表单/提交实现。
-const aiDesignAgents=[{id:'playwright',label:'aigc用例设计',render:renderPlaywrightAiForm,enabled:()=>aiPlannerEnabled}];
+const aiDesignAgents=[{id:'playwright',label:'aigc用例设计',render:renderPlaywrightAiForm,enabled:()=>aiPlannerEnabled,
+  settingsFields:[
+    {name:'baseUrl',label:'默认被测系统 URL',type:'url',placeholder:'https://test.example.com/login'},
+    {name:'instructions',label:'默认补充说明',type:'textarea',placeholder:'默认覆盖范围、登录方式或探索约束'},
+    {name:'testAccount',label:'默认用户名',type:'text'},
+    {name:'testSecret',label:'默认密码',type:'text'},
+    {name:'timeoutMinutes',label:'默认任务时长（分钟）',type:'number',min:AI_MIN_TIMEOUT_MIN,max:AI_MAX_TIMEOUT_MIN,required:true}
+  ]}];
+const agentDefaultsCache=new Map();
+async function loadAgentDefaults(id){
+  const config=await request(`/api/agent-settings/${encodeURIComponent(id)}`);
+  agentDefaultsCache.set(id,config);return config;
+}
+function agentDefaults(agent){
+  const saved=agentDefaultsCache.get(agent.id)||{};
+  return Object.fromEntries(agent.settingsFields.map(field=>[field.name,saved[field.name]??(field.name==='timeoutMinutes'?AI_DEFAULT_TIMEOUT_MIN:'')]));
+}
+let agentSettingsDrafts=new Map(),agentRuntimeFiles=new Map(),agentSettingsGeneration=0;
+function renderAgentSettings(agent){
+  const values=agentSettingsDrafts.get(agent.id)||agentDefaults(agent),runtime=agentRuntimeFiles.get(agent.id);
+  $('#settings-agents').innerHTML=aiDesignAgents.map(item=>`<button type="button" data-settings-agent="${esc(item.id)}" aria-current="${item.id===agent.id}">${esc(item.label)}</button>`).join('');
+  $('#settings-content').innerHTML=`<h2>${esc(agent.label)}</h2><p class="meta">配置保存在服务端，所有设备共享。以下两部分分别保存。</p>
+    <section class="settings-section"><h3>业务默认参数</h3><p class="meta">新设计任务选择此 agent 后自动带入，已有任务保留自己的参数。</p>
+    <form id="agent-settings-form" autocomplete="off">${agent.settingsFields.map(field=>`<label>${esc(field.label)}${field.type==='textarea'?`<textarea name="${field.name}" placeholder="${esc(field.placeholder||'')}">${esc(values[field.name])}</textarea>`:`<input name="${field.name}" type="${field.type}" value="${esc(values[field.name])}" placeholder="${esc(field.placeholder||'')}"${field.required?' required':''}${field.type==='number'?` min="${field.min}" max="${field.max}" step="1"`:''} autocomplete="off">`}</label>`).join('')}
+    <p class="settings-status" id="agent-settings-status" role="status"></p><div class="settings-actions"><button type="button" class="secondary" id="agent-settings-reset">恢复初始值</button><button type="submit">保存业务默认参数</button></div></form></section>
+    <section class="settings-section"><h3>Agent 配置 · setting.json</h3><p class="meta">完整预填文件内容，可修改、添加或删除任意参数。保存后直接写回文件；重启 agent 服务可确保全部配置生效。</p><p class="meta settings-path">${esc(runtime.path)}</p>${!runtime.exists?'<p class="meta" id="agent-runtime-missing">文件尚不存在，保存时创建。</p>':''}
+    <form id="agent-runtime-form"><label>完整 JSON 配置<textarea id="agent-runtime-json" name="content" spellcheck="false" rows="16">${esc(runtime.draft??runtime.content)}</textarea></label><p class="settings-status" id="agent-runtime-status" role="status"></p><div class="settings-actions"><button type="button" class="secondary" id="agent-runtime-reload">重新读取文件</button><button type="submit">保存 setting.json</button></div></form></section>`;
+  $$('#settings-agents [data-settings-agent]').forEach(button=>button.onclick=()=>renderAgentSettings(aiDesignAgents.find(item=>item.id===button.dataset.settingsAgent)));
+  const form=$('#agent-settings-form');
+  form.oninput=()=>{agentSettingsDrafts.set(agent.id,Object.fromEntries(new FormData(form)));$('#agent-settings-status').textContent='有未保存的修改'};
+  $('#agent-settings-reset').onclick=()=>{
+    agentSettingsDrafts.set(agent.id,Object.fromEntries(agent.settingsFields.map(field=>[field.name,field.name==='timeoutMinutes'?AI_DEFAULT_TIMEOUT_MIN:''])));
+    renderAgentSettings(agent);$('#agent-settings-status').textContent='已恢复初始值，点击保存后生效';
+  };
+  form.onsubmit=async e=>{
+    e.preventDefault();if(!form.reportValidity())return;
+    const values=Object.fromEntries(new FormData(form));values.timeoutMinutes=Number(values.timeoutMinutes);
+    const button=form.querySelector('[type="submit"]'),status=form.querySelector('[role="status"]');button.disabled=true;
+    const generation=agentSettingsGeneration;
+    try{
+      const config=await request(`/api/agent-settings/${encodeURIComponent(agent.id)}`,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(values)});
+      agentDefaultsCache.set(agent.id,config);
+      if(generation===agentSettingsGeneration)status.textContent='业务默认参数已保存';
+      toast('业务默认参数已保存');
+    }catch(error){status.textContent=`保存失败：${error.message}`}finally{button.disabled=false}
+  };
+  const runtimeForm=$('#agent-runtime-form'),editor=$('#agent-runtime-json'),status=$('#agent-runtime-status');
+  editor.oninput=()=>{runtime.draft=editor.value;status.textContent='有未保存的修改'};
+  $('#agent-runtime-reload').onclick=async()=>{
+    if(runtime.draft!==undefined&&runtime.draft!==runtime.content&&!confirm('重新读取会放弃未保存的 JSON 修改，是否继续？'))return;
+    const generation=agentSettingsGeneration;
+    try{const latest=await request(`/api/agent-settings/${agent.id}/runtime`);if(generation!==agentSettingsGeneration)return;agentRuntimeFiles.set(agent.id,latest);renderAgentSettings(agent)}
+    catch(error){status.textContent=`读取失败：${error.message}`}
+  };
+  runtimeForm.onsubmit=async e=>{
+    e.preventDefault();
+    try{const value=JSON.parse(editor.value);if(!value||Array.isArray(value)||typeof value!=='object')throw Error('配置必须是 JSON 对象')}
+    catch{status.textContent='请填写有效的 JSON 对象';return}
+    const button=runtimeForm.querySelector('[type="submit"]');button.disabled=true;
+    const content=editor.value,generation=agentSettingsGeneration;
+    try{
+      const saved=await request(`/api/agent-settings/${agent.id}/runtime`,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({content,revision:runtime.revision})});
+      if(generation!==agentSettingsGeneration)return;
+      runtime.content=saved.content;runtime.revision=saved.revision;runtime.exists=true;$('#agent-runtime-missing')?.remove();
+      status.textContent='setting.json 已保存；重启 agent 服务可确保全部配置生效';
+    }catch(error){status.textContent=`保存失败：${error.message}`}finally{button.disabled=false}
+  };
+}
+$('#settings-open').onclick=async()=>{
+  const generation=++agentSettingsGeneration;agentSettingsDrafts=new Map();agentRuntimeFiles=new Map();
+  $('#settings-agents').replaceChildren();$('#settings-content').innerHTML='<p class="meta">正在读取 agent 配置…</p>';$('#settings-dialog').showModal();
+  try{
+    await Promise.all(aiDesignAgents.map(async agent=>{const [,runtime]=await Promise.all([loadAgentDefaults(agent.id),request(`/api/agent-settings/${agent.id}/runtime`)]);if(generation===agentSettingsGeneration)agentRuntimeFiles.set(agent.id,runtime)}));
+    if(generation===agentSettingsGeneration&&$('#settings-dialog').open)renderAgentSettings(aiDesignAgents[0]);
+  }catch(error){if(generation!==agentSettingsGeneration)return;$('#settings-content').innerHTML=`<p class="meta">读取配置失败：${esc(error.message)}</p><button type="button" id="settings-retry">重试</button>`;$('#settings-retry').onclick=()=>{$('#settings-dialog').close();$('#settings-open').click()}}
+};
+$('#settings-close').onclick=()=>$('#settings-dialog').close();
+$('#settings-dialog').onclose=()=>{agentSettingsGeneration++;agentSettingsDrafts.clear();agentRuntimeFiles.clear()};
 const aiSelectedAgents=new Map();
 function renderAiForm(doc,notice,continueFrom){
   const est=aiFormState(doc,Boolean(continueFrom));
@@ -588,7 +667,7 @@ function renderPlaywrightAiForm(doc,notice,continueFrom){
   // 它的"密码遭遇数据泄露"弹窗（表单没有真正提交/跳转也会触发，JS 端
   // preventDefault 拦不住）。换掉字段名和输入类型可以让 Chrome 从一开始就不
   // 把这当成登录密码框，从根上避免弹窗，同时视觉上仍然是圆点遮罩。
-  const est=aiFormState(doc,Boolean(continueFrom)),v=est?.values||{},done=est?.status==='done',running=est?.status==='running';
+  const est=aiFormState(doc,Boolean(continueFrom)),v=est?.values||agentDefaults(aiDesignAgents.find(agent=>agent.id==='playwright')),done=est?.status==='done',running=est?.status==='running';
   const countField=done
     ?`<input name="caseCount" type="number" min="1" max="${AI_MAX_CASE_COUNT}" step="1" required value="${est.count}">`
     :`<input name="caseCount" type="number" disabled placeholder="点击“开始分析”后由 AI 评估">`;

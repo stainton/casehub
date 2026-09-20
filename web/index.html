@@ -12,7 +12,7 @@
 <body>
   <header class="topbar">
     <div class="brand"><span class="mark">C</span><div><strong id="app-title">CaseHub</strong><small id="app-subtitle">测试用例管理</small></div></div>
-    <div class="header-actions"><a class="header-link" href="/web/api.html">API 文档</a><button class="icon-button" id="theme" title="切换主题">◐</button><span class="avatar">本</span></div>
+    <div class="header-actions"><a class="header-link" href="/web/api.html">API 文档</a><button class="icon-button" id="theme" title="切换主题">◐</button><button type="button" class="header-settings" id="settings-open" aria-haspopup="dialog">⚙ 设置</button><span class="avatar">本</span></div>
   </header>
   <nav class="page-tabs" role="tablist">
     <button type="button" class="page-tab active" role="tab" aria-selected="true" data-app="cases">🗂 用例管理</button>
@@ -84,6 +84,13 @@
   <aside id="drawer" class="drawer hidden"><div class="panel-head"><div><strong>测试记录</strong><small id="drawer-case"></small></div><button class="icon-button" id="drawer-close">×</button></div><div id="drawer-case-desc" class="drawer-case-desc"></div><div id="record-history"></div><form id="record-form"><label>提交到版本<select id="record-version"></select></label><label>测试结果<select name="result" required><option value="passed">通过</option><option value="failed">失败</option><option value="blocked">阻塞</option></select></label><div class="record-editor-label" id="record-editor-label">执行备注 · Markdown / 富文本</div><div id="record-editor" aria-labelledby="record-editor-label"></div><div class="drawer-actions"><button type="button" class="secondary" id="save-draft">保存草稿</button><button type="submit">提交记录</button></div></form></aside>
   <aside id="ai-drawer" class="drawer hidden"><div class="panel-head"><div><strong>AI 设计</strong><small id="ai-drawer-doc"></small></div><button class="icon-button" id="ai-drawer-close">×</button></div><div id="ai-drawer-body" class="ai-drawer-body"><p class="meta">AI 设计能力即将上线，敬请期待。</p></div></aside>
   <aside id="gen-drawer" class="drawer hidden"><div class="panel-head"><div><strong>脚本生成</strong><small id="gen-drawer-sub"></small></div><button class="icon-button" id="gen-drawer-close">×</button></div><div id="gen-drawer-body" class="ai-drawer-body"></div></aside>
+  <dialog id="settings-dialog" aria-labelledby="settings-title">
+    <div class="modal-head"><h3 id="settings-title">设置</h3><button type="button" class="icon-button" id="settings-close" aria-label="关闭设置">×</button></div>
+    <div class="settings-layout">
+      <nav class="settings-sidebar" aria-label="设置导航"><h4>agent设置</h4><div id="settings-agents"></div></nav>
+      <section class="settings-content" id="settings-content" aria-label="agent配置"></section>
+    </div>
+  </dialog>
   <dialog id="feishu-export" aria-labelledby="feishu-export-title">
     <div class="modal-head"><h3 id="feishu-export-title">复制飞书思维导图</h3><button type="button" class="icon-button" id="feishu-export-close" aria-label="关闭">×</button></div>
     <p>复制后，进入飞书云文档中的白板编辑模式，点击画布空白处，再按 Ctrl+V（Mac：⌘V），生成可编辑的思维导图。</p>

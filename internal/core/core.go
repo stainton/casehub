@@ -147,18 +147,19 @@ type RiskNote struct {
 }
 
 type State struct {
-	MainRevision   int64           `json:"mainRevision"`
-	Versions       []Version       `json:"versions"`
-	Folders        []Folder        `json:"folders"`
-	Cases          []TestCase      `json:"cases"`
-	Histories      []History       `json:"histories"`
-	Records        []Record        `json:"records"`
-	Tasks          []Task          `json:"tasks"`
-	ReqFolders     []ReqFolder     `json:"reqFolders"`
-	ReqDocs        []ReqDoc        `json:"reqDocs"`
-	PendingFolders []PendingFolder `json:"pendingFolders"`
-	PendingCases   []PendingCase   `json:"pendingCases"`
-	Scripts        []Script        `json:"scripts"`
+	AgentSettings  map[string]AgentSettings `json:"agentSettings,omitempty"`
+	MainRevision   int64                    `json:"mainRevision"`
+	Versions       []Version                `json:"versions"`
+	Folders        []Folder                 `json:"folders"`
+	Cases          []TestCase               `json:"cases"`
+	Histories      []History                `json:"histories"`
+	Records        []Record                 `json:"records"`
+	Tasks          []Task                   `json:"tasks"`
+	ReqFolders     []ReqFolder              `json:"reqFolders"`
+	ReqDocs        []ReqDoc                 `json:"reqDocs"`
+	PendingFolders []PendingFolder          `json:"pendingFolders"`
+	PendingCases   []PendingCase            `json:"pendingCases"`
+	Scripts        []Script                 `json:"scripts"`
 }
 
 type Action struct {

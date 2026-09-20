@@ -77,7 +77,7 @@ func (f *File) Save(_ context.Context, s core.State) error {
 		return e
 	}
 	tmp := f.path + ".tmp"
-	if e = os.WriteFile(tmp, b, 0644); e != nil {
+	if e = os.WriteFile(tmp, b, 0600); e != nil {
 		return e
 	}
 	return os.Rename(tmp, f.path)

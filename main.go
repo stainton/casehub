@@ -32,6 +32,7 @@ func (a *api) state(w http.ResponseWriter, r *http.Request) {
 		jsonOut(w, 500, map[string]string{"error": e.Error()})
 		return
 	}
+	s.AgentSettings = nil
 	jsonOut(w, 200, s)
 }
 func (a *api) action(w http.ResponseWriter, r *http.Request) {
@@ -50,6 +51,7 @@ func (a *api) action(w http.ResponseWriter, r *http.Request) {
 		jsonOut(w, status, map[string]any{"error": e.Error(), "conflicts": out.Conflicts})
 		return
 	}
+	out.State.AgentSettings = nil
 	jsonOut(w, 200, out)
 }
 
@@ -64,6 +66,11 @@ type service struct {
 func routes(a *api, services ...service) http.Handler {
 	m := http.NewServeMux()
 	m.HandleFunc("GET /api/state", a.state)
+	m.HandleFunc("GET /api/agent-settings/{id}", a.agentSettings)
+	m.HandleFunc("PUT /api/agent-settings/{id}", a.agentSettings)
+	settingsFile := newAgentSettingsFile(env("CASEHUB_PLANNER_SETTINGS", "../auto-test/build/planner/setting.json"))
+	m.HandleFunc("GET /api/agent-settings/{id}/runtime", settingsFile.serveHTTP)
+	m.HandleFunc("PUT /api/agent-settings/{id}/runtime", settingsFile.serveHTTP)
 	m.HandleFunc("POST /api/action", a.action)
 	for _, s := range services {
 		enabled := s.enabled
