@@ -501,6 +501,7 @@ async function renderAiDrawer(doc){
     catch{aiPlannerEnabled=false}
   }
   if(aiDoc?.ID!==doc.ID)return; // drawer moved to another doc while awaiting
+  try{await loadAssets()}catch{assetsCache=[]} // 资产只是可选项，读取失败不阻塞设计
   try{await loadAgentDefaults('playwright')}catch(e){body.innerHTML=`<p class="meta">读取 agent 默认配置失败：${esc(e.message)}</p><button type="button" id="ai-settings-retry">重试</button>`;$('#ai-settings-retry').onclick=()=>renderAiDrawer(doc);return}
   if(aiDoc?.ID!==doc.ID)return;
   await checkAiJob(doc);
@@ -551,7 +552,7 @@ function aiTimeoutMinutes(){
 }
 const AI_ESTIMATE_CLIENT_TIMEOUT_MS=135000; // 服务端评估上限 120 秒，额外留出代理/网络余量
 const aiCaseRange=n=>`${Math.max(1,n-AI_CASE_COUNT_SLACK)}–${n}`;
-function aiFormValues(form){const x=Object.fromEntries(new FormData(form));delete x.caseCount;delete x.reqCode;return x}
+function aiFormValues(form){const data=new FormData(form),x=Object.fromEntries(data);delete x.caseCount;delete x.reqCode;x.assetIds=data.getAll('assetIds');return x}
 function aiRequirementPayload(doc,values,code){
   const d=liveReqDoc(doc);code=code||d.Code||'';
   return {requirements:[{id:d.ID,title:d.Title,content:d.Content||'',...(code?{code}:{})}],instructions:[values.instructions||'',reqRefContext(doc)].filter(Boolean).join('\n\n')};
@@ -633,16 +634,64 @@ function renderAgentSettings(agent){
     }catch(error){status.textContent=`保存失败：${error.message}`}finally{button.disabled=false}
   };
 }
-$('#settings-open').onclick=async()=>{
+async function openSettingsDialog(){
   const generation=++agentSettingsGeneration;agentSettingsDrafts=new Map();agentRuntimeFiles=new Map();
   $('#settings-agents').replaceChildren();$('#settings-content').innerHTML='<p class="meta">正在读取 agent 配置…</p>';$('#settings-dialog').showModal();
   try{
     await Promise.all(configurableAgents.map(async agent=>{const [,runtime]=await Promise.all([loadAgentDefaults(agent.id),request(`/api/agent-settings/${agent.id}/runtime`)]);if(generation===agentSettingsGeneration)agentRuntimeFiles.set(agent.id,runtime)}));
     if(generation===agentSettingsGeneration&&$('#settings-dialog').open)renderAgentSettings(configurableAgents[0]);
-  }catch(error){if(generation!==agentSettingsGeneration)return;$('#settings-content').innerHTML=`<p class="meta">读取配置失败：${esc(error.message)}</p><button type="button" id="settings-retry">重试</button>`;$('#settings-retry').onclick=()=>{$('#settings-dialog').close();$('#settings-open').click()}}
-};
+  }catch(error){if(generation!==agentSettingsGeneration)return;$('#settings-content').innerHTML=`<p class="meta">读取配置失败：${esc(error.message)}</p><button type="button" id="settings-retry">重试</button>`;$('#settings-retry').onclick=()=>{$('#settings-dialog').close();openSettingsDialog()}}
+}
 $('#settings-close').onclick=()=>$('#settings-dialog').close();
 $('#settings-dialog').onclose=()=>{agentSettingsGeneration++;agentSettingsDrafts.clear();agentRuntimeFiles.clear()};
+
+// ---- 头像菜单：设置 / 资产 ----
+$('#avatar-menu').onclick=e=>{e.stopPropagation();menu(e,[['⚙ 设置',openSettingsDialog],['🗂 资产',openAssetsDialog]])};
+// ---- 资产：图片 / 视频 / 音频，存在 CaseHub 数据库里；AI 设计时勾选后随任务交给 agent ----
+const ASSET_TYPES=[{id:'image',label:'图片',accept:'image/*'},{id:'video',label:'视频',accept:'video/*'},{id:'audio',label:'音频',accept:'audio/*'}];
+const assetTypeLabel=t=>ASSET_TYPES.find(x=>x.id===t)?.label||t;
+let assetsCache=[],assetsType='image',assetsGeneration=0;
+async function loadAssets(){assetsCache=await request('/api/assets');return assetsCache}
+const assetSize=n=>n>=1048576?`${(n/1048576).toFixed(1)} MB`:`${Math.max(1,Math.round(n/1024))} KB`;
+const assetURL=a=>`/api/assets/${encodeURIComponent(a.id)}`;
+function assetPreview(a){
+  if(a.type==='image')return `<img class="asset-thumb" src="${assetURL(a)}" alt="${esc(a.name)}" loading="lazy">`;
+  if(a.type==='video')return `<video class="asset-thumb" src="${assetURL(a)}" controls preload="metadata"></video>`;
+  return `<audio class="asset-audio" src="${assetURL(a)}" controls preload="none"></audio>`;
+}
+function renderAssets(){
+  const type=ASSET_TYPES.find(x=>x.id===assetsType),list=assetsCache.filter(a=>a.type===assetsType);
+  $('#assets-types').innerHTML=ASSET_TYPES.map(item=>`<button type="button" data-assets-type="${item.id}" aria-current="${item.id===assetsType}">${esc(item.label)}</button>`).join('');
+  $('#assets-content').innerHTML=`<h2>${esc(type.label)}</h2><p class="meta">上传后保存在 CaseHub 数据库。AI 设计时可勾选要带给 agent 的资产，CaseHub 会把文件发给 agent，agent 缓存在本地，探索需要时使用。</p>
+    <form id="asset-form" autocomplete="off"><label>选择文件<input type="file" name="file" accept="${type.accept}" required></label><label>名称（可选，默认文件名）<input name="name" maxlength="200"></label>
+    <p class="settings-status" id="asset-status" role="status"></p><div class="settings-actions"><button type="submit">上传${esc(type.label)}</button></div></form>
+    <div class="asset-list">${list.length?list.map(a=>`<div class="asset-item" data-asset="${esc(a.id)}">${assetPreview(a)}<div class="asset-info"><strong>${esc(a.name)}</strong><small>${assetSize(a.size)} · ${esc(a.mimeType)}</small></div><button type="button" class="danger" data-asset-delete="${esc(a.id)}">删除</button></div>`).join(''):`<p class="meta" id="assets-empty">还没有${esc(type.label)}资产。</p>`}</div>`;
+  $$('#assets-types [data-assets-type]').forEach(b=>b.onclick=()=>{assetsType=b.dataset.assetsType;renderAssets()});
+  const form=$('#asset-form');
+  form.onsubmit=async e=>{
+    e.preventDefault();
+    const btn=form.querySelector('[type="submit"]'),status=$('#asset-status'),generation=assetsGeneration;
+    const data=new FormData(form);data.set('type',assetsType);if(!(data.get('name')||'').trim())data.delete('name');
+    btn.disabled=true;status.textContent='上传中…';
+    try{await request('/api/assets',{method:'POST',body:data});await loadAssets();if(generation===assetsGeneration&&$('#assets-dialog').open)renderAssets()}
+    catch(error){status.textContent=`上传失败：${error.message}`;btn.disabled=false}
+  };
+  $$('#assets-content [data-asset-delete]').forEach(b=>b.onclick=async()=>{
+    const a=assetsCache.find(x=>x.id===b.dataset.assetDelete);
+    if(!confirm(`确定删除${assetTypeLabel(a.type)}「${a.name}」？已提交的任务不受影响。`))return;
+    b.disabled=true;
+    try{await request(`/api/assets/${encodeURIComponent(a.id)}`,{method:'DELETE'});await loadAssets();if($('#assets-dialog').open)renderAssets()}
+    catch(error){toast(error.message,true);b.disabled=false}
+  });
+}
+async function openAssetsDialog(){
+  const generation=++assetsGeneration;
+  $('#assets-types').replaceChildren();$('#assets-content').innerHTML='<p class="meta">正在读取资产…</p>';$('#assets-dialog').showModal();
+  try{await loadAssets();if(generation===assetsGeneration&&$('#assets-dialog').open)renderAssets()}
+  catch(error){if(generation!==assetsGeneration)return;$('#assets-content').innerHTML=`<p class="meta">读取资产失败：${esc(error.message)}</p><button type="button" id="assets-retry">重试</button>`;$('#assets-retry').onclick=()=>{$('#assets-dialog').close();openAssetsDialog()}}
+}
+$('#assets-close').onclick=()=>$('#assets-dialog').close();
+$('#assets-dialog').onclose=()=>{assetsGeneration++};
 const aiSelectedAgents=new Map();
 function renderAiForm(doc,notice,continueFrom){
   const est=aiFormState(doc,Boolean(continueFrom));
@@ -685,7 +734,7 @@ function renderPlaywrightAiForm(doc,notice,continueFrom){
     :`<button type="submit"${running?' disabled':''}>${running?'评估中…':'开始分析'}</button>`;
   const continueCard=continueFrom?`<div class="card"><h3>继续上次中断的设计</h3><p class="meta">接着上次的探索往下做，不会从头再探索一遍；浏览器会重新打开被测系统。可以先调大下面的任务超时时间再继续。</p></div>`:'';
   const restored=est?.restored&&!v.testSecret&&(v.baseUrl||v.testAccount)?'<p class="meta">已恢复上次提交的表单；测试账号密码没有保存在浏览器里，被测系统需要登录时请重新填写。</p>':'';
-  $('#ai-agent-parameters').innerHTML=`${notice?`<p class="meta">${esc(notice)}</p>`:''}${continueCard}${restored}<form id="ai-form" autocomplete="off"><input type="hidden" name="agentId" value="playwright"><label>被测系统 URL<input name="baseUrl" required placeholder="https://test.example.com/login" autocomplete="off" value="${esc(v.baseUrl||'')}"></label><label>补充说明（可选）<textarea name="instructions" placeholder="覆盖范围、登录方式；也可以限制探索行为，例如：提交后确认任务已开始即可，不要等待任务运行完成">${esc(v.instructions||'')}</textarea><small class="meta">这里写的内容是硬性约束：AI 探索时会照做，被它挡住的验证会作为"未验证范围"返回，而不是绕开约束去试。</small></label><label>测试账号 · 用户名（可选）<input name="testAccount" autocomplete="off" value="${esc(v.testAccount||'')}"></label><label>测试账号 · 密码（可选）<input name="testSecret" type="text" class="fake-password" autocomplete="off" spellcheck="false" value="${esc(v.testSecret||'')}"></label><label>建议覆盖用例数量${countField}</label><label>需求缩写（用例编号 TC-<b id="ai-code-preview">${esc((done&&est.code)||savedCode||'XXX')}</b>-模块-类别-001）${codeField}</label><label>任务超时时间（分钟）<input name="timeoutMinutes" type="number" min="${AI_MIN_TIMEOUT_MIN}" max="${AI_MAX_TIMEOUT_MIN}" step="1" required value="${esc(v.timeoutMinutes??aiTimeoutMinutes())}"><small class="meta">探索时间取决于被测系统和用例数量；超时任务会以 JOB_TIMEOUT 失败，草稿不会保留，但已探索的内容留在服务端，可以点「继续」接着跑。</small></label>${estimateInfo}<p class="drawer-actions">${actions}</p></form>`;
+  $('#ai-agent-parameters').innerHTML=`${notice?`<p class="meta">${esc(notice)}</p>`:''}${continueCard}${restored}<form id="ai-form" autocomplete="off"><input type="hidden" name="agentId" value="playwright"><label>被测系统 URL<input name="baseUrl" required placeholder="https://test.example.com/login" autocomplete="off" value="${esc(v.baseUrl||'')}"></label><label>补充说明（可选）<textarea name="instructions" placeholder="覆盖范围、登录方式；也可以限制探索行为，例如：提交后确认任务已开始即可，不要等待任务运行完成">${esc(v.instructions||'')}</textarea><small class="meta">这里写的内容是硬性约束：AI 探索时会照做，被它挡住的验证会作为"未验证范围"返回，而不是绕开约束去试。</small></label><label>测试账号 · 用户名（可选）<input name="testAccount" autocomplete="off" value="${esc(v.testAccount||'')}"></label><label>测试账号 · 密码（可选）<input name="testSecret" type="text" class="fake-password" autocomplete="off" spellcheck="false" value="${esc(v.testSecret||'')}"></label><fieldset class="ai-assets"><legend>随任务带上的资产（可选）</legend>${assetsCache.length?assetsCache.map(a=>`<label class="ai-asset"><input type="checkbox" name="assetIds" value="${esc(a.id)}"${(v.assetIds||[]).includes(a.id)?' checked':''}> ${esc(assetTypeLabel(a.type))} · ${esc(a.name)} <small>${assetSize(a.size)}</small></label>`).join(''):'<small class="meta">还没有资产，可在头像菜单的「资产」里上传。</small>'}<small class="meta">勾选的资产由 CaseHub 发送给 agent 并缓存在本地，仅在探索确实需要时使用。</small></fieldset><label>建议覆盖用例数量${countField}</label><label>需求缩写（用例编号 TC-<b id="ai-code-preview">${esc((done&&est.code)||savedCode||'XXX')}</b>-模块-类别-001）${codeField}</label><label>任务超时时间（分钟）<input name="timeoutMinutes" type="number" min="${AI_MIN_TIMEOUT_MIN}" max="${AI_MAX_TIMEOUT_MIN}" step="1" required value="${esc(v.timeoutMinutes??aiTimeoutMinutes())}"><small class="meta">探索时间取决于被测系统和用例数量；超时任务会以 JOB_TIMEOUT 失败，草稿不会保留，但已探索的内容留在服务端，可以点「继续」接着跑。</small></label>${estimateInfo}<p class="drawer-actions">${actions}</p></form>`;
   const form=$('#ai-form');
   // 评估期间/评估后继续编辑的表单内容同步进状态，重新渲染（关闭再打开抽屉）时保留。
   form.oninput=()=>{
@@ -721,7 +770,7 @@ function renderPlaywrightAiForm(doc,notice,continueFrom){
       if(reqFocus?.type==='doc'&&reqFocus.id===doc.ID&&$('#req-doc-code'))$('#req-doc-code').textContent=code;
     }
     const {requirements,instructions}=aiRequirementPayload(doc,values,code);
-    const payload={requirements,target:{baseUrl:values.baseUrl},context:{instructions},caseCount,timeoutMs:timeoutMinutes*60000,
+    const payload={requirements,target:{baseUrl:values.baseUrl},context:{instructions,...(values.assetIds?.length?{assetIds:values.assetIds}:{})},caseCount,timeoutMs:timeoutMinutes*60000,
       ...(continueFrom?{continueFrom}:{})};
     if(values.testAccount||values.testSecret)payload.context.testData={username:values.testAccount||'',password:values.testSecret||''};
     try{

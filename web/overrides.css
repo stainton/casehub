@@ -152,7 +152,6 @@ table{border-collapse:collapse;width:100%}th,td{text-align:left;vertical-align:t
 .gen-task .ai-log{max-height:220px}
 
 /* Agent settings dialog. */
-.header-settings{background:transparent;color:inherit;border:1px solid #ffffff40}
 #settings-dialog{width:min(900px,94vw);max-height:88vh}
 .settings-layout{display:grid;grid-template-columns:210px minmax(0,1fr);height:min(650px,72vh)}
 .settings-sidebar{padding:18px 12px;background:var(--surface2);border-right:1px solid var(--line);overflow:auto}
@@ -170,3 +169,18 @@ table{border-collapse:collapse;width:100%}th,td{text-align:left;vertical-align:t
 .settings-section{padding:12px 0 24px;border-bottom:1px solid var(--line)}
 .settings-section h3{margin:0;font-size:15px}
 #agent-runtime-json{min-height:330px;font:12px/1.6 ui-monospace,SFMono-Regular,Consolas,monospace;tab-size:2;white-space:pre;overflow:auto}
+
+/* 头像菜单与资产 */
+button.avatar{padding:0;color:#fff;cursor:pointer;border:1px solid #ffffff40}
+.assets-dialog{width:min(900px,94vw)}
+.asset-list{display:grid;gap:10px;margin-top:14px}
+.asset-item{display:flex;align-items:center;gap:12px;border:1px solid var(--line);border-radius:9px;padding:8px}
+.asset-thumb{width:96px;height:64px;object-fit:cover;border-radius:6px;background:var(--surface2)}
+.asset-audio{width:200px}
+.asset-info{flex:1;min-width:0;display:flex;flex-direction:column}
+.asset-info strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.asset-info small{color:var(--muted)}
+.ai-assets{border:1px solid var(--line);border-radius:8px;margin:12px 0;padding:6px 12px}
+.ai-assets legend{color:var(--muted);font-size:12px;padding:0 4px}
+.ai-asset{display:flex;align-items:center;gap:6px;margin:6px 0}
+.ai-asset input{width:auto;margin:0}

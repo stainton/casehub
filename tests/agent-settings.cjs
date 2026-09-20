@@ -13,7 +13,7 @@ const base=process.env.CASEHUB_TEST_URL||'http://127.0.0.1:18081';
   const runtimeURL=base+'/api/agent-settings/playwright/runtime';
   const fixture=await (await page.request.get(runtimeURL)).json();
   assert.equal((await page.request.put(runtimeURL,{data:{revision:fixture.revision,content:JSON.stringify({model:'fixture-model',env:{CUSTOM:'keep-me'}})}})).status(),200);
-  const open=async()=>{await page.locator('#settings-open').click();await page.locator('#agent-settings-form').waitFor()};
+  const open=async()=>{await page.locator('#avatar-menu').click();await page.locator('#context-menu button',{hasText:'设置'}).click();await page.locator('#agent-settings-form').waitFor()};
   const field=name=>page.locator(`#agent-settings-form [name="${name}"]`);
   const save=async()=>{await page.locator('#agent-settings-form [type="submit"]').click();await page.locator('#agent-settings-status').filter({hasText:'业务默认参数已保存'}).waitFor()};
   await open();
@@ -43,7 +43,7 @@ const base=process.env.CASEHUB_TEST_URL||'http://127.0.0.1:18081';
   await page.locator('#settings-close').click();
   // A separate browser context has no shared localStorage, but gets the same defaults.
   const other=await browser.newContext();const second=await other.newPage();await second.goto(base);
-  await second.locator('#settings-open').click();await second.locator('#agent-settings-form').waitFor();
+  await second.locator('#avatar-menu').click();await second.locator('#context-menu button',{hasText:'设置'}).click();await second.locator('#agent-settings-form').waitFor();
   assert.equal(await second.locator('#agent-settings-form [name="baseUrl"]').inputValue(),'https://default.test/login');
   assert.equal(await second.locator('#agent-settings-form [name="testSecret"]').inputValue(),'default-password');
   assert.equal(JSON.parse(await second.locator('#agent-runtime-json').inputValue()).model,'configured-model');

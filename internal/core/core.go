@@ -25,6 +25,14 @@ type Repository interface {
 	// stores the result, serialised against other updates of the same agent so a revision check inside
 	// mutate is meaningful. A mutate error is returned as-is and nothing is stored.
 	UpdateAgentConfig(ctx context.Context, id string, mutate func(AgentConfig) (AgentConfig, error)) (AgentConfig, error)
+	// Assets: uploaded files a design task can carry along (see assets.go). ListAssets and GetAssetMeta
+	// never touch the bytes, so listing and resolving an asset for a task cost nothing proportional to
+	// its size; only GetAsset (the download handler) reads them.
+	ListAssets(ctx context.Context, assetType string) ([]AssetMeta, error)
+	GetAssetMeta(ctx context.Context, id string) (AssetMeta, error)
+	GetAsset(ctx context.Context, id string) (Asset, error)
+	SaveAsset(ctx context.Context, a Asset) error
+	DeleteAsset(ctx context.Context, id string) error
 }
 
 type Version struct {

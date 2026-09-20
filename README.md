@@ -90,12 +90,18 @@ http://<可访问的节点 IP>:30080
 
 「AI 设计」抽屉先选择 agent，再显示对应参数。目前可选 aigc用例设计，选择后填写被测系统 URL、补充说明和测试账号等参数；重试与继续会恢复原 agent，旧版任务按 aigc用例设计 处理。
 
-头像旁的「设置」打开 agent 设置弹窗：左侧选择 agent（aigc用例设计 / 脚本生成，各自一份配置），右侧分为两部分，分别保存：
+点击右上角头像弹出菜单，里面有「设置」和「资产」。「设置」打开 agent 设置弹窗：左侧选择 agent（aigc用例设计 / 脚本生成，各自一份配置），右侧分为两部分，分别保存：
 
 - **业务默认参数**：默认被测系统 URL、补充说明、用户名、密码和任务时长，新任务选择该 agent 后自动带入，已有任务保留原参数。默认密码可预填、修改和清空。保存业务默认参数不会改变配置版本号，agent 不会因此改写自己的 setting.json。
 - **setting.json**：agent 的完整 Claude 配置正文（任意 `env`、模型、权限及扩展字段），按原文保存，CaseHub 不认识的字段照样保留。保存会校验 JSON 格式及 `env`/`model` 基本类型，并用版本号检查是否有人在此期间保存过，避免覆盖新内容。
 
 两部分都存在 CaseHub 的 agent 配置表里（PostgreSQL 为 `casehub_agent_settings`，文件存储为状态文件旁的 `casehub-agents.json`，memory 模式仅在进程内），不同设备共享。
+
+### 资产
+
+头像菜单的「资产」与设置弹窗同样的布局：左侧类型（图片 / 视频 / 音频），右侧上传、预览、删除。上限分别为 15 / 200 / 50 MB。资产存在 CaseHub 数据库里（PostgreSQL 为 `casehub_assets`，文件存储为状态文件旁的 `casehub-assets.json` 加 `casehub-assets-data/` 目录，memory 模式仅在进程内），列表和解析只读元数据，不加载文件内容。
+
+「AI 设计」抽屉里可勾选要带给 agent 的资产。agent 没有 CaseHub 的数据库访问权限，也不会回头找 CaseHub 拿文件：提交时前端只发资产 id（`context.assetIds`），CaseHub 代理先把文件推给 agent（`HEAD /v1/planner/assets/{sha256}` 询问 agent 缓存里有没有，没有再 `PUT` 字节，同一文件不会重复发送），再把 `assetIds` 换成 `context.assets`（`{id, name, type, mimeType, sha256, size}`，只有引用）转发。agent 把文件缓存到本地，任务开始时复制进工作目录，探索确实需要时直接用本地路径。已被删除的资产会被忽略，不会让任务失败；agent 收不下资产（不可达、版本过旧没有该接口）时任务返回 502 `PLANNER_ASSETS_UNAVAILABLE`，不会不带资产悄悄继续。
 
 ### 配置如何到达 agent
 

@@ -70,6 +70,10 @@ func routes(a *api, services ...service) http.Handler {
 	m.HandleFunc("PUT /api/agent-settings/{id}", a.agentSettings)
 	m.HandleFunc("GET /api/agent-settings/{id}/runtime", a.agentRuntimeSettings)
 	m.HandleFunc("PUT /api/agent-settings/{id}/runtime", a.agentRuntimeSettings)
+	m.HandleFunc("GET /api/assets", a.assets)
+	m.HandleFunc("POST /api/assets", a.assets)
+	m.HandleFunc("GET /api/assets/{id}", a.assetByID)
+	m.HandleFunc("DELETE /api/assets/{id}", a.assetByID)
 	m.HandleFunc("POST /api/action", a.action)
 	for _, s := range services {
 		enabled := s.enabled
@@ -127,8 +131,9 @@ func main() {
 	}
 	port := env("PORT", "8080")
 	svc := core.NewService(repo)
-	plannerProxy, plannerEnabled := upstream.New(env("CASEHUB_PLANNER_URL", "http://localhost:4501"), "planner", agentSettingsOf(svc, "planner"))
-	generatorProxy, generatorEnabled := upstream.New(env("CASEHUB_GENERATOR_URL", "http://localhost:4502"), "generator", agentSettingsOf(svc, "generator"))
+	lookup := assetSource(svc)
+	plannerProxy, plannerEnabled := upstream.New(env("CASEHUB_PLANNER_URL", "http://localhost:4501"), "planner", agentSettingsOf(svc, "planner"), lookup)
+	generatorProxy, generatorEnabled := upstream.New(env("CASEHUB_GENERATOR_URL", "http://localhost:4502"), "generator", agentSettingsOf(svc, "generator"), lookup)
 	log.Printf("CaseHub listening on :%s (store=%s, planner=%v, generator=%v)", port, kind, plannerEnabled, generatorEnabled)
 	log.Fatal(http.ListenAndServe(":"+port, routes(&api{service: svc},
 		service{name: "planner", proxy: plannerProxy, enabled: plannerEnabled},

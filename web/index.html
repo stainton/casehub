@@ -12,7 +12,7 @@
 <body>
   <header class="topbar">
     <div class="brand"><span class="mark">C</span><div><strong id="app-title">CaseHub</strong><small id="app-subtitle">测试用例管理</small></div></div>
-    <div class="header-actions"><a class="header-link" href="/web/api.html">API 文档</a><button class="icon-button" id="theme" title="切换主题">◐</button><button type="button" class="header-settings" id="settings-open" aria-haspopup="dialog">⚙ 设置</button><span class="avatar">本</span></div>
+    <div class="header-actions"><a class="header-link" href="/web/api.html">API 文档</a><button class="icon-button" id="theme" title="切换主题">◐</button><button type="button" class="avatar" id="avatar-menu" aria-haspopup="menu" title="账户菜单">本</button></div>
   </header>
   <nav class="page-tabs" role="tablist">
     <button type="button" class="page-tab active" role="tab" aria-selected="true" data-app="cases">🗂 用例管理</button>
@@ -89,6 +89,13 @@
     <div class="settings-layout">
       <nav class="settings-sidebar" aria-label="设置导航"><h4>agent设置</h4><div id="settings-agents"></div></nav>
       <section class="settings-content" id="settings-content" aria-label="agent配置"></section>
+    </div>
+  </dialog>
+  <dialog id="assets-dialog" class="assets-dialog" aria-labelledby="assets-title">
+    <div class="modal-head"><h3 id="assets-title">资产</h3><button type="button" class="icon-button" id="assets-close" aria-label="关闭资产">×</button></div>
+    <div class="settings-layout">
+      <nav class="settings-sidebar" aria-label="资产类型"><h4>资产类型</h4><div id="assets-types"></div></nav>
+      <section class="settings-content" id="assets-content" aria-label="资产列表"></section>
     </div>
   </dialog>
   <dialog id="feishu-export" aria-labelledby="feishu-export-title">

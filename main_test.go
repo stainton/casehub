@@ -32,8 +32,8 @@ func TestStorageKind(t *testing.T) {
 // Both upstream services are optional; with neither configured the app still serves
 // its own pages and API, and each status endpoint reports its own service disabled.
 func disabledServices() []service {
-	planner, plannerEnabled := upstream.New("", "planner", nil)
-	generator, generatorEnabled := upstream.New("", "generator", nil)
+	planner, plannerEnabled := upstream.New("", "planner", nil, nil)
+	generator, generatorEnabled := upstream.New("", "generator", nil, nil)
 	return []service{{name: "planner", proxy: planner, enabled: plannerEnabled},
 		{name: "generator", proxy: generator, enabled: generatorEnabled}}
 }

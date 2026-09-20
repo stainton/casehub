@@ -1,6 +1,7 @@
 package store_test
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"path/filepath"
@@ -76,5 +77,60 @@ func TestAgentConfigurationIsStoredPerAgent(t *testing.T) {
 	}
 	if got, err := repo.AgentConfig(context.Background(), "playwright"); err != nil || got.Revision != 1 {
 		t.Fatalf("saving state dropped the agent configuration: %+v %v", got, err)
+	}
+}
+
+// Assets behave the same in every store: absent until saved, then read back exactly (metadata and
+// bytes both), filterable by type, and gone (not merely emptied) after delete.
+func TestAssetsAreStoredPerBackend(t *testing.T) {
+	repos := map[string]core.Repository{
+		"memory": store.NewMemory(),
+		"file":   store.NewFile(filepath.Join(t.TempDir(), "state.json")),
+	}
+	for name, repo := range repos {
+		t.Run(name, func(t *testing.T) {
+			ctx := context.Background()
+			if _, err := repo.GetAssetMeta(ctx, "missing"); !errors.Is(err, core.ErrNotFound) {
+				t.Fatalf("missing asset meta = %v, want ErrNotFound", err)
+			}
+			if _, err := repo.GetAsset(ctx, "missing"); !errors.Is(err, core.ErrNotFound) {
+				t.Fatalf("missing asset = %v, want ErrNotFound", err)
+			}
+			image := core.Asset{AssetMeta: core.AssetMeta{ID: "a1", Type: core.AssetImage, Name: "logo.png",
+				MimeType: "image/png", Size: 3, SHA256: "x"}, Data: []byte{1, 2, 3}}
+			video := core.Asset{AssetMeta: core.AssetMeta{ID: "a2", Type: core.AssetVideo, Name: "clip.mp4",
+				MimeType: "video/mp4", Size: 2, SHA256: "y"}, Data: []byte{9, 9}}
+			if err := repo.SaveAsset(ctx, image); err != nil {
+				t.Fatal(err)
+			}
+			if err := repo.SaveAsset(ctx, video); err != nil {
+				t.Fatal(err)
+			}
+			meta, err := repo.GetAssetMeta(ctx, "a1")
+			if err != nil || meta.Name != "logo.png" || meta.Type != core.AssetImage {
+				t.Fatalf("stored meta mismatch: %+v (%v)", meta, err)
+			}
+			full, err := repo.GetAsset(ctx, "a1")
+			if err != nil || !bytes.Equal(full.Data, image.Data) {
+				t.Fatalf("stored bytes mismatch: %+v (%v)", full, err)
+			}
+			all, err := repo.ListAssets(ctx, "")
+			if err != nil || len(all) != 2 {
+				t.Fatalf("list all = %+v (%v)", all, err)
+			}
+			onlyVideo, err := repo.ListAssets(ctx, core.AssetVideo)
+			if err != nil || len(onlyVideo) != 1 || onlyVideo[0].ID != "a2" {
+				t.Fatalf("list by type = %+v (%v)", onlyVideo, err)
+			}
+			if err = repo.DeleteAsset(ctx, "a1"); err != nil {
+				t.Fatal(err)
+			}
+			if _, err = repo.GetAssetMeta(ctx, "a1"); !errors.Is(err, core.ErrNotFound) {
+				t.Fatalf("deleted asset still readable: %v", err)
+			}
+			if err = repo.DeleteAsset(ctx, "a1"); !errors.Is(err, core.ErrNotFound) {
+				t.Fatalf("deleting twice = %v, want ErrNotFound", err)
+			}
+		})
 	}
 }

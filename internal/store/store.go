@@ -18,9 +18,12 @@ type Memory struct {
 	mu     sync.RWMutex
 	state  *core.State
 	agents map[string]core.AgentConfig
+	assets map[string]core.Asset
 }
 
-func NewMemory() *Memory { return &Memory{agents: map[string]core.AgentConfig{}} }
+func NewMemory() *Memory {
+	return &Memory{agents: map[string]core.AgentConfig{}, assets: map[string]core.Asset{}}
+}
 func clone(s core.State) (core.State, error) {
 	b, e := json.Marshal(s)
 	if e != nil {
@@ -68,10 +71,58 @@ func (m *Memory) UpdateAgentConfig(_ context.Context, id string, mutate func(cor
 	return next, nil
 }
 
+func (m *Memory) ListAssets(_ context.Context, assetType string) ([]core.AssetMeta, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	out := make([]core.AssetMeta, 0, len(m.assets))
+	for _, a := range m.assets {
+		if assetType == "" || a.Type == assetType {
+			out = append(out, a.AssetMeta)
+		}
+	}
+	return out, nil
+}
+func (m *Memory) GetAssetMeta(_ context.Context, id string) (core.AssetMeta, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	a, ok := m.assets[id]
+	if !ok {
+		return core.AssetMeta{}, core.ErrNotFound
+	}
+	return a.AssetMeta, nil
+}
+func (m *Memory) GetAsset(_ context.Context, id string) (core.Asset, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	a, ok := m.assets[id]
+	if !ok {
+		return core.Asset{}, core.ErrNotFound
+	}
+	a.Data = append([]byte(nil), a.Data...) // the caller must not be able to mutate the stored bytes
+	return a, nil
+}
+func (m *Memory) SaveAsset(_ context.Context, a core.Asset) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	a.Data = append([]byte(nil), a.Data...)
+	m.assets[a.ID] = a
+	return nil
+}
+func (m *Memory) DeleteAsset(_ context.Context, id string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, ok := m.assets[id]; !ok {
+		return core.ErrNotFound
+	}
+	delete(m.assets, id)
+	return nil
+}
+
 type File struct {
 	path     string
 	mu       sync.Mutex
 	agentsMu sync.Mutex
+	assetsMu sync.Mutex
 }
 
 func NewFile(path string) *File { return &File{path: path} }
@@ -124,6 +175,119 @@ func (f *File) UpdateAgentConfig(_ context.Context, id string, mutate func(core.
 	}
 	return next, nil
 }
+
+// Assets are kept apart from both the state document and the agent configuration: a manifest of
+// metadata beside the state file (data/casehub.json → data/casehub-assets.json) and each asset's bytes
+// as its own file in a sibling directory (data/casehub-assets-data/<id>), so listing assets or saving
+// state never has to load megabytes of file content into memory, and an upload only ever touches its
+// own file.
+func assetsManifestPath(path string) string {
+	ext := filepath.Ext(path)
+	return strings.TrimSuffix(path, ext) + "-assets" + ext
+}
+func assetsDataDir(path string) string {
+	ext := filepath.Ext(path)
+	return strings.TrimSuffix(path, ext) + "-assets-data"
+}
+func (f *File) loadAssetsManifest() (map[string]core.AssetMeta, error) {
+	manifest := map[string]core.AssetMeta{}
+	b, e := os.ReadFile(assetsManifestPath(f.path))
+	if errors.Is(e, os.ErrNotExist) {
+		return manifest, nil
+	}
+	if e != nil {
+		return nil, e
+	}
+	return manifest, json.Unmarshal(b, &manifest)
+}
+func (f *File) ListAssets(_ context.Context, assetType string) ([]core.AssetMeta, error) {
+	f.assetsMu.Lock()
+	defer f.assetsMu.Unlock()
+	manifest, e := f.loadAssetsManifest()
+	if e != nil {
+		return nil, e
+	}
+	out := make([]core.AssetMeta, 0, len(manifest))
+	for _, meta := range manifest {
+		if assetType == "" || meta.Type == assetType {
+			out = append(out, meta)
+		}
+	}
+	return out, nil
+}
+func (f *File) GetAssetMeta(_ context.Context, id string) (core.AssetMeta, error) {
+	f.assetsMu.Lock()
+	defer f.assetsMu.Unlock()
+	manifest, e := f.loadAssetsManifest()
+	if e != nil {
+		return core.AssetMeta{}, e
+	}
+	meta, ok := manifest[id]
+	if !ok {
+		return core.AssetMeta{}, core.ErrNotFound
+	}
+	return meta, nil
+}
+func (f *File) GetAsset(_ context.Context, id string) (core.Asset, error) {
+	f.assetsMu.Lock()
+	defer f.assetsMu.Unlock()
+	manifest, e := f.loadAssetsManifest()
+	if e != nil {
+		return core.Asset{}, e
+	}
+	meta, ok := manifest[id]
+	if !ok {
+		return core.Asset{}, core.ErrNotFound
+	}
+	data, e := os.ReadFile(filepath.Join(assetsDataDir(f.path), id))
+	if e != nil {
+		return core.Asset{}, e
+	}
+	return core.Asset{AssetMeta: meta, Data: data}, nil
+}
+func (f *File) SaveAsset(_ context.Context, a core.Asset) error {
+	f.assetsMu.Lock()
+	defer f.assetsMu.Unlock()
+	manifest, e := f.loadAssetsManifest()
+	if e != nil {
+		return e
+	}
+	dir := assetsDataDir(f.path)
+	if e = os.MkdirAll(dir, 0755); e != nil {
+		return e
+	}
+	tmp := filepath.Join(dir, "."+a.ID+".tmp")
+	if e = os.WriteFile(tmp, a.Data, 0600); e != nil {
+		return e
+	}
+	if e = os.Rename(tmp, filepath.Join(dir, a.ID)); e != nil {
+		return e
+	}
+	manifest[a.ID] = a.AssetMeta
+	return writeJSONFile(assetsManifestPath(f.path), manifest)
+}
+func (f *File) DeleteAsset(_ context.Context, id string) error {
+	f.assetsMu.Lock()
+	defer f.assetsMu.Unlock()
+	manifest, e := f.loadAssetsManifest()
+	if e != nil {
+		return e
+	}
+	if _, ok := manifest[id]; !ok {
+		return core.ErrNotFound
+	}
+	delete(manifest, id)
+	// The manifest drops the asset first: a crash between these two writes leaves an orphan blob file,
+	// never a listed asset whose bytes are gone.
+	if e = writeJSONFile(assetsManifestPath(f.path), manifest); e != nil {
+		return e
+	}
+	e = os.Remove(filepath.Join(assetsDataDir(f.path), id))
+	if errors.Is(e, os.ErrNotExist) {
+		return nil
+	}
+	return e
+}
 func writeJSONFile(path string, v any) error {
 	if e := os.MkdirAll(filepath.Dir(path), 0755); e != nil {
 		return e
@@ -175,6 +339,9 @@ func NewPostgres(ctx context.Context, dsn string) (*Postgres, error) {
 		// compare against. Separate from casehub_state so saving a configuration does not rewrite the
 		// whole state document, and so a configuration survives every agent redeploy.
 		`CREATE TABLE IF NOT EXISTS casehub_agent_settings (agent_id TEXT PRIMARY KEY, defaults JSONB NOT NULL DEFAULT '{}'::jsonb, settings TEXT NOT NULL DEFAULT '', revision BIGINT NOT NULL DEFAULT 0, updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW())`,
+		// Uploaded assets a design task can carry along. data is nullable only in spirit (SaveAsset
+		// always supplies it); metadata queries (list, resolving a task's chosen ids) never select it.
+		`CREATE TABLE IF NOT EXISTS casehub_assets (id TEXT PRIMARY KEY, type TEXT NOT NULL, name TEXT NOT NULL, mime_type TEXT NOT NULL, size BIGINT NOT NULL, sha256 TEXT NOT NULL, data BYTEA NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW())`,
 	} {
 		if _, e = db.ExecContext(ctx, ddl); e != nil {
 			db.Close()
@@ -230,6 +397,65 @@ func (p *Postgres) UpdateAgentConfig(ctx context.Context, id string, mutate func
 		return core.AgentConfig{}, e
 	}
 	return next, nil
+}
+func (p *Postgres) ListAssets(ctx context.Context, assetType string) ([]core.AssetMeta, error) {
+	query, args := `SELECT id, type, name, mime_type, size, sha256, created_at FROM casehub_assets`, []any{}
+	if assetType != "" {
+		query += ` WHERE type=$1`
+		args = append(args, assetType)
+	}
+	rows, e := p.db.QueryContext(ctx, query, args...)
+	if e != nil {
+		return nil, e
+	}
+	defer rows.Close()
+	out := []core.AssetMeta{}
+	for rows.Next() {
+		var m core.AssetMeta
+		if e = rows.Scan(&m.ID, &m.Type, &m.Name, &m.MimeType, &m.Size, &m.SHA256, &m.CreatedAt); e != nil {
+			return nil, e
+		}
+		out = append(out, m)
+	}
+	return out, rows.Err()
+}
+func (p *Postgres) GetAssetMeta(ctx context.Context, id string) (core.AssetMeta, error) {
+	var m core.AssetMeta
+	e := p.db.QueryRowContext(ctx, `SELECT id, type, name, mime_type, size, sha256, created_at FROM casehub_assets WHERE id=$1`, id).
+		Scan(&m.ID, &m.Type, &m.Name, &m.MimeType, &m.Size, &m.SHA256, &m.CreatedAt)
+	if errors.Is(e, sql.ErrNoRows) {
+		return core.AssetMeta{}, core.ErrNotFound
+	}
+	return m, e
+}
+func (p *Postgres) GetAsset(ctx context.Context, id string) (core.Asset, error) {
+	var a core.Asset
+	e := p.db.QueryRowContext(ctx, `SELECT id, type, name, mime_type, size, sha256, created_at, data FROM casehub_assets WHERE id=$1`, id).
+		Scan(&a.ID, &a.Type, &a.Name, &a.MimeType, &a.Size, &a.SHA256, &a.CreatedAt, &a.Data)
+	if errors.Is(e, sql.ErrNoRows) {
+		return core.Asset{}, core.ErrNotFound
+	}
+	return a, e
+}
+func (p *Postgres) SaveAsset(ctx context.Context, a core.Asset) error {
+	_, e := p.db.ExecContext(ctx, `INSERT INTO casehub_assets(id, type, name, mime_type, size, sha256, data, created_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8)
+		ON CONFLICT(id) DO UPDATE SET type=EXCLUDED.type, name=EXCLUDED.name, mime_type=EXCLUDED.mime_type, size=EXCLUDED.size, sha256=EXCLUDED.sha256, data=EXCLUDED.data`,
+		a.ID, a.Type, a.Name, a.MimeType, a.Size, a.SHA256, a.Data, a.CreatedAt)
+	return e
+}
+func (p *Postgres) DeleteAsset(ctx context.Context, id string) error {
+	res, e := p.db.ExecContext(ctx, `DELETE FROM casehub_assets WHERE id=$1`, id)
+	if e != nil {
+		return e
+	}
+	n, e := res.RowsAffected()
+	if e != nil {
+		return e
+	}
+	if n == 0 {
+		return core.ErrNotFound
+	}
+	return nil
 }
 func (p *Postgres) Close() error { return p.db.Close() }
 func (p *Postgres) Load(ctx context.Context) (core.State, error) {
