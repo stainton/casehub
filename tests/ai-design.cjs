@@ -82,7 +82,22 @@ let page=null;
 
     // 评估 → 确认 → 任务超时失败
     await openDrawer(page,docId);
+    await page.locator('#ai-agent').waitFor();
+    assert.equal(await page.locator('#ai-agent').inputValue(),'');
+    assert.equal(await page.locator('#ai-form').count(),0);
+    assert.equal(submissions.length,0);
+    await page.locator('#ai-agent').selectOption('playwright');
     await fillForm(page);
+    await page.locator('#ai-form [name="timeoutMinutes"]').fill('22');
+    // 取消选择会隐藏参数和操作；重新选择保留已填写的内容。
+    await page.locator('#ai-agent').selectOption('');
+    assert.equal(await page.locator('#ai-form').count(),0);
+    await page.locator('#ai-agent').selectOption('playwright');
+    assert.equal(await page.locator('#ai-form [name="baseUrl"]').inputValue(),FORM.baseUrl);
+    assert.equal(await page.locator('#ai-form [name="timeoutMinutes"]').inputValue(),'22');
+    await page.locator('#ai-drawer-close').click();
+    await openDrawer(page,docId);
+    assert.equal(await page.locator('#ai-agent').inputValue(),'playwright');
     await page.locator('#ai-form button[type="submit"]').click(); // 开始分析
     await page.locator('#ai-form [name="caseCount"]:not([disabled])').waitFor();
     assert.equal(await page.locator('#ai-form [name="caseCount"]').inputValue(),'8');
@@ -94,6 +109,13 @@ let page=null;
     assert.match(await page.locator('#ai-drawer-body').innerText(),/JOB_TIMEOUT/);
     assert.equal(await page.locator('#ai-retry').count(),1);
 
+    // 新表单记录 agent；去掉该字段模拟旧版数据，刷新后仍可恢复 Playwright。
+    await page.evaluate(id=>{
+      const key=`casehub-ai-form-${id}`,saved=JSON.parse(localStorage.getItem(key));
+      if(saved.values.agentId!=='playwright'||saved.values.testSecret!=='')throw Error('保存的 agent 或密码不正确');
+      delete saved.values.agentId;
+      localStorage.setItem(key,JSON.stringify(saved));
+    },docId);
     // 失败状态在刷新后仍然可见：继续和重试都还在
     await page.reload();
     await page.locator('.folder-row').first().waitFor();
@@ -103,6 +125,7 @@ let page=null;
     // 重试：表单还是上次提交的内容（密码不写进浏览器存储，需要重填）
     await page.locator('#ai-retry').click();
     await page.locator('#ai-form').waitFor();
+    assert.equal(await page.locator('#ai-agent').inputValue(),'playwright');
     assert.equal(await page.locator('#ai-form [name="baseUrl"]').inputValue(),FORM.baseUrl);
     assert.equal(await page.locator('#ai-form [name="instructions"]').inputValue(),FORM.instructions);
     assert.equal(await page.locator('#ai-form [name="testAccount"]').inputValue(),FORM.testAccount);
@@ -119,6 +142,8 @@ let page=null;
     const failedJobId=await page.evaluate(id=>localStorage.getItem(`casehub-ai-job-${id}`),docId);
     await page.locator('#ai-continue').click();
     await page.locator('#ai-form').waitFor();
+    assert.equal(await page.locator('#ai-agent').inputValue(),'playwright');
+    assert.equal(await page.locator('#ai-agent').isDisabled(),true);
     assert.match(await page.locator('#ai-drawer-body').innerText(),/继续上次中断的设计/);
     assert.equal(await page.locator('#ai-form [name="testSecret"]').inputValue(),FORM.testSecret); // 同一页面会话里密码还在
     assert.equal(await page.locator('#ai-form button[type="submit"]').innerText(),'继续设计');

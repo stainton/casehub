@@ -501,10 +501,6 @@ async function renderAiDrawer(doc){
     catch{aiPlannerEnabled=false}
   }
   if(aiDoc?.ID!==doc.ID)return; // drawer moved to another doc while awaiting
-  if(!aiPlannerEnabled){
-    body.innerHTML='<p class="meta">AI 设计服务未配置（缺少 CASEHUB_PLANNER_URL），暂时无法使用。</p>';
-    return;
-  }
   await checkAiJob(doc);
 }
 async function checkAiJob(doc){
@@ -527,7 +523,7 @@ async function checkAiJob(doc){
 // 确认后才提交完整 planner 任务（caseCount=该值，planner 输出 [caseCount-5, caseCount] 条用例）。
 // 评估状态按需求保存在内存里（含已填表单），关闭抽屉再打开不会丢失评估中/评估结果。
 // 同一步里还会建议"需求缩写"（用例编号 TC-<需求缩写>-<模块>-<类别>-NNN 的第二段），人工确认后保存到需求文档上，下次沿用。
-const aiEstimates=new Map(); // docID -> {status:'running'|'done', startedAt, count, code, rationale, notice, values, restored}
+const aiEstimates=new Map(); // docID -> {status:'draft'|'running'|'done', startedAt, count, code, rationale, notice, values, restored}
 // 抽屉里表单内容的唯一来源。内存里没有（刷新过、或换了浏览器标签）就用上次提交的表单补上，
 // 直接是"已评估"状态：数量和缩写都已经人工确认过，重试/继续不该再花一次评估。
 function aiFormState(doc,ensure){
@@ -553,7 +549,7 @@ function aiTimeoutMinutes(){
 }
 const AI_ESTIMATE_CLIENT_TIMEOUT_MS=135000; // 服务端评估上限 120 秒，额外留出代理/网络余量
 const aiCaseRange=n=>`${Math.max(1,n-AI_CASE_COUNT_SLACK)}–${n}`;
-function aiFormValues(form){const x=Object.fromEntries(new FormData(form));delete x.caseCount;delete x.reqCode;delete x.timeoutMinutes;return x}
+function aiFormValues(form){const x=Object.fromEntries(new FormData(form));delete x.caseCount;delete x.reqCode;return x}
 function aiRequirementPayload(doc,values,code){
   const d=liveReqDoc(doc);code=code||d.Code||'';
   return {requirements:[{id:d.ID,title:d.Title,content:d.Content||'',...(code?{code}:{})}],instructions:[values.instructions||'',reqRefContext(doc)].filter(Boolean).join('\n\n')};
@@ -562,8 +558,30 @@ function aiEstimateStatusText(est){
   const seconds=Math.floor((Date.now()-est.startedAt)/1000);
   return `正在评估这份需求至少需要多少条用例覆盖…${seconds?`（已等待 ${seconds} 秒，最长约 120 秒）`:''}`;
 }
-// continueFrom：从失败任务的"继续"进来，提交时带上该任务 ID，服务端接着那次探索继续，不重新探索。
+// 每种 agent 提供自己的参数表单；未来接入时在此注册独立的表单/提交实现。
+const aiDesignAgents=[{id:'playwright',label:'Playwright agent',render:renderPlaywrightAiForm,enabled:()=>aiPlannerEnabled}];
+const aiSelectedAgents=new Map();
 function renderAiForm(doc,notice,continueFrom){
+  const est=aiFormState(doc,Boolean(continueFrom));
+  // 旧版表单没有 agentId，均属于 Playwright。
+  const selected=continueFrom?(est?.values?.agentId||'playwright')
+    :(aiSelectedAgents.get(doc.ID)??(est?(est.values.agentId||'playwright'):''));
+  const locked=Boolean(continueFrom)||est?.status==='running';
+  $('#ai-drawer-body').innerHTML=`<label>设计 Agent<select id="ai-agent"${locked?' disabled':''}><option value="">请选择 agent</option>${aiDesignAgents.map(agent=>`<option value="${esc(agent.id)}"${selected===agent.id?' selected':''}>${esc(agent.label)}</option>`).join('')}</select></label><div id="ai-agent-parameters"></div>`;
+  $('#ai-agent').onchange=e=>{aiSelectedAgents.set(doc.ID,e.target.value);renderAiForm(doc,notice)};
+  const agent=aiDesignAgents.find(agent=>agent.id===selected);
+  if(!agent){
+    $('#ai-agent-parameters').innerHTML='<p class="meta">请先选择 agent，再填写该 agent 所需的参数。</p>';
+    return;
+  }
+  if(!agent.enabled()){
+    $('#ai-agent-parameters').innerHTML=`<p class="meta">${esc(agent.label)} 服务未配置，暂时无法使用。</p>`;
+    return;
+  }
+  agent.render(doc,notice,continueFrom);
+}
+// continueFrom：从失败任务的"继续"进来，提交时带上该任务 ID，服务端接着那次探索继续，不重新探索。
+function renderPlaywrightAiForm(doc,notice,continueFrom){
   // 用例字段特意不叫 name="username"/"password"，且密码框用 type="text" +
   // -webkit-text-security 伪装遮罩：这些只是被测系统的测试账号，不是本机
   // 登录凭据，但字段名/类型撞上 Chrome 的登录表单识别规则后，提交时会触发
@@ -584,12 +602,13 @@ function renderAiForm(doc,notice,continueFrom){
     :`<button type="submit"${running?' disabled':''}>${running?'评估中…':'开始分析'}</button>`;
   const continueCard=continueFrom?`<div class="card"><h3>继续上次中断的设计</h3><p class="meta">接着上次的探索往下做，不会从头再探索一遍；浏览器会重新打开被测系统。可以先调大下面的任务超时时间再继续。</p></div>`:'';
   const restored=est?.restored&&!v.testSecret&&(v.baseUrl||v.testAccount)?'<p class="meta">已恢复上次提交的表单；测试账号密码没有保存在浏览器里，被测系统需要登录时请重新填写。</p>':'';
-  $('#ai-drawer-body').innerHTML=`${notice?`<p class="meta">${esc(notice)}</p>`:''}${continueCard}${restored}<form id="ai-form" autocomplete="off"><label>被测系统 URL<input name="baseUrl" required placeholder="https://test.example.com/login" autocomplete="off" value="${esc(v.baseUrl||'')}"></label><label>补充说明（可选）<textarea name="instructions" placeholder="覆盖范围、登录方式；也可以限制探索行为，例如：提交后确认任务已开始即可，不要等待任务运行完成">${esc(v.instructions||'')}</textarea><small class="meta">这里写的内容是硬性约束：AI 探索时会照做，被它挡住的验证会作为"未验证范围"返回，而不是绕开约束去试。</small></label><label>测试账号 · 用户名（可选）<input name="testAccount" autocomplete="off" value="${esc(v.testAccount||'')}"></label><label>测试账号 · 密码（可选）<input name="testSecret" type="text" class="fake-password" autocomplete="off" spellcheck="false" value="${esc(v.testSecret||'')}"></label><label>建议覆盖用例数量${countField}</label><label>需求缩写（用例编号 TC-<b id="ai-code-preview">${esc((done&&est.code)||savedCode||'XXX')}</b>-模块-类别-001）${codeField}</label><label>任务超时时间（分钟）<input name="timeoutMinutes" type="number" min="${AI_MIN_TIMEOUT_MIN}" max="${AI_MAX_TIMEOUT_MIN}" step="1" required value="${aiTimeoutMinutes()}"><small class="meta">探索时间取决于被测系统和用例数量；超时任务会以 JOB_TIMEOUT 失败，草稿不会保留，但已探索的内容留在服务端，可以点「继续」接着跑。</small></label>${estimateInfo}<p class="drawer-actions">${actions}</p></form>`;
+  $('#ai-agent-parameters').innerHTML=`${notice?`<p class="meta">${esc(notice)}</p>`:''}${continueCard}${restored}<form id="ai-form" autocomplete="off"><input type="hidden" name="agentId" value="playwright"><label>被测系统 URL<input name="baseUrl" required placeholder="https://test.example.com/login" autocomplete="off" value="${esc(v.baseUrl||'')}"></label><label>补充说明（可选）<textarea name="instructions" placeholder="覆盖范围、登录方式；也可以限制探索行为，例如：提交后确认任务已开始即可，不要等待任务运行完成">${esc(v.instructions||'')}</textarea><small class="meta">这里写的内容是硬性约束：AI 探索时会照做，被它挡住的验证会作为"未验证范围"返回，而不是绕开约束去试。</small></label><label>测试账号 · 用户名（可选）<input name="testAccount" autocomplete="off" value="${esc(v.testAccount||'')}"></label><label>测试账号 · 密码（可选）<input name="testSecret" type="text" class="fake-password" autocomplete="off" spellcheck="false" value="${esc(v.testSecret||'')}"></label><label>建议覆盖用例数量${countField}</label><label>需求缩写（用例编号 TC-<b id="ai-code-preview">${esc((done&&est.code)||savedCode||'XXX')}</b>-模块-类别-001）${codeField}</label><label>任务超时时间（分钟）<input name="timeoutMinutes" type="number" min="${AI_MIN_TIMEOUT_MIN}" max="${AI_MAX_TIMEOUT_MIN}" step="1" required value="${esc(v.timeoutMinutes??aiTimeoutMinutes())}"><small class="meta">探索时间取决于被测系统和用例数量；超时任务会以 JOB_TIMEOUT 失败，草稿不会保留，但已探索的内容留在服务端，可以点「继续」接着跑。</small></label>${estimateInfo}<p class="drawer-actions">${actions}</p></form>`;
   const form=$('#ai-form');
   // 评估期间/评估后继续编辑的表单内容同步进状态，重新渲染（关闭再打开抽屉）时保留。
   form.oninput=()=>{
-    const cur=aiEstimates.get(doc.ID);
-    if(cur)cur.values=aiFormValues(form);
+    let cur=aiEstimates.get(doc.ID);
+    if(!cur){cur={status:'draft',values:{}};aiEstimates.set(doc.ID,cur)}
+    cur.values=aiFormValues(form);
     const n=Number(form.elements.caseCount.value),range=$('#ai-case-range');
     if(range)range.textContent=Number.isInteger(n)&&n>=1&&n<=AI_MAX_CASE_COUNT?`AI 将输出 ${aiCaseRange(n)} 条用例`:`请输入 1–${AI_MAX_CASE_COUNT} 的整数`;
     if(cur&&cur.status==='done'&&Number.isInteger(n))cur.count=n;

@@ -88,6 +88,8 @@ http://<可访问的节点 IP>:30080
 
 先在 auto-test 中准备 `build/planner/setting.json` 并运行 `node server/planner/main.mjs`，再启动 CaseHub，即可从需求管理的「AI 设计」抽屉调用 planner，以及在任意用例详情页生成「阅读友好版」（调用同一服务的 `/v1/planner/simplify`）。本机使用默认地址，无需 Token；分开部署时只设置 `CASEHUB_PLANNER_URL`。两个服务均支持浏览器跨域调用。
 
+「AI 设计」抽屉先选择 agent，再显示对应参数。目前可选 Playwright agent，选择后填写被测系统 URL、补充说明和测试账号等参数；重试与继续会恢复原 agent，旧版任务按 Playwright agent 处理。
+
 「AI 设计」抽屉里可以设置本次设计任务的超时时间（分钟，1–240，默认 15，沿用上次填写的值），随请求的 `timeoutMs` 一起提交；
 探索耗时取决于被测系统和用例数量，服务端的固定默认值对大需求常常不够。实际生效的时限会显示在任务进行中的面板上，
 最终由 planner 服务按 `PLANNER_MAX_TIMEOUT_MS` 封顶。
