@@ -149,7 +149,12 @@ let page=null;
     assert.equal(await page.locator('#ai-form button[type="submit"]').innerText(),'继续设计');
     await page.locator('#ai-form [name="timeoutMinutes"]').fill('30'); // 继续时可以调大时限
     await page.locator('#ai-form button[type="submit"]').click();
-    await page.locator('#ai-restart').waitFor();
+    await page.locator('#ai-confirm-import').waitFor();
+    assert.match(await page.locator('#ai-drawer-body').innerText(),/待确认用例\s*1/);
+    // 任务完成后不会自动进入评审区，必须由抽屉确认。
+    assert.equal(await page.evaluate(()=>state.pendingCases.length),0);
+    await page.locator('#ai-confirm-import').click();
+    await page.waitForFunction(()=>state.pendingCases.length===1);
     assert.match(await page.locator('#ai-drawer-body').innerText(),/已导入用例\s*1/);
 
     const continued=submissions.filter(s=>s.kind==='job').at(-1).input;

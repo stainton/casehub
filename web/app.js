@@ -815,7 +815,7 @@ function aiStageLabel(job){
   return job.stage?`${status} · ${esc(job.stage)}`:status;
 }
 // 任务状态的唯一分发点：无论抽屉是否打开（可关闭，关闭后任务继续在后台跑），
-// 都会在这里更新"AI 设计中"按钮态、维持 SSE 订阅，并在完成时自动导入。
+// 都会在这里更新"AI 设计中"按钮态、维持 SSE 订阅，并在完成后等待用户确认导入。
 function routeAiJob(doc,job){
   const terminal=['succeeded','failed','cancelled'].includes(job.status);
   if(terminal&&aiSourceJobId===job.id)closeAiStream();
@@ -886,23 +886,18 @@ function renderAiTerminal(doc,job){
   $('#ai-retry').onclick=()=>{localStorage.removeItem(aiJobKey(doc));renderAiForm(doc)};
   if(job.continuable)$('#ai-continue').onclick=()=>renderAiForm(doc,'',job.id);
 }
-// 设计完成后自动创建"用例评审"目录并导入草稿用例，无需人工点击导入。
+// 设计完成后先在抽屉中等待确认；只有用户明确确认，才创建"用例评审"目录并导入草稿用例。
 async function handleAiSuccess(doc,job){
   if(aiHandlingJobId===job.id)return;
   aiHandlingJobId=job.id;
-  if(isAiDrawerOpen(doc))$('#ai-drawer-body').innerHTML='<p class="meta">设计已完成，正在自动导入到"用例评审"…</p>';
+  if(isAiDrawerOpen(doc))$('#ai-drawer-body').innerHTML='<p class="meta">设计已完成，正在准备确认内容…</p>';
   try{
     const result=await serviceRequest(`/api/planner/jobs/${job.id}/result`);
-    await importAiResult(doc,result);
-    const summary={count:result.cases.length,limitations:result.limitations||[],issues:result.issues||[]};
-    localStorage.setItem(aiResultKey(doc),JSON.stringify(summary));
-    localStorage.removeItem(aiJobKey(doc));
-    toast(`AI 设计已完成，已自动导入 ${result.cases.length} 条用例到"用例评审"`);
-    if(isAiDrawerOpen(doc))renderAiResult(doc,summary);
+    if(isAiDrawerOpen(doc))renderAiImportConfirmation(doc,job,result);
   }catch(e){
-    toast(`AI 设计结果自动导入失败：${e.message}`,true);
+    toast(`读取 AI 设计结果失败：${e.message}`,true);
     if(isAiDrawerOpen(doc)){
-      $('#ai-drawer-body').innerHTML=`<p class="meta">自动导入失败：${esc(e.message)}</p><p class="drawer-actions"><button type="button" id="ai-retry-import">重试导入</button></p>`;
+      $('#ai-drawer-body').innerHTML=`<p class="meta">读取设计结果失败：${esc(e.message)}</p><p class="drawer-actions"><button type="button" id="ai-retry-import">重试</button></p>`;
       $('#ai-retry-import').onclick=()=>{aiHandlingJobId=null;handleAiSuccess(doc,job).catch(()=>{})};
     }
   }finally{
@@ -917,6 +912,25 @@ function aiRiskListHTML(list,textHTML){
   const rank=r=>r in AI_RISKS?Object.keys(AI_RISKS).indexOf(r):3;
   items.sort((a,b)=>rank(a.risk)-rank(b.risk)||a.i-b.i);
   return `<ul class="ai-risk-list">${items.map(l=>`<li>${l.risk in AI_RISKS?`<span class="risk-tag risk-${l.risk}">${AI_RISKS[l.risk]}</span>`:''}<span>${l.html}</span></li>`).join('')}</ul>`;
+}
+function renderAiImportConfirmation(doc,job,result){
+  const planned=result.cases||[];
+  const issues=result.issues?.length?`<div class="card"><h3>探索中发现的问题 <small class="meta">按风险从高到低</small></h3>${aiRiskListHTML(result.issues,i=>`<b>${esc(i.scenario)}</b>：${esc(i.symptom)}`)}</div>`:'';
+  const limitations=result.limitations?.length?`<div class="card"><h3>未验证/受限范围 <small class="meta">按风险从高到低</small></h3>${aiRiskListHTML(result.limitations,l=>esc(l.summary))}</div>`:'';
+  const casesHTML=planned.length?`<div class="card"><h3>待确认用例 <small class="meta">${planned.length} 条</small></h3><ol class="ai-result-cases">${planned.map(c=>`<li><b>${esc(c.name)}</b>${c.priority?` <small class="meta">${esc(c.priority)}</small>`:''}</li>`).join('')}</ol></div>`:'<p class="meta">设计结果中没有可导入的用例。</p>';
+  $('#ai-drawer-body').innerHTML=`<div class="card meta-grid"><span>状态 <b>设计已完成</b></span><span>待确认用例 <b>${planned.length}</b></span></div>${casesHTML}${issues}${limitations}<p class="meta">确认后才会创建目录并放入“用例评审”。</p><p class="drawer-actions"><button type="button" class="secondary" id="ai-restart">重新设计</button><button type="button" id="ai-confirm-import"${planned.length?'':' disabled'}>确认放入用例评审</button></p>`;
+  $('#ai-restart').onclick=()=>{localStorage.removeItem(aiJobKey(doc));renderAiForm(doc)};
+  $('#ai-confirm-import').onclick=async e=>{
+    const button=e.currentTarget;button.disabled=true;
+    try{
+      await importAiResult(doc,result);
+      const summary={count:planned.length,limitations:result.limitations||[],issues:result.issues||[]};
+      localStorage.setItem(aiResultKey(doc),JSON.stringify(summary));
+      localStorage.removeItem(aiJobKey(doc));
+      toast(`已导入 ${planned.length} 条用例到“用例评审”`);
+      renderAiResult(doc,summary);
+    }catch(error){button.disabled=false;toast(`导入到“用例评审”失败：${error.message}`,true)}
+  };
 }
 // 发现的问题排在前面：那是探索时实测到的缺陷，用例仍按需求的正确行为编写，需要人来决定怎么处理。
 function renderAiResult(doc,summary){
