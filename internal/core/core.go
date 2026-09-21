@@ -1124,10 +1124,10 @@ func descendantFolderIDs(s *State, versionID, folderID string) []string {
 }
 
 // mergeFolder merges one branch folder's subtree into mainline, preserving
-// its internal structure, grafted under a chosen mainline parent folder. It
-// only handles folders new to mainline (an already-merged folder cannot be
-// re-grafted elsewhere) and aborts entirely, without writing anything, if the
-// target parent already has a same-named child folder.
+// its internal structure below a chosen mainline parent folder. Existing
+// mainline folders are reused when they already occupy the matching position;
+// missing levels are created. This also supports folders inherited from
+// mainline, which have the same IDs in both versions.
 func mergeFolder(s *State, a Action) ([]string, error) {
 	v, err := requireBranch(s, a.VersionID)
 	if err != nil {
@@ -1143,14 +1143,6 @@ func mergeFolder(s *State, a Action) ([]string, error) {
 	target, _ := folderAt(s, "main", a.TargetFolderID)
 	if target == nil {
 		return nil, errors.New("主线目标文件夹不存在")
-	}
-	if mf, _ := folderAt(s, "main", f.ID); mf != nil {
-		return nil, errors.New("该文件夹已在主线中，无法重复合并")
-	}
-	for _, x := range s.Folders {
-		if x.VersionID == "main" && x.ParentID == target.ID && x.Name == f.Name {
-			return nil, fmt.Errorf("主线目标目录下已存在同名文件夹，合并已取消：%s", f.Name)
-		}
 	}
 	subtree := append([]string{f.ID}, descendantFolderIDs(s, v.ID, f.ID)...)
 	inSubtree := map[string]bool{}
@@ -1170,20 +1162,52 @@ func mergeFolder(s *State, a Action) ([]string, error) {
 	if len(conflicts) > 0 {
 		return conflicts, nil
 	}
-	s.MainRevision++
-	branchFolders := append([]Folder(nil), s.Folders...)
-	for _, bf := range branchFolders {
-		if bf.VersionID != v.ID || !inSubtree[bf.ID] {
-			continue
+	resolvedFolders := map[string]string{}
+	newFolders := []Folder{}
+	var resolveFolder func(string) (string, error)
+	resolveFolder = func(sourceID string) (string, error) {
+		if id, ok := resolvedFolders[sourceID]; ok {
+			return id, nil
 		}
-		n := bf
-		n.VersionID = "main"
-		n.Moved = false
-		if n.ID == f.ID {
-			n.ParentID = target.ID
+		source, _ := folderAt(s, v.ID, sourceID)
+		if source == nil || !inSubtree[sourceID] {
+			return "", fmt.Errorf("待合并文件夹不存在: %s", sourceID)
 		}
-		s.Folders = append(s.Folders, n)
+		parentID := target.ID
+		if sourceID != f.ID {
+			var err error
+			parentID, err = resolveFolder(source.ParentID)
+			if err != nil {
+				return "", err
+			}
+		}
+		for _, existing := range s.Folders {
+			if existing.VersionID == "main" && existing.ParentID == parentID && (existing.ID == source.ID || existing.Name == source.Name) {
+				resolvedFolders[sourceID] = existing.ID
+				return existing.ID, nil
+			}
+		}
+		for _, created := range newFolders {
+			if created.ParentID == parentID && created.Name == source.Name {
+				resolvedFolders[sourceID] = created.ID
+				return created.ID, nil
+			}
+		}
+		id := source.ID
+		if existing, _ := folderAt(s, "main", id); existing != nil {
+			id = ID()
+		}
+		newFolders = append(newFolders, Folder{ID: id, VersionID: "main", ParentID: parentID, Name: source.Name, CreatedBy: a.Author, CreatedAt: now()})
+		resolvedFolders[sourceID] = id
+		return id, nil
 	}
+	for _, id := range subtree {
+		if _, err := resolveFolder(id); err != nil {
+			return nil, err
+		}
+	}
+	s.MainRevision++
+	s.Folders = append(s.Folders, newFolders...)
 	branchCases := []TestCase{}
 	for _, c := range s.Cases {
 		if c.VersionID == v.ID && c.Dirty && inSubtree[c.FolderID] {
@@ -1191,7 +1215,7 @@ func mergeFolder(s *State, a Action) ([]string, error) {
 		}
 	}
 	for _, c := range branchCases {
-		mergeCaseInto(s, c, s.MainRevision, c.FolderID, a.Author)
+		mergeCaseInto(s, c, s.MainRevision, resolvedFolders[c.FolderID], a.Author)
 	}
 	return nil, nil
 }

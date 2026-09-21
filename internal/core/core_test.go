@@ -157,7 +157,29 @@ func TestMergeFolderPreservesStructureUnderChosenTarget(t *testing.T) {
 	}
 }
 
-func TestMergeFolderRejectsNameCollisionAtTarget(t *testing.T) {
+func TestMergeNestedInheritedFolder(t *testing.T) {
+	svc := core.NewService(store.NewMemory())
+	state := apply(t, svc, core.Action{Type: "createVersion", Name: "深层目录", Author: "alice"})
+	v := branchID(t, state, "深层目录")
+	state = apply(t, svc, core.Action{Type: "createFolder", VersionID: v, ParentID: "auth", Name: "密码", Author: "alice"})
+	password := folderID(t, state, v, "密码")
+	state = apply(t, svc, core.Action{Type: "createFolder", VersionID: v, ParentID: password, Name: "错误密码", Author: "alice"})
+	wrongPassword := folderID(t, state, v, "错误密码")
+	state = apply(t, svc, core.Action{Type: "createCase", VersionID: v, FolderID: wrongPassword, Title: "错误密码被拒绝", Priority: "P1", Author: "alice"})
+	caseID := caseIDByTitle(t, state, v, "错误密码被拒绝")
+
+	state = apply(t, svc, core.Action{Type: "mergeFolder", VersionID: v, FolderID: "auth", TargetFolderID: "root", Author: "alice"})
+	if folderParent(t, state, "main", password) != "auth" || folderParent(t, state, "main", wrongPassword) != password {
+		t.Fatal("nested folder hierarchy was not retained in mainline")
+	}
+	for _, c := range state.Cases {
+		if c.VersionID == "main" && c.ID == caseID && c.FolderID != wrongPassword {
+			t.Fatalf("nested case folder = %q, want %q", c.FolderID, wrongPassword)
+		}
+	}
+}
+
+func TestMergeFolderReusesNameCollisionAtTarget(t *testing.T) {
 	svc := core.NewService(store.NewMemory())
 	// Both branches fork before either merges, so neither's "支付" folder is
 	// the same one the other created — a genuine two-branch name collision.
@@ -171,13 +193,19 @@ func TestMergeFolderRejectsNameCollisionAtTarget(t *testing.T) {
 	payB := folderID(t, state, b, "支付")
 	apply(t, svc, core.Action{Type: "mergeFolder", VersionID: a, FolderID: payA, TargetFolderID: "auth", Author: "alice"})
 
-	_, err := svc.Apply(context.Background(), core.Action{Type: "mergeFolder", VersionID: b, FolderID: payB, TargetFolderID: "auth", Author: "bob"})
-	if err == nil || !strings.Contains(err.Error(), "同名") {
-		t.Fatalf("expected name-collision error, got %v", err)
+	state = apply(t, svc, core.Action{Type: "mergeFolder", VersionID: b, FolderID: payB, TargetFolderID: "auth", Author: "bob"})
+	count := 0
+	for _, f := range state.Folders {
+		if f.VersionID == "main" && f.ParentID == "auth" && f.Name == "支付" {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Fatalf("same-named folder should be reused once, got %d", count)
 	}
 }
 
-func TestMergeFolderRejectsFolderAlreadyInMainline(t *testing.T) {
+func TestMergeFolderReusesFolderAlreadyInMainline(t *testing.T) {
 	svc := core.NewService(store.NewMemory())
 	state := apply(t, svc, core.Action{Type: "createVersion", Name: "A"})
 	a := branchID(t, state, "A")
@@ -185,9 +213,15 @@ func TestMergeFolderRejectsFolderAlreadyInMainline(t *testing.T) {
 	pay := folderID(t, state, a, "支付")
 	apply(t, svc, core.Action{Type: "mergeFolder", VersionID: a, FolderID: pay, TargetFolderID: "auth", Author: "alice"})
 
-	_, err := svc.Apply(context.Background(), core.Action{Type: "mergeFolder", VersionID: a, FolderID: pay, TargetFolderID: "auth", Author: "alice"})
-	if err == nil || !strings.Contains(err.Error(), "已在主线中") {
-		t.Fatalf("expected already-merged error, got %v", err)
+	state = apply(t, svc, core.Action{Type: "mergeFolder", VersionID: a, FolderID: pay, TargetFolderID: "auth", Author: "alice"})
+	count := 0
+	for _, f := range state.Folders {
+		if f.VersionID == "main" && f.ID == pay {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Fatalf("already-merged folder should be reused once, got %d", count)
 	}
 }
 
