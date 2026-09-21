@@ -91,7 +91,7 @@
   &quot;VersionID&quot;: &quot;版本ID&quot;,
   &quot;FolderID&quot;: &quot;分支中的文件夹ID&quot;,
   &quot;TargetFolderID&quot;: &quot;主线目标文件夹ID&quot;
-}</code></pre></details><details class="card" id="mergeCases"><summary><code>mergeCases</code> · 合并用例到主线（平铺）</summary><p>将 CaseIDs 指定的一批用例（可来自不同文件夹、可来自勾选或搜索结果）合入主线，不保留原目录结构，统一落到 TargetFolderID 指定的单个主线文件夹下；若某个用例此前已合并到主线的其它位置，本次会一并把它挪到目标文件夹。未变更（非 Dirty）的用例会被跳过，不算错误；若全部被跳过则在响应 warnings 中提示“没有可合并的变更”。文本冲突返回 409。</p><pre><code>{
+}</code></pre></details><details class="card" id="mergeCases"><summary><code>mergeCases</code> · 合并用例到主线</summary><p>将 CaseIDs 指定的一批用例（可来自不同文件夹、可来自勾选或搜索结果）合入主线。PreserveFolderStructure 省略或为 false 时，统一落到 TargetFolderID 指定的单个主线文件夹；为 true 时保留源目录层级，并在目标下自动创建缺少的目录。未变更（非 Dirty）的用例会被跳过，不算错误；若全部被跳过则在响应 warnings 中提示“没有可合并的变更”。文本冲突返回 409。</p><pre><code>{
   &quot;Type&quot;: &quot;mergeCases&quot;,
   &quot;Author&quot;: &quot;本地用户&quot;,
   &quot;VersionID&quot;: &quot;版本ID&quot;,
@@ -99,14 +99,15 @@
     &quot;CASE-0001&quot;,
     &quot;CASE-0002&quot;
   ],
-  &quot;TargetFolderID&quot;: &quot;主线目标文件夹ID&quot;
+  &quot;TargetFolderID&quot;: &quot;主线目标文件夹ID&quot;,
+  &quot;PreserveFolderStructure&quot;: false
 }</code></pre></details><details class="card" id="moveFolder"><summary><code>moveFolder</code> · 移动文件夹</summary><p>仅测试版本。连同子文件夹和用例一起移动到 TargetFolderID 下；根目录不能移动，不能移动到自身或其子文件夹下。移动在「合并到主线」（merge）时同步到主线；「拉取主线」（sync）时，本版本未移动过的文件夹会跟随主线的移动。</p><pre><code>{
   &quot;Type&quot;: &quot;moveFolder&quot;,
   &quot;Author&quot;: &quot;本地用户&quot;,
   &quot;VersionID&quot;: &quot;版本ID&quot;,
   &quot;FolderID&quot;: &quot;auth&quot;,
   &quot;TargetFolderID&quot;: &quot;目标文件夹ID&quot;
-}</code></pre></details><details class="card" id="deleteFolder"><summary><code>deleteFolder</code> · 删除空文件夹</summary><p>仅允许删除分支内没有子目录和用例的空文件夹；不能删除根目录 root。主线不能创建目录，因此也没有对应的删除接口。</p><pre><code>{
+}</code></pre></details><details class="card" id="deleteFolder"><summary><code>deleteFolder</code> · 删除空文件夹</summary><p>允许删除主线或分支内没有子目录和用例的空文件夹；不能删除根目录 root。</p><pre><code>{
   &quot;Type&quot;: &quot;deleteFolder&quot;,
   &quot;Author&quot;: &quot;本地用户&quot;,
   &quot;VersionID&quot;: &quot;版本ID&quot;,

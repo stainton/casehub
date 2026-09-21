@@ -239,6 +239,40 @@ func TestMergeCasesFlattensSelectionIntoTargetFolder(t *testing.T) {
 	}
 }
 
+func TestMergeCasesPreservesFolderStructure(t *testing.T) {
+	svc := core.NewService(store.NewMemory())
+	state := apply(t, svc, core.Action{Type: "createVersion", Name: "结构合并"})
+	v := branchID(t, state, "结构合并")
+	state = apply(t, svc, core.Action{Type: "createFolder", VersionID: v, ParentID: "root", Name: "支付", Author: "pat"})
+	payment := folderID(t, state, v, "支付")
+	state = apply(t, svc, core.Action{Type: "createFolder", VersionID: v, ParentID: payment, Name: "退款", Author: "pat"})
+	refund := folderID(t, state, v, "退款")
+	state = apply(t, svc, core.Action{Type: "createCase", VersionID: v, FolderID: refund, Title: "退款成功", Priority: "P1", Author: "pat"})
+	caseID := caseIDByTitle(t, state, v, "退款成功")
+
+	out, err := svc.Apply(context.Background(), core.Action{Type: "mergeCases", VersionID: v, CaseIDs: []string{caseID}, TargetFolderID: "root", PreserveFolderStructure: true, Author: "pat"})
+	if err != nil {
+		t.Fatalf("mergeCases: %v", err)
+	}
+	state = out.State
+	mainPayment := folderID(t, state, "main", "支付")
+	mainRefund := folderID(t, state, "main", "退款")
+	var parent string
+	for _, f := range state.Folders {
+		if f.VersionID == "main" && f.ID == mainRefund {
+			parent = f.ParentID
+		}
+	}
+	if parent != mainPayment {
+		t.Fatalf("refund folder parent = %q, want %q", parent, mainPayment)
+	}
+	for _, c := range state.Cases {
+		if c.VersionID == "main" && c.ID == caseID && c.FolderID != mainRefund {
+			t.Fatalf("case folder = %q, want %q", c.FolderID, mainRefund)
+		}
+	}
+}
+
 func TestMergeCasesSkipsUnchangedCasesWithWarning(t *testing.T) {
 	svc := core.NewService(store.NewMemory())
 	state := apply(t, svc, core.Action{Type: "createVersion", Name: "G"})
@@ -291,8 +325,12 @@ func TestDeleteFolderRequiresEmptyBranchFolder(t *testing.T) {
 	if _, err := svc.Apply(context.Background(), core.Action{Type: "deleteFolder", VersionID: j, FolderID: "auth", Author: "jack"}); err == nil || !strings.Contains(err.Error(), "空文件夹") {
 		t.Fatalf("expected non-empty folder rejection, got %v", err)
 	}
-	if _, err := svc.Apply(context.Background(), core.Action{Type: "deleteFolder", VersionID: "main", FolderID: "auth", Author: "jack"}); err == nil {
-		t.Fatal("mainline folder deletion must fail")
+	state = apply(t, svc, core.Action{Type: "deleteCases", VersionID: "main", CaseIDs: []string{"CASE-0001", "CASE-0002"}, Author: "jack"})
+	state = apply(t, svc, core.Action{Type: "deleteFolder", VersionID: "main", FolderID: "auth", Author: "jack"})
+	for _, f := range state.Folders {
+		if f.VersionID == "main" && f.ID == "auth" {
+			t.Fatal("empty mainline folder should have been deleted")
+		}
 	}
 }
 
@@ -441,8 +479,11 @@ func TestDeleteCasesRemovesRecordsHistoryAndTaskRefs(t *testing.T) {
 		}
 	}
 
-	if _, err := svc.Apply(context.Background(), core.Action{Type: "deleteCases", VersionID: "main", CaseIDs: []string{"CASE-0001"}, Author: "mia"}); err == nil {
-		t.Fatal("mainline case deletion must fail")
+	state = apply(t, svc, core.Action{Type: "deleteCases", VersionID: "main", CaseIDs: []string{"CASE-0001"}, Author: "mia"})
+	for _, c := range state.Cases {
+		if c.VersionID == "main" && c.ID == "CASE-0001" {
+			t.Fatal("mainline case should have been deleted")
+		}
 	}
 	if _, err := svc.Apply(context.Background(), core.Action{Type: "deleteCases", VersionID: m, CaseIDs: []string{}, Author: "mia"}); err == nil {
 		t.Fatal("deleting with no case ids must fail")
