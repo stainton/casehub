@@ -982,6 +982,35 @@ func TestScopedImportLeavesRestOfReviewAreaAlone(t *testing.T) {
 	}
 }
 
+func TestScopedImportPrunesEmptyReviewFoldersIncludingAncestors(t *testing.T) {
+	svc := core.NewService(store.NewMemory())
+	findFolder := func(state core.State, parent, name string) string {
+		t.Helper()
+		for _, f := range state.PendingFolders {
+			if f.ParentID == parent && f.Name == name {
+				return f.ID
+			}
+		}
+		t.Fatalf("pending folder %q not found", name)
+		return ""
+	}
+	state := apply(t, svc, core.Action{Type: "createPendingFolder", ParentID: "pending-root", Name: "账户", Author: "alice"})
+	parent := findFolder(state, "pending-root", "账户")
+	state = apply(t, svc, core.Action{Type: "createPendingFolder", ParentID: parent, Name: "登录", Author: "alice"})
+	leaf := findFolder(state, parent, "登录")
+	state = apply(t, svc, core.Action{Type: "createPendingCase", FolderID: leaf, Title: "登录成功", Priority: "P1", Author: "alice"})
+	pending := state.PendingCases[0]
+	apply(t, svc, core.Action{Type: "reviewPendingCase", CaseID: pending.ID, Review: "passed", Author: "bob"})
+	branch := branchID(t, apply(t, svc, core.Action{Type: "createVersion", Name: "迭代 C", Author: "alice"}), "迭代 C")
+	state = apply(t, svc, core.Action{Type: "importPendingCases", VersionID: branch, CaseIDs: []string{pending.ID}, Author: "bob"})
+	if len(state.PendingCases) != 0 {
+		t.Fatalf("imported pending case remained: %+v", state.PendingCases)
+	}
+	if len(state.PendingFolders) != 1 || state.PendingFolders[0].ID != "pending-root" {
+		t.Fatalf("empty review folders were not pruned: %+v", state.PendingFolders)
+	}
+}
+
 func TestReqDocCodeAndStructuredPendingCaseIDs(t *testing.T) {
 	svc := core.NewService(store.NewMemory())
 	state := apply(t, svc, core.Action{Type: "setReqDocCode", DocID: "REQ-0001", Code: "LOGIN", Author: "pat"})

@@ -1933,9 +1933,42 @@ func importPendingCases(s *State, a Action) error {
 			}
 		}
 		s.PendingCases = remaining
+		// A selected import removes only its cases. Prune every now-empty folder as
+		// well, including empty ancestors, so the review tree never accumulates
+		// stale directory paths. The review root remains the permanent anchor.
+		s.PendingFolders = pruneEmptyPendingFolders(s.PendingFolders, s.PendingCases)
 	} else {
 		s.PendingFolders = []PendingFolder{{ID: "pending-root", Name: "待评审用例", CreatedBy: "system", CreatedAt: t}}
 		s.PendingCases = []PendingCase{}
 	}
 	return nil
+}
+
+func pruneEmptyPendingFolders(folders []PendingFolder, cases []PendingCase) []PendingFolder {
+	byID := make(map[string]PendingFolder, len(folders))
+	keep := map[string]bool{"pending-root": true}
+	for _, f := range folders {
+		byID[f.ID] = f
+	}
+	// Keeping every case's path also keeps a folder that has a non-empty child.
+	for _, c := range cases {
+		for id, steps := c.FolderID, 0; id != "" && steps <= len(folders); steps++ {
+			if keep[id] {
+				break
+			}
+			keep[id] = true
+			f, ok := byID[id]
+			if !ok {
+				break
+			}
+			id = f.ParentID
+		}
+	}
+	pruned := make([]PendingFolder, 0, len(folders))
+	for _, f := range folders {
+		if keep[f.ID] {
+			pruned = append(pruned, f)
+		}
+	}
+	return pruned
 }
