@@ -188,9 +188,6 @@ type Action struct {
 	DocID, Content, Code                                string
 	Review                                              string
 	TargetFolderID                                      string
-	// mergeCases: preserve the selected cases' folder paths below TargetFolderID,
-	// creating any mainline folders that do not already exist there.
-	PreserveFolderStructure bool
 	// importPendingCases: the review folder mapped onto TargetFolderID; its
 	// subfolders are recreated beneath the target. Defaults to pending-root.
 	SourceFolderID string
@@ -1220,11 +1217,9 @@ func mergeFolder(s *State, a Action) ([]string, error) {
 	return nil, nil
 }
 
-// mergeCases merges an explicit, possibly cross-folder set of branch cases.
-// By default they are flattened into the selected mainline folder. With
-// PreserveFolderStructure, their source folder paths are recreated below the
-// selected target as needed. Cases with no pending text change still archive
-// new activity without overwriting mainline content.
+// mergeCases merges an explicit, possibly cross-folder set of branch cases
+// into the selected mainline folder. It always flattens the selection; folder
+// subtrees are merged only through mergeFolder.
 func mergeCases(s *State, a Action) ([]string, int, error) {
 	v, err := requireBranch(s, a.VersionID)
 	if err != nil {
@@ -1272,60 +1267,9 @@ func mergeCases(s *State, a Action) ([]string, int, error) {
 	if len(toMerge) == 0 {
 		return nil, archivedCases, nil
 	}
-	resolvedFolders := map[string]string{}
-	newFolders := []Folder{}
-	if a.PreserveFolderStructure {
-		resolvedFolders["root"] = target.ID
-		var resolveFolder func(string) (string, error)
-		resolveFolder = func(sourceID string) (string, error) {
-			if sourceID == "root" || sourceID == "" {
-				return target.ID, nil
-			}
-			if id, ok := resolvedFolders[sourceID]; ok {
-				return id, nil
-			}
-			source, _ := folderAt(s, v.ID, sourceID)
-			if source == nil {
-				return "", fmt.Errorf("用例所在文件夹不存在: %s", sourceID)
-			}
-			parentID, err := resolveFolder(source.ParentID)
-			if err != nil {
-				return "", err
-			}
-			for _, f := range s.Folders {
-				if f.VersionID == "main" && f.ParentID == parentID && (f.ID == source.ID || f.Name == source.Name) {
-					resolvedFolders[sourceID] = f.ID
-					return f.ID, nil
-				}
-			}
-			for _, f := range newFolders {
-				if f.ParentID == parentID && f.Name == source.Name {
-					resolvedFolders[sourceID] = f.ID
-					return f.ID, nil
-				}
-			}
-			id := source.ID
-			if existing, _ := folderAt(s, "main", id); existing != nil {
-				id = ID()
-			}
-			newFolders = append(newFolders, Folder{ID: id, VersionID: "main", ParentID: parentID, Name: source.Name, CreatedBy: a.Author, CreatedAt: now()})
-			resolvedFolders[sourceID] = id
-			return id, nil
-		}
-		for _, c := range toMerge {
-			if _, err := resolveFolder(c.FolderID); err != nil {
-				return nil, 0, err
-			}
-		}
-	}
 	s.MainRevision++
-	s.Folders = append(s.Folders, newFolders...)
 	for _, c := range toMerge {
-		folderID := target.ID
-		if a.PreserveFolderStructure {
-			folderID = resolvedFolders[c.FolderID]
-		}
-		mergeCaseInto(s, c, s.MainRevision, folderID, a.Author)
+		mergeCaseInto(s, c, s.MainRevision, target.ID, a.Author)
 	}
 	return nil, len(toMerge) + archivedCases, nil
 }

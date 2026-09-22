@@ -273,7 +273,7 @@ func TestMergeCasesFlattensSelectionIntoTargetFolder(t *testing.T) {
 	}
 }
 
-func TestMergeCasesPreservesFolderStructure(t *testing.T) {
+func TestMergeCasesFlattensNestedSelection(t *testing.T) {
 	svc := core.NewService(store.NewMemory())
 	state := apply(t, svc, core.Action{Type: "createVersion", Name: "结构合并"})
 	v := branchID(t, state, "结构合并")
@@ -284,25 +284,19 @@ func TestMergeCasesPreservesFolderStructure(t *testing.T) {
 	state = apply(t, svc, core.Action{Type: "createCase", VersionID: v, FolderID: refund, Title: "退款成功", Priority: "P1", Author: "pat"})
 	caseID := caseIDByTitle(t, state, v, "退款成功")
 
-	out, err := svc.Apply(context.Background(), core.Action{Type: "mergeCases", VersionID: v, CaseIDs: []string{caseID}, TargetFolderID: "root", PreserveFolderStructure: true, Author: "pat"})
+	out, err := svc.Apply(context.Background(), core.Action{Type: "mergeCases", VersionID: v, CaseIDs: []string{caseID}, TargetFolderID: "root", Author: "pat"})
 	if err != nil {
 		t.Fatalf("mergeCases: %v", err)
 	}
 	state = out.State
-	mainPayment := folderID(t, state, "main", "支付")
-	mainRefund := folderID(t, state, "main", "退款")
-	var parent string
-	for _, f := range state.Folders {
-		if f.VersionID == "main" && f.ID == mainRefund {
-			parent = f.ParentID
+	for _, c := range state.Cases {
+		if c.VersionID == "main" && c.ID == caseID && c.FolderID != "root" {
+			t.Fatalf("nested case folder = %q, want root", c.FolderID)
 		}
 	}
-	if parent != mainPayment {
-		t.Fatalf("refund folder parent = %q, want %q", parent, mainPayment)
-	}
-	for _, c := range state.Cases {
-		if c.VersionID == "main" && c.ID == caseID && c.FolderID != mainRefund {
-			t.Fatalf("case folder = %q, want %q", c.FolderID, mainRefund)
+	for _, f := range state.Folders {
+		if f.VersionID == "main" && (f.ID == payment || f.ID == refund) {
+			t.Fatalf("bulk case merge must not create source folder %q", f.Name)
 		}
 	}
 }
