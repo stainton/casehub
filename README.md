@@ -68,7 +68,7 @@ http://<可访问的节点 IP>:30080
   结果自动同步到自动化管理；每个生成任务是"脚本生成"抽屉中的一个可展开选项卡，可并行、可取消，关闭抽屉或刷新页面后按任务 ID 恢复
 - 可拖动/折叠用例树、文件夹与用例右键菜单、测试记录抽屉、主题切换
 - 所有用例详情页（用例树、测试任务、用例评审）都可切换「阅读友好版」与「Planner 原始内容」；阅读友好版由 auto-test 的
-  `/v1/planner/simplify` 改写生成，和用例本身一样持久化存储（非浏览器缓存），用例内容变更后会自动判定为过时并提示重新生成
+  general-agent 改写生成，和用例本身一样持久化存储（非浏览器缓存），用例内容变更后会自动判定为过时并提示重新生成
 - JSON 导出、Linux/Windows 构建脚本及容器部署
 
 ## 配置
@@ -81,16 +81,17 @@ http://<可访问的节点 IP>:30080
 | `DATABASE_URL` | — | PostgreSQL 连接串；可通过 `-database-url` 启动参数覆盖 |
 | `CASEHUB_PLANNER_URL` | `http://localhost:4501` | auto-test planner 服务地址；Kubernetes 清单使用 `http://planner:4501` |
 | `CASEHUB_GENERATOR_URL` | `http://localhost:4502` | auto-test generator 服务地址；Kubernetes 中为 `http://generator:4502` |
+| `CASEHUB_GENERAL_AGENT_URL` | `http://localhost:4503` | auto-test general-agent 服务地址；Kubernetes 中为 `http://general-agent:4503` |
 
 当前默认主线带有两条示例用例，因为设计文档尚未定义首次导入主线的来源与格式。
 
 ## 与 auto-test 对接
 
-先在 auto-test 中准备 `build/planner/setting.json` 并运行 `node server/planner/main.mjs`，再启动 CaseHub，即可从需求管理的「AI 设计」抽屉调用 planner，以及在任意用例详情页生成「阅读友好版」（调用同一服务的 `/v1/planner/simplify`）。本机使用默认地址，无需 Token；分开部署时只设置 `CASEHUB_PLANNER_URL`。两个服务均支持浏览器跨域调用。
+先在 auto-test 中准备 `build/planner/setting.json` 并运行 `node server/planner/main.mjs`，即可从需求管理的「AI 设计」抽屉调用 planner。阅读友好版则调用独立的 general-agent：准备 `build/general-agent/setting.json` 并运行 `node server/general-agent/main.mjs`。本机使用默认地址，无需 Token；分开部署时分别设置 `CASEHUB_PLANNER_URL`、`CASEHUB_GENERAL_AGENT_URL`。服务均支持浏览器跨域调用。
 
 「AI 设计」抽屉先选择 agent，再显示对应参数。目前可选 aigc用例设计，选择后填写被测系统 URL、补充说明和测试账号等参数；重试与继续会恢复原 agent，旧版任务按 aigc用例设计 处理。
 
-点击右上角头像弹出菜单，里面有「设置」和「资产」。「设置」打开 agent 设置弹窗：左侧选择 agent（aigc用例设计 / 脚本生成，各自一份配置），右侧分为两部分，分别保存：
+点击右上角头像弹出菜单，里面有「设置」和「资产」。「设置」打开 agent 设置弹窗：左侧选择 agent（aigc用例设计 / 脚本生成 / 通用 AI，各自一份配置），右侧分为两部分，分别保存：
 
 - **业务默认参数**：默认被测系统 URL、补充说明、用户名、密码和任务时长，新任务选择该 agent 后自动带入，已有任务保留原参数。默认密码可预填、修改和清空。保存业务默认参数不会改变配置版本号，agent 不会因此改写自己的 setting.json。
 - **setting.json**：agent 的完整 Claude 配置正文（任意 `env`、模型、权限及扩展字段），按原文保存，CaseHub 不认识的字段照样保留。保存会校验 JSON 格式及 `env`/`model` 基本类型，并用版本号检查是否有人在此期间保存过，避免覆盖新内容。
@@ -126,9 +127,9 @@ planner 不会绕开约束去试；同一段文字也会参与"建议覆盖用�
 时间都保存在浏览器里，刷新、关标签页后仍在，因此「继续」前可以先把超时时间调大。只有测试账号密码不写进浏览器存储，刷新后
 需要重填，表单里会提示。失败任务本身也留在浏览器里，刷新后重新打开抽屉仍能看到失败原因和这两个按钮。
 
-脚本生成对应 auto-test 的另一个独立服务：准备 `build/generator/setting.json` 后运行 `node server/generator/main.mjs`（默认 4502），CaseHub 通过 `CASEHUB_GENERATOR_URL` 连接。planner 和 generator 是两个进程，可以只启动其中一个；未配置时对应入口会提示服务未配置，其余功能不受影响。
+脚本生成对应 auto-test 的另一个独立服务：准备 `build/generator/setting.json` 后运行 `node server/generator/main.mjs`（默认 4502），CaseHub 通过 `CASEHUB_GENERATOR_URL` 连接。general-agent（默认 4503）提供不带 Playwright 的通用 Claude CLI 调用，CaseHub 当前用它生成阅读友好版，通过 `CASEHUB_GENERAL_AGENT_URL` 连接。三个服务相互独立，可以只启动所需服务；未配置时对应入口会提示服务未配置，其余功能不受影响。
 
-容器中的 localhost 指容器自身；如果 planner / generator 运行在另一容器或主机上，将 `CASEHUB_PLANNER_URL`、`CASEHUB_GENERATOR_URL` 配置为容器可访问的地址。
+容器中的 localhost 指容器自身；如果 agent 服务运行在另一容器或主机上，将对应的 `CASEHUB_*_URL` 配置为容器可访问的地址。
 
 ## 前端追加功能
 

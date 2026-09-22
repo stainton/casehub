@@ -34,13 +34,15 @@ func TestStorageKind(t *testing.T) {
 func disabledServices() []service {
 	planner, plannerEnabled := upstream.New("", "planner", nil, nil)
 	generator, generatorEnabled := upstream.New("", "generator", nil, nil)
+	generalAgent, generalAgentEnabled := upstream.New("", "general-agent", nil, nil)
 	return []service{{name: "planner", proxy: planner, enabled: plannerEnabled},
-		{name: "generator", proxy: generator, enabled: generatorEnabled}}
+		{name: "generator", proxy: generator, enabled: generatorEnabled},
+		{name: "general-agent", proxy: generalAgent, enabled: generalAgentEnabled}}
 }
 
 func TestUpstreamServiceStatusIsReportedPerService(t *testing.T) {
 	handler := routes(&api{service: core.NewService(store.NewMemory())}, disabledServices()...)
-	for _, name := range []string{"planner", "generator"} {
+	for _, name := range []string{"planner", "generator", "general-agent"} {
 		w := httptest.NewRecorder()
 		handler.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/"+name+"/status", nil))
 		if w.Code != 200 || !strings.Contains(w.Body.String(), `"enabled":false`) {

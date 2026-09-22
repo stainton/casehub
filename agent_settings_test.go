@@ -124,9 +124,12 @@ func TestAgentRuntimeSettingsAreStoredWithRevisions(t *testing.T) {
 	if send("PUT", "playwright", `{"content":"{}","revision":"not-a-number"}`).Code != 400 {
 		t.Fatal("invalid revision accepted")
 	}
-	// The generator is configured separately and starts from nothing.
+	// Generator and general-agent are configured separately and start from nothing.
 	if gen := read("generator"); gen.Revision != "0" || gen.Content != "" {
 		t.Fatalf("generator inherited the planner configuration: %+v", gen)
+	}
+	if general := read("general-agent"); general.Revision != "0" || general.Content != "" {
+		t.Fatalf("general-agent inherited another agent configuration: %+v", general)
 	}
 	body, _ = json.Marshal(map[string]string{"content": `{"model":"generator-model"}`, "revision": "0"})
 	if send("PUT", "generator", string(body)).Code != 200 || read("playwright").Content != config {
@@ -146,6 +149,12 @@ func TestProxySendsTheStoredConfigurationOfItsOwnAgent(t *testing.T) {
 	}
 	if revision, content, err = agentSettingsOf(svc, "planner")(context.Background()); err != nil || revision != "0" || content != "" {
 		t.Fatalf("planner proxy would send the generator's configuration: %q/%q (%v)", revision, content, err)
+	}
+	if _, err := svc.SaveAgentSettings(context.Background(), "general-agent", `{"model":"general-model"}`, 0); err != nil {
+		t.Fatal(err)
+	}
+	if revision, content, err = agentSettingsOf(svc, "general-agent")(context.Background()); err != nil || revision != "1" || content != `{"model":"general-model"}` {
+		t.Fatalf("general-agent proxy would send %q/%q (%v)", revision, content, err)
 	}
 	if agentSettingsOf(svc, "healer") != nil {
 		t.Fatal("a service with no agent must not inject anything")

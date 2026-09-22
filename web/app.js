@@ -28,7 +28,7 @@ function setFocus(x){if(!$('#drawer').classList.contains('hidden')&&!(x.type==='
 function closeRecordDrawer(){$('#record-form').reset();recordEditor?.setMarkdown('');$('#drawer').classList.add('hidden')}
 // ---- 用例详情：Planner 原始内容 / 阅读友好版 切换 ----------------------------
 // Planner 生成的用例是给 generator 用的，步骤/预期结果信息密度很高，人读起来负担大。
-// 阅读友好版由 auto-test 的 /v1/planner/simplify 改写生成，和用例一样持久化在
+// 阅读友好版由 auto-test 的 general-agent 改写生成，和用例一样持久化在
 // State 里（不是浏览器缓存）；SimplifiedFrom* 是生成时源文本的快照，用来判断
 // 用例后续被编辑后阅读友好版是否已经过时。
 function caseHasSimplified(c){return !!(c&&c.SimplifiedSteps)}
@@ -152,8 +152,10 @@ async function runSimplify(c,isPending,rerender){
   try{
     let friendly;
     try{
-      friendly=await serviceRequest('/api/planner/simplify',{method:'POST',headers:{'Content-Type':'application/json'},signal:controller.signal,
-        body:JSON.stringify({title:c.Title||'',preconditions:c.Preconditions||'',steps:c.Steps||'',expected:c.Expected||''})});
+      const schema={type:'object',additionalProperties:false,required:['preconditions','steps','expected'],properties:{preconditions:{type:'string'},steps:{type:'string'},expected:{type:'string'}}};
+      const prompt=JSON.stringify({title:c.Title||'',preconditions:c.Preconditions||'',steps:c.Steps||'',expected:c.Expected||''});
+      friendly=(await serviceRequest('/api/general-agent/generate',{method:'POST',headers:{'Content-Type':'application/json'},signal:controller.signal,
+        body:JSON.stringify({prompt,systemPrompt:'将输入的测试用例改写为清晰、简洁、便于人工阅读的中文。保留所有可验证条件、操作与预期，不得增加、删除或改变测试含义。每一项使用短句；steps 和 expected 保留原有的编号或项目符号结构。只返回符合给定 JSON Schema 的结果。',schema})})).output;
     }catch(e){toast(controller.signal.aborted?'生成超时，请稍后重试':`生成失败：${e.message}`,true);return}
     clearTimeout(abortTimer);
     const payload={CaseID:c.ID,SimplifiedPreconditions:friendly.preconditions||'',SimplifiedSteps:friendly.steps||'',SimplifiedExpected:friendly.expected||''};
@@ -575,9 +577,9 @@ const agentSettingsFields=[
 ];
 const aiDesignAgents=[{id:'playwright',label:'aigc用例设计',render:renderPlaywrightAiForm,enabled:()=>aiPlannerEnabled,
   settingsFields:agentSettingsFields}];
-// 设置弹窗里可配置的 agent：用例设计（planner）和脚本生成（generator）。两者的配置都存在 CaseHub 的
+// 设置弹窗里可配置的 agent：用例设计（planner）、脚本生成（generator）和通用 AI。配置都存在 CaseHub 的
 // agent 配置表里，发起任务时随请求下发，agent 据此覆写自己的 setting.json。
-const configurableAgents=[...aiDesignAgents,{id:'generator',label:'脚本生成',settingsFields:agentSettingsFields}];
+const configurableAgents=[...aiDesignAgents,{id:'generator',label:'脚本生成',settingsFields:agentSettingsFields},{id:'general-agent',label:'通用 AI',settingsFields:[]}];
 const agentDefaultsCache=new Map();
 async function loadAgentDefaults(id){
   const config=await request(`/api/agent-settings/${encodeURIComponent(id)}`);
@@ -590,15 +592,17 @@ function agentDefaults(agent){
 let agentSettingsDrafts=new Map(),agentRuntimeFiles=new Map(),agentSettingsGeneration=0;
 function renderAgentSettings(agent){
   const values=agentSettingsDrafts.get(agent.id)||agentDefaults(agent),runtime=agentRuntimeFiles.get(agent.id);
+  const defaultsSection=agent.settingsFields.length?`<section class="settings-section"><h3>业务默认参数</h3><p class="meta">新设计任务选择此 agent 后自动带入，已有任务保留自己的参数。</p>
+    <form id="agent-settings-form" autocomplete="off">${agent.settingsFields.map(field=>`<label>${esc(field.label)}${field.type==='textarea'?`<textarea name="${field.name}" placeholder="${esc(field.placeholder||'')}">${esc(values[field.name])}</textarea>`:`<input name="${field.name}" type="${field.type}" value="${esc(values[field.name])}" placeholder="${esc(field.placeholder||'')}"${field.required?' required':''}${field.type==='number'?` min="${field.min}" max="${field.max}" step="1"`:''} autocomplete="off">`}</label>`).join('')}
+    <p class="settings-status" id="agent-settings-status" role="status"></p><div class="settings-actions"><button type="button" class="secondary" id="agent-settings-reset">恢复初始值</button><button type="submit">保存业务默认参数</button></div></form></section>`:'';
   $('#settings-agents').innerHTML=configurableAgents.map(item=>`<button type="button" data-settings-agent="${esc(item.id)}" aria-current="${item.id===agent.id}">${esc(item.label)}</button>`).join('');
   $('#settings-content').innerHTML=`<h2>${esc(agent.label)}</h2><p class="meta">配置存在 CaseHub 数据库里，所有设备共享，agent 重建或回滚都不会丢。以下两部分分别保存。</p>
-    <section class="settings-section"><h3>业务默认参数</h3><p class="meta">新设计任务选择此 agent 后自动带入，已有任务保留自己的参数。</p>
-    <form id="agent-settings-form" autocomplete="off">${agent.settingsFields.map(field=>`<label>${esc(field.label)}${field.type==='textarea'?`<textarea name="${field.name}" placeholder="${esc(field.placeholder||'')}">${esc(values[field.name])}</textarea>`:`<input name="${field.name}" type="${field.type}" value="${esc(values[field.name])}" placeholder="${esc(field.placeholder||'')}"${field.required?' required':''}${field.type==='number'?` min="${field.min}" max="${field.max}" step="1"`:''} autocomplete="off">`}</label>`).join('')}
-    <p class="settings-status" id="agent-settings-status" role="status"></p><div class="settings-actions"><button type="button" class="secondary" id="agent-settings-reset">恢复初始值</button><button type="submit">保存业务默认参数</button></div></form></section>
+    ${defaultsSection}
     <section class="settings-section"><h3>Agent 配置 · setting.json</h3><p class="meta">模型地址、密钥、model 等 Claude 配置的完整正文，可修改、添加或删除任意参数。${runtime.exists?`当前版本号 ${esc(runtime.revision)}。`:''}</p>${!runtime.exists?'<p class="meta" id="agent-runtime-missing">尚未下发配置，agent 使用镜像内自带的 setting.json；保存后以这里为准。</p>':''}
     <form id="agent-runtime-form"><label>完整 JSON 配置<textarea aria-describedby="agent-runtime-apply-hint" id="agent-runtime-json" name="content" spellcheck="false" rows="16">${esc(runtime.draft??runtime.content??'')}</textarea></label><p class="meta" id="agent-runtime-apply-hint">保存后版本号递增，下次发起的任务会带着这份配置下发给 agent，由 agent 覆写自己的 setting.json，无需重启；已运行的 Claude 进程继续使用原配置。</p><p class="settings-status" id="agent-runtime-status" role="status"></p><div class="settings-actions"><button type="button" class="secondary" id="agent-runtime-reload">重新读取</button><button type="submit">保存配置</button></div></form></section>`;
   $$('#settings-agents [data-settings-agent]').forEach(button=>button.onclick=()=>renderAgentSettings(configurableAgents.find(item=>item.id===button.dataset.settingsAgent)));
   const form=$('#agent-settings-form');
+  if(form){
   form.oninput=()=>{agentSettingsDrafts.set(agent.id,Object.fromEntries(new FormData(form)));$('#agent-settings-status').textContent='有未保存的修改'};
   $('#agent-settings-reset').onclick=()=>{
     agentSettingsDrafts.set(agent.id,Object.fromEntries(agent.settingsFields.map(field=>[field.name,field.name==='timeoutMinutes'?AI_DEFAULT_TIMEOUT_MIN:''])));
@@ -616,6 +620,7 @@ function renderAgentSettings(agent){
       toast('业务默认参数已保存');
     }catch(error){status.textContent=`保存失败：${error.message}`}finally{button.disabled=false}
   };
+  }
   const runtimeForm=$('#agent-runtime-form'),editor=$('#agent-runtime-json'),status=$('#agent-runtime-status');
   editor.oninput=()=>{runtime.draft=editor.value;status.textContent='有未保存的修改'};
   $('#agent-runtime-reload').onclick=async()=>{

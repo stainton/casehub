@@ -36,9 +36,9 @@ type AgentConfig struct {
 	UpdatedAt time.Time `json:"updatedAt"`
 }
 
-// Agents CaseHub stores configuration for: the auto-test planner behind 需求管理's "AI 设计" and the
-// generator behind 用例管理's "脚本生成". Each is configured independently.
-var agentNames = map[string]string{"playwright": "AI 设计", "generator": "脚本生成"}
+// Agents CaseHub stores configuration for: the auto-test planner behind 需求管理's "AI 设计", the
+// generator behind 用例管理's "脚本生成", and the standalone general-agent. Each is configured independently.
+var agentNames = map[string]string{"playwright": "AI 设计", "generator": "脚本生成", "general-agent": "通用 AI"}
 
 func KnownAgent(id string) bool { _, ok := agentNames[id]; return ok }
 

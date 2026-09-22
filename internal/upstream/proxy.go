@@ -1,6 +1,6 @@
 // Package upstream reverse-proxies CaseHub to the auto-test HTTP services: the
-// planner behind 需求管理's "AI 设计" drawer and the generator behind 用例管理's
-// "脚本生成" drawer. CaseHub does not understand job/SSE semantics for either; it
+// planner behind 需求管理's "AI 设计" drawer, the generator behind 用例管理's
+// "脚本生成" drawer, and general-agent for shared model work. CaseHub does not understand job/SSE semantics for them; it
 // forwards requests and streamed progress directly. The two services are separate
 // processes and are configured, enabled and reached independently.
 package upstream
@@ -163,7 +163,7 @@ func applyAgentSettings(ctx context.Context, payload map[string]json.RawMessage,
 // the same Error shape the services themselves use, so the frontend has one error
 // format to handle regardless of which side rejected the request.
 func New(baseURL, service string, settings Settings, assets *Assets) (http.Handler, bool) {
-	code := strings.ToUpper(service)
+	code := strings.ReplaceAll(strings.ToUpper(service), "-", "_")
 	disabled := func(w http.ResponseWriter, _ *http.Request) {
 		errorJSON(w, http.StatusServiceUnavailable, code+"_DISABLED", disabledMessage(service))
 	}
@@ -275,12 +275,18 @@ func disabledMessage(service string) string {
 	if service == "generator" {
 		return "脚本生成服务未配置（缺少 CASEHUB_GENERATOR_URL）"
 	}
+	if service == "general-agent" {
+		return "通用 AI 服务未配置（缺少 CASEHUB_GENERAL_AGENT_URL）"
+	}
 	return "AI 设计服务未配置（缺少 CASEHUB_PLANNER_URL）"
 }
 
 func unreachableMessage(service string) string {
 	if service == "generator" {
 		return "脚本生成服务不可用："
+	}
+	if service == "general-agent" {
+		return "通用 AI 服务不可用："
 	}
 	return "AI 设计服务不可用："
 }

@@ -12,7 +12,7 @@ import (
 
 // Agent ids behind the proxied services. The frontend addresses an agent by the same id, and every
 // request CaseHub forwards to a service carries the configuration stored for its agent.
-var serviceAgents = map[string]string{"planner": "playwright", "generator": "generator"}
+var serviceAgents = map[string]string{"planner": "playwright", "generator": "generator", "general-agent": "general-agent"}
 
 func (a *api) agentConfig(w http.ResponseWriter, r *http.Request) (core.AgentConfig, bool) {
 	w.Header().Set("Cache-Control", "no-store")

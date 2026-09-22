@@ -134,10 +134,12 @@ func main() {
 	lookup := assetSource(svc)
 	plannerProxy, plannerEnabled := upstream.New(env("CASEHUB_PLANNER_URL", "http://localhost:4501"), "planner", agentSettingsOf(svc, "planner"), lookup)
 	generatorProxy, generatorEnabled := upstream.New(env("CASEHUB_GENERATOR_URL", "http://localhost:4502"), "generator", agentSettingsOf(svc, "generator"), lookup)
-	log.Printf("CaseHub listening on :%s (store=%s, planner=%v, generator=%v)", port, kind, plannerEnabled, generatorEnabled)
+	generalAgentProxy, generalAgentEnabled := upstream.New(env("CASEHUB_GENERAL_AGENT_URL", "http://localhost:4503"), "general-agent", agentSettingsOf(svc, "general-agent"), nil)
+	log.Printf("CaseHub listening on :%s (store=%s, planner=%v, generator=%v, general-agent=%v)", port, kind, plannerEnabled, generatorEnabled, generalAgentEnabled)
 	log.Fatal(http.ListenAndServe(":"+port, routes(&api{service: svc},
 		service{name: "planner", proxy: plannerProxy, enabled: plannerEnabled},
-		service{name: "generator", proxy: generatorProxy, enabled: generatorEnabled})))
+		service{name: "generator", proxy: generatorProxy, enabled: generatorEnabled},
+		service{name: "general-agent", proxy: generalAgentProxy, enabled: generalAgentEnabled})))
 }
 func storageKind(kind, databaseURL string) string {
 	if kind != "" {
