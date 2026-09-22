@@ -338,6 +338,27 @@ func TestMergeCasesSkipsUnchangedCasesWithWarning(t *testing.T) {
 	}
 }
 
+func TestMergeCasesRestoresCaseMissingFromMainlineRegardlessOfDirtyFlag(t *testing.T) {
+	svc := core.NewService(store.NewMemory())
+	state := apply(t, svc, core.Action{Type: "createVersion", Name: "恢复缺失用例", Author: "grace"})
+	v := branchID(t, state, "恢复缺失用例")
+	state = apply(t, svc, core.Action{Type: "createCase", VersionID: v, FolderID: "root", Title: "待恢复用例", Priority: "P1", Author: "grace"})
+	caseID := caseIDByTitle(t, state, v, "待恢复用例")
+	state = apply(t, svc, core.Action{Type: "mergeCases", VersionID: v, CaseIDs: []string{caseID}, TargetFolderID: "root", Author: "grace"})
+	state = apply(t, svc, core.Action{Type: "deleteCases", VersionID: "main", CaseIDs: []string{caseID}, Author: "grace"})
+
+	state = apply(t, svc, core.Action{Type: "mergeCases", VersionID: v, CaseIDs: []string{caseID}, TargetFolderID: "auth", Author: "grace"})
+	for _, c := range state.Cases {
+		if c.VersionID == "main" && c.ID == caseID {
+			if c.FolderID != "auth" {
+				t.Fatalf("restored case folder = %q, want auth", c.FolderID)
+			}
+			return
+		}
+	}
+	t.Fatal("case missing from mainline should have been restored")
+}
+
 func TestMergeCasesDetectsStaleConflict(t *testing.T) {
 	svc := core.NewService(store.NewMemory())
 	state := apply(t, svc, core.Action{Type: "createVersion", Name: "H"})

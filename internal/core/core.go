@@ -1197,7 +1197,10 @@ func mergeFolder(s *State, a Action) ([]string, error) {
 	s.Folders = append(s.Folders, newFolders...)
 	branchCases := []TestCase{}
 	for _, c := range s.Cases {
-		if c.VersionID == v.ID && c.Dirty && inSubtree[c.FolderID] {
+		if c.VersionID != v.ID || !inSubtree[c.FolderID] {
+			continue
+		}
+		if mainCase, _ := caseAt(s, "main", c.ID); c.Dirty || mainCase == nil {
 			branchCases = append(branchCases, c)
 		}
 	}
@@ -1232,10 +1235,14 @@ func mergeCases(s *State, a Action) ([]string, int, error) {
 		if c == nil {
 			return nil, 0, fmt.Errorf("用例 %s 不属于当前版本", id)
 		}
+		m, _ := caseAt(s, "main", c.ID)
+		if m == nil {
+			toMerge = append(toMerge, *c)
+			continue
+		}
 		if !c.Dirty {
 			continue
 		}
-		m, _ := caseAt(s, "main", c.ID)
 		if m != nil && m.Revision > c.BaseRevision {
 			conflicts = append(conflicts, c.ID)
 			continue
