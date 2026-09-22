@@ -624,22 +624,12 @@ func createFolder(s *State, a Action) error {
 	return nil
 }
 func renameFolder(s *State, a Action) error {
-	if _, err := requireBranch(s, a.VersionID); err != nil {
-		return err
+	if v, _ := versionAt(s, a.VersionID); v == nil {
+		return errors.New("版本不存在")
 	}
 	f, _ := folderAt(s, a.VersionID, a.FolderID)
 	if f == nil {
 		return errors.New("文件夹不存在")
-	}
-	for _, x := range s.Folders {
-		if x.VersionID == a.VersionID && x.ParentID == f.ID {
-			return errors.New("只能重命名空文件夹")
-		}
-	}
-	for _, x := range s.Cases {
-		if x.VersionID == a.VersionID && x.FolderID == f.ID {
-			return errors.New("只能重命名空文件夹")
-		}
 	}
 	if strings.TrimSpace(a.Name) == "" {
 		return errors.New("文件夹名称不能为空")

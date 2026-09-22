@@ -114,6 +114,25 @@ func TestMainlineIsReadOnly(t *testing.T) {
 	}
 }
 
+func TestRenameFolderWorksForMainlineAndNonEmptyBranchFolders(t *testing.T) {
+	svc := core.NewService(store.NewMemory())
+	state := apply(t, svc, core.Action{Type: "renameFolder", VersionID: "main", FolderID: "auth", Name: "账号认证", Author: "alice"})
+	for _, f := range state.Folders {
+		if f.VersionID == "main" && f.ID == "auth" && f.Name != "账号认证" {
+			t.Fatalf("mainline folder name = %q, want 账号认证", f.Name)
+		}
+	}
+
+	state = apply(t, svc, core.Action{Type: "createVersion", Name: "重命名验证", Author: "alice"})
+	v := branchID(t, state, "重命名验证")
+	state = apply(t, svc, core.Action{Type: "renameFolder", VersionID: v, FolderID: "auth", Name: "账号认证回归", Author: "alice"})
+	for _, f := range state.Folders {
+		if f.VersionID == v && f.ID == "auth" && f.Name != "账号认证回归" {
+			t.Fatalf("branch folder name = %q, want 账号认证回归", f.Name)
+		}
+	}
+}
+
 func TestMergeFolderPreservesStructureUnderChosenTarget(t *testing.T) {
 	svc := core.NewService(store.NewMemory())
 	state := apply(t, svc, core.Action{Type: "createVersion", Name: "迭代 A", Author: "alice"})
