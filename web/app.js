@@ -1266,9 +1266,9 @@ function renderAutoFocus(){
     const ids=scriptCaseIdsIn(f.VersionID,f.ID),scripts=ids.map(id=>scriptFor(f.VersionID,id));
     const regenerating=hasGenerationForCases(f.VersionID,ids);
     $('#auto-empty').classList.add('hidden');box.classList.remove('hidden');
-    box.innerHTML=`<div class="detail-head"><div><div class="eyebrow">脚本目录 · ${esc(version(f.VersionID)?.name||'')}</div><h1>📁 ${esc(f.Name)}</h1></div><div class="detail-actions"><button id="auto-folder-regen"${ids.length&&!regenerating?'':' disabled'} class="${regenerating?'ai-running':''}">${regenerating?'重新生成中':'重新生成全部'}</button></div></div><div class="card meta-grid"><span>脚本 <b>${ids.length}</b></span><span>已生成 <b>${scripts.filter(s=>s.Status!=='blocked').length}</b></span><span>受阻 <b>${scripts.filter(s=>s.Status==='blocked').length}</b></span><span>已过时 <b>${scripts.filter(scriptStale).length}</b></span></div>`;
+    box.innerHTML=`<div class="detail-head"><div><div class="eyebrow">脚本目录 · ${esc(version(f.VersionID)?.name||'')}</div><h1>📁 ${esc(f.Name)}</h1></div><div class="detail-actions"><button id="auto-folder-regen"${ids.length?'':' disabled'} class="${regenerating?'ai-running':''}">${regenerating?'重新生成中':'重新生成全部'}</button></div></div><div class="card meta-grid"><span>脚本 <b>${ids.length}</b></span><span>已生成 <b>${scripts.filter(s=>s.Status!=='blocked').length}</b></span><span>受阻 <b>${scripts.filter(s=>s.Status==='blocked').length}</b></span><span>已过时 <b>${scripts.filter(scriptStale).length}</b></span></div>`;
     const btn=$('#auto-folder-regen');
-    if(btn)btn.onclick=()=>startGeneration(f.VersionID,ids,`重新生成 · ${f.Name}`);
+    if(btn)btn.onclick=()=>{if(regenerating)openGenerationProgress(f.VersionID,ids);else startGeneration(f.VersionID,ids,`重新生成 · ${f.Name}`)};
     return;
   }
   const s=scriptFor(autoFocus.versionID,autoFocus.id);
@@ -1278,7 +1278,7 @@ function renderAutoFocus(){
   const regenerating=hasGenerationForCases(s.VersionID,[s.CaseID]);
   const run=scriptRunResults.get(`${s.VersionID}:${s.CaseID}`);
   const deviations=s.Deviations?.length?`<div class="card"><h3>与用例预期的实测偏差 <small class="meta">脚本按实测行为断言，并在对应行标注 // deviation:</small></h3>${aiRiskListHTML(s.Deviations.map(d=>({risk:d.Risk,summary:d.Summary})),d=>esc(d.summary))}</div>`:'';
-  const staleHint=stale?`<div class="card script-stale"><b>用例内容已变更</b><p class="meta">这个脚本是按变更前的用例生成的，断言可能已经不符合当前用例。确认用例后可以重新生成。</p><p class="drawer-actions"><button type="button" id="script-regen-stale" class="${regenerating?'ai-running':''}"${regenerating?' disabled':''}>${regenerating?'重新生成中':'重新生成'}</button></p></div>`:'';
+  const staleHint=stale?`<div class="card script-stale"><b>用例内容已变更</b><p class="meta">这个脚本是按变更前的用例生成的，断言可能已经不符合当前用例。确认用例后可以重新生成。</p><p class="drawer-actions"><button type="button" id="script-regen-stale" class="${regenerating?'ai-running':''}">${regenerating?'重新生成中':'重新生成'}</button></p></div>`:'';
   const editing=scriptEdit?.versionID===s.VersionID&&scriptEdit.caseID===s.CaseID;
   const scriptKey=`${s.VersionID}:${s.CaseID}`,codeExpanded=expandedScriptCode.has(scriptKey);
   const body=blocked
@@ -1286,9 +1286,9 @@ function renderAutoFocus(){
     :`<div class="card script-code-card"><div class="script-code-head"><b>${esc(s.FileName)}</b><span class="meta">${(editing?scriptEdit.code:s.Code).split('\n').length} 行</span>${editing?'':`<button type="button" class="secondary" id="script-code-toggle">${codeExpanded?'折叠代码':'展开代码'}</button><button type="button" class="secondary" id="script-edit">编辑脚本</button><button type="button" class="secondary" id="script-copy">复制</button><button type="button" class="secondary" id="script-download">下载</button>`}</div>${editing?`<textarea class="script-editor" id="script-editor" spellcheck="false">${esc(scriptEdit.code)}</textarea><p class="drawer-actions"><button type="button" class="secondary" id="script-edit-cancel">取消</button><button type="button" id="script-edit-save">保存脚本</button></p>`:codeExpanded?`<div class="script-code-resize"><pre class="script-code"><code class="language-typescript">${highlightScript(s.Code)}</code></pre></div>`:`<p class="script-code-collapsed meta">代码已折叠，展开后可拖动底边调整显示高度。</p>`}</div>`;
   const runCard=run?`<div class="card"><h3>脚本运行</h3><p class="meta">${run.status==='completed'?'已完成并保存为测试记录':esc(run.stage||run.status||'运行中')}</p>${run.result?`<div id="script-run-markdown"></div><p class="drawer-actions"><button type="button" class="secondary" id="script-run-download">下载 Markdown 测试记录</button></p>`:''}</div>`:'';
   const infoCard=`<div class="card script-info-card"><div class="meta-grid"><span>状态 <b>${scriptStatusName(s)}${stale?' · 已过时':''}</b></span><span>文件 <b>${esc(s.FileName)}</b></span><span>更新时间 <b>${fmt(s.UpdatedAt)}</b></span><span>生成者 <b>${esc(s.UpdatedBy||'—')}</b></span></div>${s.Summary&&!blocked?`<div class="script-summary"><h3>脚本验证的内容</h3><p>${esc(s.Summary)}</p></div>`:''}</div>`;
-  box.innerHTML=`<div class="detail-head"><div><div class="eyebrow">${esc(s.CaseID)} · ${esc(version(s.VersionID)?.name||'')}</div><h1>${esc(s.Title||c?.Title||s.CaseID)}</h1></div><div class="detail-actions"><button class="secondary" id="script-open-case">查看用例</button>${blocked?'':`<button id="script-run">运行脚本</button>`}<button id="script-regen" class="${regenerating?'ai-running':''}"${regenerating?' disabled':''}>${regenerating?'重新生成中':'重新生成'}</button></div></div>${infoCard}${staleHint}${deviations}${body}${runCard}`;
+  box.innerHTML=`<div class="detail-head"><div><div class="eyebrow">${esc(s.CaseID)} · ${esc(version(s.VersionID)?.name||'')}</div><h1>${esc(s.Title||c?.Title||s.CaseID)}</h1></div><div class="detail-actions"><button class="secondary" id="script-open-case">查看用例</button>${blocked?'':`<button id="script-run">运行脚本</button>`}<button id="script-regen" class="${regenerating?'ai-running':''}">${regenerating?'重新生成中':'重新生成'}</button></div></div>${infoCard}${staleHint}${deviations}${body}${runCard}`;
   $('#script-open-case').onclick=()=>openCaseFromScript(s.VersionID,s.CaseID);
-  const regen=()=>startGeneration(s.VersionID,[s.CaseID],s.CaseID);
+  const regen=()=>{if(regenerating)openGenerationProgress(s.VersionID,[s.CaseID]);else startGeneration(s.VersionID,[s.CaseID],s.CaseID)};
   $('#script-regen').onclick=regen;
 	$('#script-run')?.addEventListener('click',()=>runScriptModal(s));
 	$('#script-code-toggle')?.addEventListener('click',()=>{codeExpanded?expandedScriptCode.delete(scriptKey):expandedScriptCode.add(scriptKey);renderAutoFocus()});
@@ -1353,6 +1353,13 @@ function refreshAutoFocusForGeneration(task){
   if(!autoFocus||autoFocus.versionID!==task.versionID)return;
   const visible=autoFocus.type==='script'?[autoFocus.id]:scriptCaseIdsIn(autoFocus.versionID,autoFocus.id);
   if(task.caseIDs.some(id=>visible.includes(id)))renderAutoFocus();
+}
+function openGenerationProgress(versionID, caseIDs){
+  const active=genRunning().filter(task=>task.versionID===versionID&&task.caseIDs.some(id=>caseIDs.includes(id)));
+  if(!active.length)return false;
+  active.forEach(task=>genOpen.add(task.jobId));
+  openGenDrawer();
+  return true;
 }
 
 function generateForFolder(vid,folderId){
