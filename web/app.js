@@ -1252,8 +1252,9 @@ function renderAutoFocus(){
     const f=state.folders.find(x=>x.VersionID===autoFocus.versionID&&x.ID===autoFocus.id);
     if(!f){autoFocus=null;return renderAutoFocus()}
     const ids=scriptCaseIdsIn(f.VersionID,f.ID),scripts=ids.map(id=>scriptFor(f.VersionID,id));
+    const regenerating=hasGenerationForCases(f.VersionID,ids);
     $('#auto-empty').classList.add('hidden');box.classList.remove('hidden');
-    box.innerHTML=`<div class="detail-head"><div><div class="eyebrow">脚本目录 · ${esc(version(f.VersionID)?.name||'')}</div><h1>📁 ${esc(f.Name)}</h1></div><div class="detail-actions"><button id="auto-folder-regen"${ids.length?'':' disabled'}>重新生成全部</button></div></div><div class="card meta-grid"><span>脚本 <b>${ids.length}</b></span><span>已生成 <b>${scripts.filter(s=>s.Status!=='blocked').length}</b></span><span>受阻 <b>${scripts.filter(s=>s.Status==='blocked').length}</b></span><span>已过时 <b>${scripts.filter(scriptStale).length}</b></span></div>`;
+    box.innerHTML=`<div class="detail-head"><div><div class="eyebrow">脚本目录 · ${esc(version(f.VersionID)?.name||'')}</div><h1>📁 ${esc(f.Name)}</h1></div><div class="detail-actions"><button id="auto-folder-regen"${ids.length&&!regenerating?'':' disabled'} class="${regenerating?'ai-running':''}">${regenerating?'重新生成中':'重新生成全部'}</button></div></div><div class="card meta-grid"><span>脚本 <b>${ids.length}</b></span><span>已生成 <b>${scripts.filter(s=>s.Status!=='blocked').length}</b></span><span>受阻 <b>${scripts.filter(s=>s.Status==='blocked').length}</b></span><span>已过时 <b>${scripts.filter(scriptStale).length}</b></span></div>`;
     const btn=$('#auto-folder-regen');
     if(btn)btn.onclick=()=>startGeneration(f.VersionID,ids,`重新生成 · ${f.Name}`);
     return;
@@ -1262,15 +1263,16 @@ function renderAutoFocus(){
   if(!s){autoFocus=null;return renderAutoFocus()}
   $('#auto-empty').classList.add('hidden');box.classList.remove('hidden');
   const c=caseOfScript(s),stale=scriptStale(s),blocked=s.Status==='blocked';
+  const regenerating=hasGenerationForCases(s.VersionID,[s.CaseID]);
   const run=scriptRunResults.get(`${s.VersionID}:${s.CaseID}`);
   const deviations=s.Deviations?.length?`<div class="card"><h3>与用例预期的实测偏差 <small class="meta">脚本按实测行为断言，并在对应行标注 // deviation:</small></h3>${aiRiskListHTML(s.Deviations.map(d=>({risk:d.Risk,summary:d.Summary})),d=>esc(d.summary))}</div>`:'';
-  const staleHint=stale?`<div class="card script-stale"><b>用例内容已变更</b><p class="meta">这个脚本是按变更前的用例生成的，断言可能已经不符合当前用例。确认用例后可以重新生成。</p><p class="drawer-actions"><button type="button" id="script-regen-stale">重新生成</button></p></div>`:'';
+  const staleHint=stale?`<div class="card script-stale"><b>用例内容已变更</b><p class="meta">这个脚本是按变更前的用例生成的，断言可能已经不符合当前用例。确认用例后可以重新生成。</p><p class="drawer-actions"><button type="button" id="script-regen-stale" class="${regenerating?'ai-running':''}"${regenerating?' disabled':''}>${regenerating?'重新生成中':'重新生成'}</button></p></div>`:'';
   const editing=scriptEdit?.versionID===s.VersionID&&scriptEdit.caseID===s.CaseID;
   const body=blocked
     ?`<div class="card"><h3>未能生成脚本</h3><p>${esc(s.Summary||'生成器未说明原因')}</p><p class="meta">生成器在缺少必需输入（账号、令牌、素材等）或流程不可达时不会写出脚本，也不会用 skip/占位断言绕过。补齐所需输入后重新生成即可。</p></div>`
     :`<div class="card script-code-card"><div class="script-code-head"><b>${esc(s.FileName)}</b><span class="meta">${(editing?scriptEdit.code:s.Code).split('\n').length} 行</span>${editing?'':`<button type="button" class="secondary" id="script-edit">编辑脚本</button><button type="button" class="secondary" id="script-copy">复制</button><button type="button" class="secondary" id="script-download">下载</button>`}</div>${editing?`<textarea class="script-editor" id="script-editor" spellcheck="false">${esc(scriptEdit.code)}</textarea><p class="drawer-actions"><button type="button" class="secondary" id="script-edit-cancel">取消</button><button type="button" id="script-edit-save">保存脚本</button></p>`:`<pre class="script-code"><code class="language-typescript">${highlightScript(s.Code)}</code></pre>`}</div>`;
   const runCard=run?`<div class="card"><h3>脚本运行</h3><p class="meta">${run.status==='completed'?'已完成并保存为测试记录':esc(run.stage||run.status||'运行中')}</p>${run.result?`<div id="script-run-markdown"></div><p class="drawer-actions"><button type="button" class="secondary" id="script-run-download">下载 Markdown 测试记录</button></p>`:''}</div>`:'';
-  box.innerHTML=`<div class="detail-head"><div><div class="eyebrow">${esc(s.CaseID)} · ${esc(version(s.VersionID)?.name||'')}</div><h1>${esc(s.Title||c?.Title||s.CaseID)}</h1></div><div class="detail-actions"><button class="secondary" id="script-open-case">查看用例</button>${blocked?'':`<button id="script-run">运行脚本</button>`}<button id="script-regen">重新生成</button></div></div><div class="card meta-grid"><span>状态 <b>${scriptStatusName(s)}${stale?' · 已过时':''}</b></span><span>文件 <b>${esc(s.FileName)}</b></span><span>更新时间 <b>${fmt(s.UpdatedAt)}</b></span><span>生成者 <b>${esc(s.UpdatedBy||'—')}</b></span></div>${s.Summary&&!blocked?`<div class="card"><h3>脚本验证的内容</h3><p>${esc(s.Summary)}</p></div>`:''}${staleHint}${deviations}${body}${runCard}`;
+  box.innerHTML=`<div class="detail-head"><div><div class="eyebrow">${esc(s.CaseID)} · ${esc(version(s.VersionID)?.name||'')}</div><h1>${esc(s.Title||c?.Title||s.CaseID)}</h1></div><div class="detail-actions"><button class="secondary" id="script-open-case">查看用例</button>${blocked?'':`<button id="script-run">运行脚本</button>`}<button id="script-regen" class="${regenerating?'ai-running':''}"${regenerating?' disabled':''}>${regenerating?'重新生成中':'重新生成'}</button></div></div><div class="card meta-grid"><span>状态 <b>${scriptStatusName(s)}${stale?' · 已过时':''}</b></span><span>文件 <b>${esc(s.FileName)}</b></span><span>更新时间 <b>${fmt(s.UpdatedAt)}</b></span><span>生成者 <b>${esc(s.UpdatedBy||'—')}</b></span></div>${s.Summary&&!blocked?`<div class="card"><h3>脚本验证的内容</h3><p>${esc(s.Summary)}</p></div>`:''}${staleHint}${deviations}${body}${runCard}`;
   $('#script-open-case').onclick=()=>openCaseFromScript(s.VersionID,s.CaseID);
   const regen=()=>startGeneration(s.VersionID,[s.CaseID],s.CaseID);
   $('#script-regen').onclick=regen;
@@ -1329,6 +1331,12 @@ function saveGenTarget(v){try{localStorage.setItem(GEN_TARGET_KEY,JSON.stringify
 const isGenDrawerOpen=()=>!$('#gen-drawer').classList.contains('hidden');
 const genTask=jobId=>genTasks.find(t=>t.jobId===jobId);
 const genRunning=()=>genTasks.filter(t=>!GEN_TERMINAL.includes(t.status));
+const hasGenerationForCases=(versionID,caseIDs)=>genRunning().some(task=>task.versionID===versionID&&task.caseIDs.some(id=>caseIDs.includes(id)));
+function refreshAutoFocusForGeneration(task){
+  if(!autoFocus||autoFocus.versionID!==task.versionID)return;
+  const visible=autoFocus.type==='script'?[autoFocus.id]:scriptCaseIdsIn(autoFocus.versionID,autoFocus.id);
+  if(task.caseIDs.some(id=>visible.includes(id)))renderAutoFocus();
+}
 
 function generateForFolder(vid,folderId){
   const f=state.folders.find(x=>x.VersionID===vid&&x.ID===folderId);
@@ -1506,6 +1514,7 @@ function routeGenJob(task,job){
   task.status=job.status;task.stage=job.stage;task.error=job.error;
   saveGenTasks();
   updateGenStatusChip(task);
+  refreshAutoFocusForGeneration(task);
   if(!GEN_TERMINAL.includes(job.status))return ensureGenStream(task);
   closeGenStream(task.jobId);
   if(job.status==='succeeded'&&!task.saved)return importGenResult(task);
@@ -1537,7 +1546,7 @@ function ensureGenStream(task){
 // 保存，它带着"为什么没生成"的原因，正是评审人需要看到的。
 async function importGenResult(task){
   if(task.importing)return;
-  task.importing=true;task.status='importing';updateGenStatusChip(task);
+  task.importing=true;task.status='importing';updateGenStatusChip(task);refreshAutoFocusForGeneration(task);
   try{
     const result=await serviceRequest(`/api/generator/jobs/${task.jobId}/result`);
     for(const docID of task.requirementIDs||[]){const notes=result.explorationRecords?.[docID]??result.explorationNotes;if(notes?.trim())await act('saveReqExploration',{DocID:docID,ExplorationNotes:notes});}
@@ -1559,6 +1568,7 @@ async function importGenResult(task){
     toast(task.error.message,true);
   }finally{
     task.importing=false;saveGenTasks();
+    refreshAutoFocusForGeneration(task);
     if(isGenDrawerOpen())renderGenDrawer();
   }
 }
