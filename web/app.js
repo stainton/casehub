@@ -576,7 +576,7 @@ const aiCaseRange=n=>`${Math.max(1,n-AI_CASE_COUNT_SLACK)}–${n}`;
 function aiFormValues(form){const data=new FormData(form),x=Object.fromEntries(data);delete x.caseCount;delete x.reqCode;x.assetIds=data.getAll('assetIds');return x}
 function aiRequirementPayload(doc,values,code){
   const d=liveReqDoc(doc);code=code||d.Code||'';
-  return {requirements:[{id:d.ID,title:d.Title,content:d.Content||'',...(code?{code}:{})}],instructions:[values.instructions||'',reqRefContext(doc)].filter(Boolean).join('\n\n'),explorationNotes:d.ExplorationNotes||''};
+  return {requirements:[{id:d.ID,title:d.Title,content:d.Content||'',...(code?{code}:{})}],instructions:[values.instructions||'',reqRefContext(doc)].filter(Boolean).join('\n\n'),...(d.ExplorationNotes?.trim()?{explorationNotes:d.ExplorationNotes}: {})};
 }
 function aiEstimateStatusText(est){
   const seconds=Math.floor((Date.now()-est.startedAt)/1000);
@@ -916,7 +916,7 @@ async function handleAiSuccess(doc,job){
   if(isAiDrawerOpen(doc))$('#ai-drawer-body').innerHTML='<p class="meta">设计已完成，正在准备确认内容…</p>';
   try{
     const result=await serviceRequest(`/api/planner/jobs/${job.id}/result`);
-    if(result.explorationNotes!==undefined)await act('saveReqExploration',{DocID:doc.ID,ExplorationNotes:result.explorationNotes});
+    if(result.explorationNotes?.trim())await act('saveReqExploration',{DocID:doc.ID,ExplorationNotes:result.explorationNotes});
     if(isAiDrawerOpen(doc))renderAiImportConfirmation(doc,job,result);
   }catch(e){
     toast(`读取 AI 设计结果失败：${e.message}`,true);
@@ -1428,7 +1428,7 @@ function genPayload(vid,ids,values){
   const docs=new Map();
   const cases=picked.map(c=>{
     const doc=values.reqDoc==='auto'?reqDocForCase(c):(values.reqDoc?state.reqDocs.find(d=>d.ID===values.reqDoc):undefined);
-    if(doc&&(doc.Content||'').trim())docs.set(doc.ID,{id:doc.ID,title:doc.Title,content:doc.Content,explorationNotes:doc.ExplorationNotes||''});
+    if(doc&&(doc.Content||'').trim())docs.set(doc.ID,{id:doc.ID,title:doc.Title,content:doc.Content,...(doc.ExplorationNotes?.trim()?{explorationNotes:doc.ExplorationNotes}: {})});
     return {id:c.ID,title:c.Title,priority:c.Priority||'',...(doc&&docs.has(doc.ID)?{requirement:doc.ID}:{}),
       precondition:c.Preconditions||'',steps:c.Steps||'',expects:c.Expected||''};
   });
@@ -1540,7 +1540,7 @@ async function importGenResult(task){
   task.importing=true;task.status='importing';updateGenStatusChip(task);
   try{
     const result=await serviceRequest(`/api/generator/jobs/${task.jobId}/result`);
-    for(const docID of task.requirementIDs||[]){const notes=result.explorationRecords?.[docID]??result.explorationNotes;if(notes!==undefined)await act('saveReqExploration',{DocID:docID,ExplorationNotes:notes});}
+    for(const docID of task.requirementIDs||[]){const notes=result.explorationRecords?.[docID]??result.explorationNotes;if(notes?.trim())await act('saveReqExploration',{DocID:docID,ExplorationNotes:notes});}
     let failed=0;
     for(const sc of result.scripts||[]){
       try{
