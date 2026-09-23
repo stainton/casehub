@@ -41,6 +41,7 @@ h3 small.meta{font-size:12px;font-weight:400;margin-left:6px}
 .link-button.version-toggle:hover{color:var(--brand)}
 .link-button.version-toggle small{color:var(--brand);font-weight:600}
 .link-button.version-toggle[aria-expanded="true"] small{color:var(--brand)}
+.case-automation{display:flex;align-items:center;gap:10px;margin:0 0 14px;padding-bottom:12px;border-bottom:1px solid var(--line)}.case-automation .link-button{padding:0;border:0;background:transparent;color:var(--brand);font:inherit;cursor:pointer}.case-automation .link-button:hover{text-decoration:underline}.context-menu button:disabled{color:var(--muted);opacity:.55;cursor:not-allowed}
 .case-lines{margin-top:16px;padding-top:16px;border-top:1px solid var(--line);display:flex;flex-direction:column;gap:10px}
 .field-line{display:flex;gap:12px;align-items:baseline}
 .field-line h4{margin:0;flex:0 0 68px;color:var(--muted);font-size:12px;font-weight:600}

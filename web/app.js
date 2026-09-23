@@ -101,6 +101,8 @@ async function saveCaseEdit(c,isPending,rerender,btn){
 }
 function caseDetailBodyHTML(c,isPending){
   const has=caseHasSimplified(c),stale=has&&caseSimplifiedStale(c),fresh=has&&!stale;
+  const script=!isPending?scriptFor(c.VersionID,c.ID):undefined;
+  const automation=!isPending?`<div class="case-automation"><b>自动化情况</b>${script?script.Status==='blocked'?`<span class="meta">脚本生成受阻：${esc(script.Summary||'未说明原因')}</span>`:`<button type="button" class="link-button" data-open-automation>已生成脚本，前往自动化管理</button>`:'<span class="meta">尚未生成脚本</span>'}</div>`:'';
   // 每打开一条用例重新选默认视图：有（未过时的）阅读友好版优先展示，否则展示 Planner 原始内容。
   // 同一条用例内用户手动切换的视图在重渲染时保持不变。
   const key=simplifyKey(c,isPending),pane=casePane(isPending);
@@ -110,12 +112,12 @@ function caseDetailBodyHTML(c,isPending){
   if(edit?.mode==='case')return caseFullEditHTML(c,isPending,edit.draft);
   const toggle=caseDescriptionHTML(c,isPending)+caseViewToggleHTML();
   const friendlyEditable=isPending||!version(c.VersionID).mainline;
-  if(edit?.mode==='friendly'&&friendlyEditable)return `${toggle}<div class="case-edit-form case-lines">${caseEditArea('SimplifiedPreconditions','前置条件',edit.draft.SimplifiedPreconditions)}${caseEditArea('SimplifiedSteps','执行步骤',edit.draft.SimplifiedSteps,true)}${caseEditArea('SimplifiedExpected','预期结果',edit.draft.SimplifiedExpected)}${caseEditActionsHTML()}</div>`;
+  if(edit?.mode==='friendly'&&friendlyEditable)return `${automation}${toggle}<div class="case-edit-form case-lines">${caseEditArea('SimplifiedPreconditions','前置条件',edit.draft.SimplifiedPreconditions)}${caseEditArea('SimplifiedSteps','执行步骤',edit.draft.SimplifiedSteps,true)}${caseEditArea('SimplifiedExpected','预期结果',edit.draft.SimplifiedExpected)}${caseEditActionsHTML()}</div>`;
   const prompt=fresh?'':`<div class="case-simplify-prompt"><p class="meta">${stale?'用例内容已更改，之前生成的阅读友好版本已过时。':'还没有阅读友好版本 —— 这份用例的步骤/预期结果是给 Planner/生成器看的原始内容，信息密度较高，供人阅读负担较大。'}</p><div class="case-simplify-actions"><button type="button" id="case-simplify-btn">${has?'重新生成阅读友好版本':'生成阅读友好版本'}</button>${has&&friendlyEditable?'<button type="button" class="secondary" id="case-simplify-edit-btn">编辑旧版本</button>':''}</div></div>`;
   // 原始内容页只展示原始内容；生成/过时提示只在"阅读友好版"页出现。
-  if(caseViewMode!=='friendly')return `${toggle}${caseFieldLinesHTML(c.Preconditions,c.Steps,c.Expected)}`;
-  if(!fresh)return `${toggle}${prompt}`;
-  return `${toggle}${caseFieldLinesHTML(c.SimplifiedPreconditions,c.SimplifiedSteps,c.SimplifiedExpected)}<p class="meta case-simplify-meta">阅读友好版 · 更新于 ${fmt(c.SimplifiedAt)} ${friendlyEditable?'<button type="button" class="secondary" id="case-simplify-edit-btn">编辑</button>':''}<button type="button" class="secondary" id="case-simplify-btn">重新生成</button></p>`;
+  if(caseViewMode!=='friendly')return `${automation}${toggle}${caseFieldLinesHTML(c.Preconditions,c.Steps,c.Expected)}`;
+  if(!fresh)return `${automation}${toggle}${prompt}`;
+  return `${automation}${toggle}${caseFieldLinesHTML(c.SimplifiedPreconditions,c.SimplifiedSteps,c.SimplifiedExpected)}<p class="meta case-simplify-meta">阅读友好版 · 更新于 ${fmt(c.SimplifiedAt)} ${friendlyEditable?'<button type="button" class="secondary" id="case-simplify-edit-btn">编辑</button>':''}<button type="button" class="secondary" id="case-simplify-btn">重新生成</button></p>`;
 }
 function bindCaseDetailBody(root,c,isPending,rerender){
   const edit=caseEditFor(c,isPending);
@@ -123,6 +125,7 @@ function bindCaseDetailBody(root,c,isPending,rerender){
     if(edit?.mode==='friendly'&&b.dataset.caseView!=='friendly')caseEdits[casePane(isPending)]=null;
     caseViewMode=b.dataset.caseView;rerender()});
   const headerEdit=root.querySelector('#edit-case,#edit-review-case');
+  root.querySelector('[data-open-automation]')?.addEventListener('click',()=>{setPage('automation');setAutoFocus({type:'script',versionID:c.VersionID,id:c.ID})});
   if(headerEdit){headerEdit.disabled=edit?.mode==='case';headerEdit.onclick=()=>{startCaseEdit(c,isPending,'case');rerender()}}
   root.querySelectorAll('[data-edit-field]').forEach(el=>el.oninput=el.onchange=()=>{if(edit)edit.draft[el.dataset.editField]=el.value});
   root.querySelector('[data-edit-cancel]')?.addEventListener('click',()=>{caseEdits[casePane(isPending)]=null;rerender()});
@@ -197,8 +200,8 @@ function targetFolderModal(title,versionID,onSubmit,label='目标文件夹'){sho
 function mergeFolderModal(v,f){targetFolderModal('合并文件夹到主线','main',id=>act('mergeFolder',{VersionID:v,FolderID:f,TargetFolderID:id}),'主线父文件夹')}
 function mergeCasesModal(v,ids){targetFolderModal('合并用例到主线','main',id=>act('mergeCases',{VersionID:v,CaseIDs:ids,TargetFolderID:id}),'主线父文件夹')}
 function moveCasesModal(v,ids){targetFolderModal('移动用例',v,id=>act('moveCases',{VersionID:v,CaseIDs:ids,TargetFolderID:id}))}
-function caseMenu(v,id){let c=state.cases.find(x=>x.VersionID===v&&x.ID===id),items=[['查看详情',()=>setFocus({type:'case',versionID:v,id})],['测试记录',()=>openRecords(c)],['脚本生成',()=>startGeneration(v,[id],caseLabel(c))]];if(!version(v).mainline)items.push(['编辑用例',()=>{startCaseEdit(c,false,'case');setFocus({type:'case',versionID:v,id})}]);items.push(['删除用例',()=>{if(confirm('确定删除这条用例？测试记录和历史也会一并删除，且无法恢复。'))act('deleteCases',{VersionID:v,CaseIDs:[id]})}]);return items}
-function menu(e,items){e.preventDefault();let m=$('#context-menu');m.innerHTML=items.map((x,i)=>`<button data-i="${i}"${x[2]?` class="${x[2]}"`:''}>${esc(x[0])}</button>`).join('');m.style.left=Math.min(e.clientX,innerWidth-205)+'px';m.style.top=Math.min(e.clientY,innerHeight-items.length*38-10)+'px';m.classList.remove('hidden');m.querySelectorAll('button').forEach(b=>b.onclick=()=>{m.classList.add('hidden');items[+b.dataset.i][1]()})}
+function caseMenu(v,id){let c=state.cases.find(x=>x.VersionID===v&&x.ID===id),script=scriptFor(v,id),runnable=script&&script.Status!=='blocked'&&script.Code,items=[['查看详情',()=>setFocus({type:'case',versionID:v,id})],['测试记录',()=>openRecords(c)],['脚本生成',()=>startGeneration(v,[id],caseLabel(c))],['自动化执行',()=>runScriptModal(script),'',!runnable]];if(!version(v).mainline)items.push(['编辑用例',()=>{startCaseEdit(c,false,'case');setFocus({type:'case',versionID:v,id})}]);items.push(['删除用例',()=>{if(confirm('确定删除这条用例？测试记录和历史也会一并删除，且无法恢复。'))act('deleteCases',{VersionID:v,CaseIDs:[id]})}]);return items}
+function menu(e,items){e.preventDefault();let m=$('#context-menu');m.innerHTML=items.map((x,i)=>`<button data-i="${i}"${x[2]?` class="${x[2]}"`:''}${x[3]?' disabled':''}>${esc(x[0])}</button>`).join('');m.style.left=Math.min(e.clientX,innerWidth-205)+'px';m.style.top=Math.min(e.clientY,innerHeight-items.length*38-10)+'px';m.classList.remove('hidden');m.querySelectorAll('button').forEach(b=>b.onclick=()=>{if(b.disabled)return;m.classList.add('hidden');items[+b.dataset.i][1]()})}
 function showModal(title,html,save){$('#modal-title').textContent=title;$('#modal-body').innerHTML=html;modalSave=save;$('#modal').showModal()}
 function versionModal(){showModal('创建测试版本',`<label>版本名称<input name="Name" required placeholder="例如：v2.4.0 回归"></label>`,x=>act('createVersion',x))}
 function folderModal(v,parent){showModal('新建文件夹',`<label>文件夹名称<input name="Name" required></label>`,x=>act('createFolder',{...x,VersionID:v,ParentID:parent}))}
