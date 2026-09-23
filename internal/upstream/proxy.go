@@ -278,6 +278,9 @@ func disabledMessage(service string) string {
 	if service == "general-agent" {
 		return "通用 AI 服务未配置（缺少 CASEHUB_GENERAL_AGENT_URL）"
 	}
+	if service == "executor" {
+		return "脚本执行服务未配置（缺少 CASEHUB_EXECUTOR_URL）"
+	}
 	return "AI 设计服务未配置（缺少 CASEHUB_PLANNER_URL）"
 }
 
@@ -287,6 +290,9 @@ func unreachableMessage(service string) string {
 	}
 	if service == "general-agent" {
 		return "通用 AI 服务不可用："
+	}
+	if service == "executor" {
+		return "脚本执行服务不可用："
 	}
 	return "AI 设计服务不可用："
 }

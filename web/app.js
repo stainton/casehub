@@ -1147,6 +1147,7 @@ $$('.page-tab').forEach(b=>b.onclick=()=>setPage(b.dataset.app));
 // 目录结构直接取用例当前所在的文件夹，所以两棵树天然同名同构，用例移动/改名后脚本树
 // 自动跟随。树上只显示已经生成过脚本的用例，空目录不出现。
 let autoFocus=null, autoSidebarWidth=null, scriptEdit=null;
+const scriptRunResults=new Map();
 const scriptsIn=vid=>state.scripts.filter(s=>s.VersionID===vid);
 const scriptFor=(vid,caseID)=>state.scripts.find(s=>s.VersionID===vid&&s.CaseID===caseID);
 const caseOfScript=s=>state.cases.find(c=>c.VersionID===s.VersionID&&c.ID===s.CaseID);
@@ -1230,6 +1231,18 @@ function openCaseFromScript(vid,caseID){
   if(!state.cases.some(c=>c.VersionID===vid&&c.ID===caseID))return toast('对应用例已不存在',true);
   setPage('cases');setFocus({type:'case',versionID:vid,id:caseID});
 }
+function runScriptModal(s){
+  const defaults=loadGenTarget();
+  showModal('运行脚本',`<p class="meta">脚本将在 executor 服务中运行。结束后会收集步骤截图和日志，并自动整理为可下载的 Markdown 测试记录。</p><label>被测系统 URL<input name="baseUrl" type="url" required value="${esc(defaults.baseUrl||'')}" placeholder="https://test.example.com"></label>`,async values=>{
+    const job=await serviceRequest('/api/executor/jobs',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({code:s.Code,fileName:s.FileName,target:{baseUrl:values.baseUrl.trim()},title:s.Title})});
+    const key=`${s.VersionID}:${s.CaseID}`;scriptRunResults.set(key,{status:job.status,jobId:job.id});renderAutoFocus();watchScriptRun(s,job.id);toast('脚本运行任务已提交');
+  });
+}
+function watchScriptRun(s,jobID){
+  const key=`${s.VersionID}:${s.CaseID}`,source=new EventSource(`/api/executor/jobs/${jobID}/events`);
+  const update=job=>{const item=scriptRunResults.get(key)||{};scriptRunResults.set(key,{...item,status:job.status,stage:job.stage,jobId:jobID});if(autoFocus?.type==='script'&&autoFocus.versionID===s.VersionID&&autoFocus.id===s.CaseID)renderAutoFocus();if(['succeeded','failed','cancelled'].includes(job.status)){source.close();if(job.status==='succeeded')serviceRequest(`/api/executor/jobs/${jobID}/result`).then(async result=>{scriptRunResults.set(key,{status:'completed',jobId:jobID,result});await act('submitRecord',{VersionID:s.VersionID,CaseID:s.CaseID,Result:result.passed?'passed':'failed',Note:result.markdown,Submitted:true});toast(result.passed?'脚本运行通过，测试记录已保存':'脚本运行失败，测试记录已保存');if(autoFocus?.type==='script')renderAutoFocus()}).catch(e=>toast(`读取运行记录失败：${e.message}`,true));}};
+  source.addEventListener('snapshot',e=>update(JSON.parse(e.data)));source.addEventListener('progress',e=>{const event=JSON.parse(e.data);if(['succeeded','failed','cancelled'].includes(event.status))serviceRequest(`/api/executor/jobs/${jobID}`).then(update)});source.onerror=()=>{};
+}
 function setAutoFocus(x){autoFocus=x;renderScriptTree();renderAutoFocus()}
 function renderAutoFocus(){
   const box=$('#auto-detail');
@@ -1249,16 +1262,19 @@ function renderAutoFocus(){
   if(!s){autoFocus=null;return renderAutoFocus()}
   $('#auto-empty').classList.add('hidden');box.classList.remove('hidden');
   const c=caseOfScript(s),stale=scriptStale(s),blocked=s.Status==='blocked';
+  const run=scriptRunResults.get(`${s.VersionID}:${s.CaseID}`);
   const deviations=s.Deviations?.length?`<div class="card"><h3>与用例预期的实测偏差 <small class="meta">脚本按实测行为断言，并在对应行标注 // deviation:</small></h3>${aiRiskListHTML(s.Deviations.map(d=>({risk:d.Risk,summary:d.Summary})),d=>esc(d.summary))}</div>`:'';
   const staleHint=stale?`<div class="card script-stale"><b>用例内容已变更</b><p class="meta">这个脚本是按变更前的用例生成的，断言可能已经不符合当前用例。确认用例后可以重新生成。</p><p class="drawer-actions"><button type="button" id="script-regen-stale">重新生成</button></p></div>`:'';
   const editing=scriptEdit?.versionID===s.VersionID&&scriptEdit.caseID===s.CaseID;
   const body=blocked
     ?`<div class="card"><h3>未能生成脚本</h3><p>${esc(s.Summary||'生成器未说明原因')}</p><p class="meta">生成器在缺少必需输入（账号、令牌、素材等）或流程不可达时不会写出脚本，也不会用 skip/占位断言绕过。补齐所需输入后重新生成即可。</p></div>`
     :`<div class="card script-code-card"><div class="script-code-head"><b>${esc(s.FileName)}</b><span class="meta">${(editing?scriptEdit.code:s.Code).split('\n').length} 行</span>${editing?'':`<button type="button" class="secondary" id="script-copy">复制</button><button type="button" class="secondary" id="script-download">下载</button>`}</div>${editing?`<textarea class="script-editor" id="script-editor" spellcheck="false">${esc(scriptEdit.code)}</textarea><p class="drawer-actions"><button type="button" class="secondary" id="script-edit-cancel">取消</button><button type="button" id="script-edit-save">保存脚本</button></p>`:`<pre class="script-code"><code class="language-typescript">${highlightScript(s.Code)}</code></pre>`}</div>`;
-  box.innerHTML=`<div class="detail-head"><div><div class="eyebrow">${esc(s.CaseID)} · ${esc(version(s.VersionID)?.name||'')}</div><h1>${esc(s.Title||c?.Title||s.CaseID)}</h1></div><div class="detail-actions"><button class="secondary" id="script-open-case">查看用例</button>${blocked?'':`<button class="secondary" id="script-edit">编辑脚本</button>`}<button id="script-regen">重新生成</button></div></div><div class="card meta-grid"><span>状态 <b>${scriptStatusName(s)}${stale?' · 已过时':''}</b></span><span>文件 <b>${esc(s.FileName)}</b></span><span>更新时间 <b>${fmt(s.UpdatedAt)}</b></span><span>生成者 <b>${esc(s.UpdatedBy||'—')}</b></span></div>${s.Summary&&!blocked?`<div class="card"><h3>脚本验证的内容</h3><p>${esc(s.Summary)}</p></div>`:''}${staleHint}${deviations}${body}`;
+  const runCard=run?`<div class="card"><h3>脚本运行</h3><p class="meta">${run.status==='completed'?'已完成并保存为测试记录':esc(run.stage||run.status||'运行中')}</p>${run.result?`<div id="script-run-markdown"></div><p class="drawer-actions"><button type="button" class="secondary" id="script-run-download">下载 Markdown 测试记录</button></p>`:''}</div>`:'';
+  box.innerHTML=`<div class="detail-head"><div><div class="eyebrow">${esc(s.CaseID)} · ${esc(version(s.VersionID)?.name||'')}</div><h1>${esc(s.Title||c?.Title||s.CaseID)}</h1></div><div class="detail-actions"><button class="secondary" id="script-open-case">查看用例</button>${blocked?'':`<button class="secondary" id="script-edit">编辑脚本</button><button id="script-run">运行脚本</button>`}<button id="script-regen">重新生成</button></div></div><div class="card meta-grid"><span>状态 <b>${scriptStatusName(s)}${stale?' · 已过时':''}</b></span><span>文件 <b>${esc(s.FileName)}</b></span><span>更新时间 <b>${fmt(s.UpdatedAt)}</b></span><span>生成者 <b>${esc(s.UpdatedBy||'—')}</b></span></div>${s.Summary&&!blocked?`<div class="card"><h3>脚本验证的内容</h3><p>${esc(s.Summary)}</p></div>`:''}${staleHint}${deviations}${body}${runCard}`;
   $('#script-open-case').onclick=()=>openCaseFromScript(s.VersionID,s.CaseID);
   const regen=()=>startGeneration(s.VersionID,[s.CaseID],s.CaseID);
   $('#script-regen').onclick=regen;
+	$('#script-run')?.addEventListener('click',()=>runScriptModal(s));
 	$('#script-edit')?.addEventListener('click',()=>{scriptEdit={versionID:s.VersionID,caseID:s.CaseID,code:s.Code};renderAutoFocus()});
 	$('#script-edit-cancel')?.addEventListener('click',()=>{scriptEdit=null;renderAutoFocus()});
 	$('#script-edit-save')?.addEventListener('click',async()=>{const code=$('#script-editor').value;if(!code.trim())return toast('脚本内容不能为空',true);try{await act('editScript',{VersionID:s.VersionID,CaseID:s.CaseID,ScriptCode:code});scriptEdit=null;toast('脚本已保存')}catch{}});
@@ -1271,6 +1287,7 @@ function renderAutoFocus(){
     a.href=URL.createObjectURL(new Blob([s.Code],{type:'text/plain;charset=utf-8'}));
     a.download=s.FileName;a.click();URL.revokeObjectURL(a.href);
   });
+	if(run?.result){toastui.Editor.factory({el:$('#script-run-markdown'),viewer:true,initialValue:run.result.markdown,usageStatistics:false});$('#script-run-download').onclick=()=>{const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([run.result.markdown],{type:'text/markdown;charset=utf-8'}));a.download=`${s.CaseID}-测试记录.md`;a.click();URL.revokeObjectURL(a.href)}}
 }
 function updateAutoEmptyHint(){
   const collapsed=$('#auto-sidebar').classList.contains('hidden');

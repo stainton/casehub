@@ -44,6 +44,18 @@ func TestDisabledWithoutBaseURL(t *testing.T) {
 	if w.Code != http.StatusServiceUnavailable || out["error"]["code"] != "GENERATOR_DISABLED" {
 		t.Fatalf("generator proxy must report its own disabled code: status=%d body=%s", w.Code, w.Body.String())
 	}
+	handler, enabled = upstream.New("", "executor", nil, nil)
+	if enabled {
+		t.Fatal("expected disabled executor proxy")
+	}
+	w = httptest.NewRecorder()
+	handler.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/api/executor/jobs", nil))
+	if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil {
+		t.Fatal(err)
+	}
+	if w.Code != http.StatusServiceUnavailable || out["error"]["code"] != "EXECUTOR_DISABLED" {
+		t.Fatalf("executor proxy must report its own disabled code: status=%d body=%s", w.Code, w.Body.String())
+	}
 	handler, enabled = upstream.New("", "general-agent", nil, nil)
 	if enabled {
 		t.Fatal("expected disabled general-agent proxy")
@@ -74,6 +86,24 @@ func TestGeneratorPrefixIsForwardedToTheGeneratorService(t *testing.T) {
 	handler.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/api/generator/jobs", nil))
 	if gotPath != "/v1/generator/jobs" {
 		t.Fatalf("upstream path = %q, want /v1/generator/jobs", gotPath)
+	}
+}
+
+func TestExecutorPrefixIsForwardedToTheExecutorService(t *testing.T) {
+	var gotPath string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	defer server.Close()
+	handler, enabled := upstream.New(server.URL, "executor", nil, nil)
+	if !enabled {
+		t.Fatal("expected enabled proxy")
+	}
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/api/executor/jobs", nil))
+	if gotPath != "/v1/executor/jobs" {
+		t.Fatalf("upstream path = %q, want /v1/executor/jobs", gotPath)
 	}
 }
 
