@@ -154,6 +154,8 @@ type Script struct {
 	// Deviations are places where the live app contradicted the case's expected
 	// result; the spec asserts the observed behaviour (risk + short summary).
 	Deviations []RiskNote
+	// MissingInputs explains a blocked generator result in actionable terms.
+	MissingInputs []string
 	// From* snapshots the exact case text the script was generated from, so the
 	// frontend detects a stale script with a plain string comparison after the
 	// case is edited — the same mechanism as TestCase.SimplifiedFrom*.
@@ -208,6 +210,7 @@ type Action struct {
 	ScriptFileName, ScriptLanguage, ScriptCode string
 	ScriptStatus, ScriptSummary, ScriptJobID   string
 	ScriptDeviations                           []RiskNote
+	ScriptMissingInputs                        []string
 	ScriptAssetIDs                             []string
 }
 
@@ -783,6 +786,17 @@ func saveScript(s *State, a Action) error {
 			return errors.New("偏差说明不能为空")
 		}
 	}
+	if len(a.ScriptMissingInputs) > 10 || len(a.ScriptMissingInputs) > 0 && status != "blocked" {
+		return errors.New("缺少项只能用于受阻脚本，且最多 10 条")
+	}
+	for _, item := range a.ScriptMissingInputs {
+		if strings.TrimSpace(item) == "" || len([]rune(item)) > 200 {
+			return errors.New("缺少项不能为空且不能超过 200 字")
+		}
+	}
+	if status == "blocked" && len(a.ScriptMissingInputs) == 0 && strings.TrimSpace(a.ScriptSummary) == "" {
+		return errors.New("受阻脚本必须说明缺少项或原因")
+	}
 	if a.ScriptAssetIDs != nil {
 		seen := map[string]bool{}
 		for _, id := range a.ScriptAssetIDs {
@@ -815,6 +829,7 @@ func saveScript(s *State, a Action) error {
 	script.Status = status
 	script.Summary = strings.TrimSpace(a.ScriptSummary)
 	script.Deviations = append([]RiskNote(nil), a.ScriptDeviations...)
+	script.MissingInputs = append([]string(nil), a.ScriptMissingInputs...)
 	script.FromPreconditions = c.Preconditions
 	script.FromSteps = c.Steps
 	script.FromExpected = c.Expected

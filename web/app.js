@@ -1281,7 +1281,7 @@ function renderAutoFocus(){
   const editing=scriptEdit?.versionID===s.VersionID&&scriptEdit.caseID===s.CaseID;
   const scriptKey=`${s.VersionID}:${s.CaseID}`,codeExpanded=expandedScriptCode.has(scriptKey);
   const body=blocked
-    ?`<div class="card"><h3>未能生成脚本</h3><p>${esc(s.Summary||'生成器未说明原因')}</p><p class="meta">生成器在缺少必需输入（账号、令牌、素材等）或流程不可达时不会写出脚本，也不会用 skip/占位断言绕过。补齐所需输入后重新生成即可。</p></div>`
+    ?`<div class="card"><h3>未能生成脚本</h3><p>${esc(s.Summary||'生成器未说明原因')}</p>${s.MissingInputs?.length?`<h4>请补充或确认以下内容</h4><ul class="script-missing-inputs">${s.MissingInputs.map(item=>`<li>${esc(item)}</li>`).join('')}</ul>`:'<p class="meta">生成器未提供更具体的缺少项，请根据上方原因补充账号、令牌、素材或可访问的测试流程。</p>'}<p class="meta">补齐后重新生成即可。</p></div>`
     :`<div class="card script-code-card"><div class="script-code-head"><b>${esc(s.FileName)}</b><span class="meta">${(editing?scriptEdit.code:s.Code).split('\n').length} 行</span>${editing?'':`<button type="button" class="secondary" id="script-code-toggle">${codeExpanded?'折叠代码':'展开代码'}</button><button type="button" class="secondary" id="script-edit">编辑脚本</button><button type="button" class="secondary" id="script-copy">复制</button><button type="button" class="secondary" id="script-download">下载</button>`}</div>${editing?`<textarea class="script-editor" id="script-editor" spellcheck="false">${esc(scriptEdit.code)}</textarea><p class="drawer-actions"><button type="button" class="secondary" id="script-edit-cancel">取消</button><button type="button" id="script-edit-save">保存脚本</button></p>`:codeExpanded?`<div class="script-code-resize"><pre class="script-code"><code class="language-typescript">${highlightScript(s.Code)}</code></pre></div>`:`<p class="script-code-collapsed meta">代码已折叠，展开后可拖动底边调整显示高度。</p>`}</div>`;
   const runCard=run?`<div class="card"><h3>脚本运行</h3><p class="meta">${run.status==='completed'?'已完成并保存为测试记录':esc(run.stage||run.status||'运行中')}</p>${run.result?`<div id="script-run-markdown"></div><p class="drawer-actions"><button type="button" class="secondary" id="script-run-download">下载 Markdown 测试记录</button></p>`:''}</div>`:'';
   const infoCard=`<div class="card script-info-card"><div class="meta-grid"><span>状态 <b>${scriptStatusName(s)}${stale?' · 已过时':''}</b></span><span>文件 <b>${esc(s.FileName)}</b></span><span>更新时间 <b>${fmt(s.UpdatedAt)}</b></span><span>生成者 <b>${esc(s.UpdatedBy||'—')}</b></span></div>${s.Summary&&!blocked?`<div class="script-summary"><h3>脚本验证的内容</h3><p>${esc(s.Summary)}</p></div>`:''}</div>`;
@@ -1573,7 +1573,7 @@ async function importGenResult(task){
       try{
         await act('saveScript',{VersionID:task.versionID,CaseID:sc.caseId,ScriptFileName:sc.fileName,ScriptLanguage:sc.language,
           ScriptCode:sc.code||'',ScriptStatus:sc.status,ScriptSummary:sc.summary||'',ScriptJobID:task.jobId,
-          ScriptDeviations:(sc.deviations||[]).map(d=>({Risk:d.risk,Summary:d.summary})),ScriptAssetIDs:task.assetIDs});
+          ScriptDeviations:(sc.deviations||[]).map(d=>({Risk:d.risk,Summary:d.summary})),ScriptMissingInputs:sc.missingInputs||[],ScriptAssetIDs:task.assetIDs});
       }catch{failed++} // act 已提示失败原因（例如用例在生成期间被删除）
     }
     task.status='succeeded';
