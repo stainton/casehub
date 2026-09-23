@@ -604,7 +604,8 @@ const aiDesignAgents=[{id:'playwright',label:'aigc用例设计',render:renderPla
   settingsFields:agentSettingsFields}];
 // 设置弹窗里可配置的 agent：用例设计（planner）、脚本生成（generator）和通用 AI。配置都存在 CaseHub 的
 // agent 配置表里，发起任务时随请求下发，agent 据此覆写自己的 setting.json。
-const configurableAgents=[...aiDesignAgents,{id:'generator',label:'脚本生成',settingsFields:agentSettingsFields},{id:'general-agent',label:'通用 AI',settingsFields:[]}];
+const generatorSettingsFields=[...agentSettingsFields,{name:'caseTimeoutMinutes',label:'单用例生成时长（分钟）',type:'number',min:1,max:60,required:true}];
+const configurableAgents=[...aiDesignAgents,{id:'generator',label:'脚本生成',settingsFields:generatorSettingsFields},{id:'general-agent',label:'通用 AI',settingsFields:[]}];
 const agentDefaultsCache=new Map();
 async function loadAgentDefaults(id){
   const config=await request(`/api/agent-settings/${encodeURIComponent(id)}`);
@@ -1399,7 +1400,7 @@ function genValues(){
   const saved=loadGenTarget(),defaults=agentDefaultsCache.get('generator')||{};
   const pick=name=>((saved[name]??'')!==''?saved[name]:(defaults[name]??''));
   return {baseUrl:pick('baseUrl'),instructions:pick('instructions'),testAccount:pick('testAccount'),
-    testSecret:defaults.testSecret??'',reqDoc:saved.reqDoc||'auto',assetIds:saved.assetIds||[]};
+    testSecret:defaults.testSecret??'',reqDoc:saved.reqDoc||'auto',assetIds:saved.assetIds||[],caseTimeoutMinutes:defaults.caseTimeoutMinutes||10};
 }
 function genDraftHTML(){
   const v=genValues(),d=genDraft;
@@ -1415,6 +1416,7 @@ function genDraftHTML(){
       <label>补充说明（可选）<textarea name="instructions" placeholder="登录方式、数据约束、需要避免的操作等">${esc(v.instructions||'')}</textarea></label>
       <label>测试账号 · 用户名（可选）<input name="testAccount" autocomplete="off" value="${esc(v.testAccount||'')}"></label>
       <label>测试账号 · 密码（可选）<input name="testSecret" type="text" class="fake-password" autocomplete="off" spellcheck="false" value="${esc(v.testSecret||'')}"></label>
+      <label>单用例生成时长（分钟）<input name="caseTimeoutMinutes" type="number" min="1" max="60" required value="${esc(v.caseTimeoutMinutes)}"><small class="meta">探索与脚本验证共用此时长；超时后本次生成会结束。</small></label>
       <fieldset class="ai-assets"><legend>生成脚本可使用的资产（可选）</legend>${assetsCache.length?assetsCache.map(a=>`<label class="ai-asset"><input type="checkbox" name="assetIds" value="${esc(a.id)}"${v.assetIds.includes(a.id)?' checked':''}> ${esc(assetTypeLabel(a.type))} · ${esc(a.name)} <small>${assetSize(a.size)}</small></label>`).join(''):'<small class="meta">还没有资产，可在头像菜单的「资产」里上传。</small>'}<small class="meta">资产会推送给 generator，在生成脚本时按需使用；生成后的用例将关联这些资产，之后创建执行任务时会一并带上。</small></fieldset>
       <p class="drawer-actions"><button type="button" class="secondary" id="gen-cancel-draft">取消</button><button type="submit">开始生成</button></p>
     </form>
@@ -1427,7 +1429,7 @@ function bindGenDraft(){
   form.onsubmit=async e=>{
     e.preventDefault();
     const data=new FormData(form),values=Object.fromEntries(data);values.assetIds=data.getAll('assetIds');
-    if(!values.baseUrl.trim())return toast('请填写被测系统 URL',true);
+    if(!values.baseUrl.trim())return toast('请填写被测系统 URL',true);if(!Number.isInteger(Number(values.caseTimeoutMinutes))||Number(values.caseTimeoutMinutes)<1||Number(values.caseTimeoutMinutes)>60)return toast('单用例生成时长需为 1–60 分钟',true);
     saveGenTarget(values);
     const btn=form.querySelector('button[type="submit"]');btn.disabled=true;
     const d=genDraft,chunks=[];
@@ -1458,6 +1460,7 @@ function genPayload(vid,ids,values){
       precondition:c.Preconditions||'',steps:c.Steps||'',expects:c.Expected||''};
   });
   const payload={cases,target:{baseUrl:values.baseUrl.trim()},context:{}};
+  payload.caseTimeoutMs=Number(values.caseTimeoutMinutes)*60000;
   if(docs.size)payload.requirements=[...docs.values()];
   if((values.instructions||'').trim())payload.context.instructions=values.instructions.trim();
   if(values.assetIds?.length)payload.context.assetIds=values.assetIds;
