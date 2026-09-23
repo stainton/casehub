@@ -33,7 +33,7 @@ spec:
             - name: CASEHUB_AUTOMATION_URL
               value: http://automation:4501
             - name: CASEHUB_EXECUTOR_URL
-              value: http://automation:4504
+              value: http://executor:4504
             - name: CASEHUB_GENERAL_AGENT_URL
               value: http://general-agent:4503
           volumeMounts:

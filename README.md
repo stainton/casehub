@@ -144,6 +144,8 @@ planner 不会绕开约束去试；同一段文字也会参与"建议覆盖用�
 
 运行 `go test ./...` 检查业务逻辑、静态资源和 Markdown 记录持久化。
 
+Kubernetes 部署中，planner/generator 使用 `automation:4501`，脚本执行使用独立的 `executor:4504`；先部署 auto-test 的 automation 与 executor 两个 Kustomization，再部署 CaseHub。
+
 「AI 设计」抽屉的浏览器回归（评估、失败后保留表单、重试与继续）：`node tests/ai-design.cjs`，脚本自带一个假的 planner 服务（默认 127.0.0.1:4598，`CASEHUB_FAKE_PLANNER_PORT` 可改），不需要 auto-test 在场，也不调用模型；启动临时服务时把 `CASEHUB_PLANNER_URL` 指向它：`CASEHUB_STORE=memory PORT=18081 CASEHUB_PLANNER_URL=http://127.0.0.1:4598 go run .`。
 
 自动化管理与脚本生成的浏览器回归：`node tests/automation.cjs`，脚本自带一个假的 generator 服务（默认 127.0.0.1:4599，`CASEHUB_FAKE_GENERATOR_PORT` 可改），不需要 auto-test 在场，也不调用模型；启动临时服务时把 `CASEHUB_GENERATOR_URL` 指向它：`CASEHUB_STORE=memory PORT=18081 CASEHUB_GENERATOR_URL=http://127.0.0.1:4599 go run .`。
