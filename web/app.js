@@ -1146,7 +1146,7 @@ $$('.page-tab').forEach(b=>b.onclick=()=>setPage(b.dataset.app));
 // 脚本与用例一一对应，按 (版本, 用例) 存在 state.scripts 里。这里不维护第二套目录：
 // 目录结构直接取用例当前所在的文件夹，所以两棵树天然同名同构，用例移动/改名后脚本树
 // 自动跟随。树上只显示已经生成过脚本的用例，空目录不出现。
-let autoFocus=null, autoSidebarWidth=null;
+let autoFocus=null, autoSidebarWidth=null, scriptEdit=null;
 const scriptsIn=vid=>state.scripts.filter(s=>s.VersionID===vid);
 const scriptFor=(vid,caseID)=>state.scripts.find(s=>s.VersionID===vid&&s.CaseID===caseID);
 const caseOfScript=s=>state.cases.find(c=>c.VersionID===s.VersionID&&c.ID===s.CaseID);
@@ -1154,6 +1154,7 @@ const caseOfScript=s=>state.cases.find(c=>c.VersionID===s.VersionID&&c.ID===s.Ca
 // 与当前用例逐字段比较即可判断，和"阅读友好版"用的是同一套机制。
 function scriptStale(s){const c=caseOfScript(s);return !!c&&(s.FromPreconditions!==(c.Preconditions||'')||s.FromSteps!==(c.Steps||'')||s.FromExpected!==(c.Expected||''))}
 const scriptStatusName=s=>s.Status==='blocked'?'未生成（受阻）':'已生成';
+const highlightScript=code=>esc(code).replace(/(\/\/[^\n]*|`[^`]*`|'[^']*'|"[^"]*"|\b(?:import|from|const|let|await|async|return|if|else|try|catch|finally|new|true|false|null|test|expect)\b)/g,token=>token.startsWith('//')?`<span class="code-comment">${token}</span>`:token.startsWith("'")||token.startsWith('"')||token.startsWith('`')?`<span class="code-string">${token}</span>`:`<span class="code-keyword">${token}</span>`);
 function scriptBadges(s){
   return `${s.Status==='blocked'?'<span class="result failed" title="受阻未生成"></span>':'<span class="result passed" title="已生成"></span>'}${scriptStale(s)?'<span class="risk-tag risk-medium script-stale-tag" title="用例内容已变更">过时</span>':''}`;
 }
@@ -1250,13 +1251,17 @@ function renderAutoFocus(){
   const c=caseOfScript(s),stale=scriptStale(s),blocked=s.Status==='blocked';
   const deviations=s.Deviations?.length?`<div class="card"><h3>与用例预期的实测偏差 <small class="meta">脚本按实测行为断言，并在对应行标注 // deviation:</small></h3>${aiRiskListHTML(s.Deviations.map(d=>({risk:d.Risk,summary:d.Summary})),d=>esc(d.summary))}</div>`:'';
   const staleHint=stale?`<div class="card script-stale"><b>用例内容已变更</b><p class="meta">这个脚本是按变更前的用例生成的，断言可能已经不符合当前用例。确认用例后可以重新生成。</p><p class="drawer-actions"><button type="button" id="script-regen-stale">重新生成</button></p></div>`:'';
+  const editing=scriptEdit?.versionID===s.VersionID&&scriptEdit.caseID===s.CaseID;
   const body=blocked
     ?`<div class="card"><h3>未能生成脚本</h3><p>${esc(s.Summary||'生成器未说明原因')}</p><p class="meta">生成器在缺少必需输入（账号、令牌、素材等）或流程不可达时不会写出脚本，也不会用 skip/占位断言绕过。补齐所需输入后重新生成即可。</p></div>`
-    :`<div class="card script-code-card"><div class="script-code-head"><b>${esc(s.FileName)}</b><span class="meta">${s.Code.split('\n').length} 行</span><button type="button" class="secondary" id="script-copy">复制</button><button type="button" class="secondary" id="script-download">下载</button></div><pre class="script-code">${esc(s.Code)}</pre></div>`;
-  box.innerHTML=`<div class="detail-head"><div><div class="eyebrow">${esc(s.CaseID)} · ${esc(version(s.VersionID)?.name||'')}</div><h1>${esc(s.Title||c?.Title||s.CaseID)}</h1></div><div class="detail-actions"><button class="secondary" id="script-open-case">查看用例</button><button id="script-regen">重新生成</button></div></div><div class="card meta-grid"><span>状态 <b>${scriptStatusName(s)}${stale?' · 已过时':''}</b></span><span>文件 <b>${esc(s.FileName)}</b></span><span>更新时间 <b>${fmt(s.UpdatedAt)}</b></span><span>生成者 <b>${esc(s.UpdatedBy||'—')}</b></span></div>${s.Summary&&!blocked?`<div class="card"><h3>脚本验证的内容</h3><p>${esc(s.Summary)}</p></div>`:''}${staleHint}${deviations}${body}`;
+    :`<div class="card script-code-card"><div class="script-code-head"><b>${esc(s.FileName)}</b><span class="meta">${(editing?scriptEdit.code:s.Code).split('\n').length} 行</span>${editing?'':`<button type="button" class="secondary" id="script-copy">复制</button><button type="button" class="secondary" id="script-download">下载</button>`}</div>${editing?`<textarea class="script-editor" id="script-editor" spellcheck="false">${esc(scriptEdit.code)}</textarea><p class="drawer-actions"><button type="button" class="secondary" id="script-edit-cancel">取消</button><button type="button" id="script-edit-save">保存脚本</button></p>`:`<pre class="script-code"><code class="language-typescript">${highlightScript(s.Code)}</code></pre>`}</div>`;
+  box.innerHTML=`<div class="detail-head"><div><div class="eyebrow">${esc(s.CaseID)} · ${esc(version(s.VersionID)?.name||'')}</div><h1>${esc(s.Title||c?.Title||s.CaseID)}</h1></div><div class="detail-actions"><button class="secondary" id="script-open-case">查看用例</button>${blocked?'':`<button class="secondary" id="script-edit">编辑脚本</button>`}<button id="script-regen">重新生成</button></div></div><div class="card meta-grid"><span>状态 <b>${scriptStatusName(s)}${stale?' · 已过时':''}</b></span><span>文件 <b>${esc(s.FileName)}</b></span><span>更新时间 <b>${fmt(s.UpdatedAt)}</b></span><span>生成者 <b>${esc(s.UpdatedBy||'—')}</b></span></div>${s.Summary&&!blocked?`<div class="card"><h3>脚本验证的内容</h3><p>${esc(s.Summary)}</p></div>`:''}${staleHint}${deviations}${body}`;
   $('#script-open-case').onclick=()=>openCaseFromScript(s.VersionID,s.CaseID);
   const regen=()=>startGeneration(s.VersionID,[s.CaseID],s.CaseID);
   $('#script-regen').onclick=regen;
+	$('#script-edit')?.addEventListener('click',()=>{scriptEdit={versionID:s.VersionID,caseID:s.CaseID,code:s.Code};renderAutoFocus()});
+	$('#script-edit-cancel')?.addEventListener('click',()=>{scriptEdit=null;renderAutoFocus()});
+	$('#script-edit-save')?.addEventListener('click',async()=>{const code=$('#script-editor').value;if(!code.trim())return toast('脚本内容不能为空',true);try{await act('editScript',{VersionID:s.VersionID,CaseID:s.CaseID,ScriptCode:code});scriptEdit=null;toast('脚本已保存')}catch{}});
   $('#script-regen-stale')?.addEventListener('click',regen);
   $('#script-copy')?.addEventListener('click',async()=>{
     try{await navigator.clipboard.writeText(s.Code);toast('脚本已复制')}catch{toast('复制失败，请手动选择复制',true)}

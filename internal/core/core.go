@@ -407,6 +407,8 @@ func (s *Service) Apply(ctx context.Context, a Action) (Result, error) {
 		err = simplifyCase(&st, a)
 	case "saveScript":
 		err = saveScript(&st, a)
+	case "editScript":
+		err = editScript(&st, a)
 	case "deleteScripts":
 		err = deleteScripts(&st, a)
 	case "deletePendingCases":
@@ -804,6 +806,31 @@ func saveScript(s *State, a Action) error {
 	script.UpdatedBy = a.Author
 	script.UpdatedAt = t
 	return nil
+}
+
+// editScript changes only the authored source. Its From* snapshots remain the
+// generator input, so the UI can still tell when the underlying case later
+// changes and needs regeneration.
+func editScript(s *State, a Action) error {
+	if v, _ := versionAt(s, a.VersionID); v == nil {
+		return errors.New("版本不存在")
+	}
+	code := strings.TrimSpace(a.ScriptCode)
+	if code == "" || len(code) > 120000 {
+		return errors.New("脚本内容不能为空且不能超过 120000 字符")
+	}
+	for i := range s.Scripts {
+		if s.Scripts[i].VersionID == a.VersionID && s.Scripts[i].CaseID == a.CaseID {
+			if s.Scripts[i].Status == "blocked" {
+				return errors.New("受阻脚本不能编辑，请重新生成")
+			}
+			s.Scripts[i].Code = code
+			s.Scripts[i].UpdatedBy = a.Author
+			s.Scripts[i].UpdatedAt = now()
+			return nil
+		}
+	}
+	return errors.New("脚本不存在")
 }
 
 // deleteScripts removes the scripts of the given cases in one version. Unlike

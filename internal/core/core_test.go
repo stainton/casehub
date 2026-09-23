@@ -1393,3 +1393,19 @@ func TestRequirementExplorationNotesPersistSeparatelyFromRequirementText(t *test
 		t.Fatal("editing requirement content must retain exploration record for a later redesign")
 	}
 }
+
+func TestEditScriptKeepsGenerationSnapshots(t *testing.T) {
+	service := core.NewService(store.NewMemory())
+	state := apply(t, service, core.Action{Type: "createVersion", Name: "脚本编辑", Author: "alice"})
+	branch := branchID(t, state, "脚本编辑")
+	state = apply(t, service, core.Action{Type: "saveScript", VersionID: branch, CaseID: "CASE-0001", ScriptCode: "import { test } from '@playwright/test';\ntest('old', async () => {});", Author: "agent"})
+	before := state.Scripts[0]
+	state = apply(t, service, core.Action{Type: "editScript", VersionID: branch, CaseID: "CASE-0001", ScriptCode: "import { test } from '@playwright/test';\ntest('edited', async () => {});", Author: "alice"})
+	after := state.Scripts[0]
+	if after.Code == before.Code || after.UpdatedBy != "alice" {
+		t.Fatalf("script edit was not saved: %+v", after)
+	}
+	if after.FromSteps != before.FromSteps || after.JobID != before.JobID {
+		t.Fatalf("script edit must keep generator snapshots: before=%+v after=%+v", before, after)
+	}
+}
