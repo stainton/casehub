@@ -70,6 +70,9 @@ type TestCase struct {
 	SimplifiedPreconditions, SimplifiedSteps, SimplifiedExpected             string
 	SimplifiedFromPreconditions, SimplifiedFromSteps, SimplifiedFromExpected string
 	SimplifiedAt                                                             time.Time
+	// AssetIDs are files selected when this case's automation script was generated.
+	// They travel with a later execution task so the runner can recreate its inputs.
+	AssetIDs []string
 }
 
 type History struct {
@@ -88,6 +91,7 @@ type Record struct {
 type Task struct {
 	ID, VersionID, Name, CreatedBy string
 	CaseIDs                        []string
+	AssetIDs                       []string
 	CreatedAt                      time.Time
 }
 
@@ -204,6 +208,7 @@ type Action struct {
 	ScriptFileName, ScriptLanguage, ScriptCode string
 	ScriptStatus, ScriptSummary, ScriptJobID   string
 	ScriptDeviations                           []RiskNote
+	ScriptAssetIDs                             []string
 }
 
 type Result struct {
@@ -778,6 +783,17 @@ func saveScript(s *State, a Action) error {
 			return errors.New("偏差说明不能为空")
 		}
 	}
+	if a.ScriptAssetIDs != nil {
+		seen := map[string]bool{}
+		for _, id := range a.ScriptAssetIDs {
+			id = strings.TrimSpace(id)
+			if id == "" || seen[id] {
+				return errors.New("脚本资产不能为空且不能重复")
+			}
+			seen[id] = true
+		}
+		c.AssetIDs = append([]string(nil), a.ScriptAssetIDs...)
+	}
 	fileName := strings.TrimSpace(a.ScriptFileName)
 	if fileName == "" {
 		fileName = c.ID + ".spec.ts"
@@ -923,6 +939,7 @@ func createTask(s *State, a Action) error {
 		return errors.New("任务名称和用例不能为空")
 	}
 	seen := map[string]bool{}
+	assets, assetSeen := []string{}, map[string]bool{}
 	for _, id := range a.CaseIDs {
 		if seen[id] {
 			return errors.New("任务内用例不能重复")
@@ -930,9 +947,16 @@ func createTask(s *State, a Action) error {
 		seen[id] = true
 		if c, _ := caseAt(s, a.VersionID, id); c == nil {
 			return fmt.Errorf("用例 %s 不属于当前版本", id)
+		} else {
+			for _, assetID := range c.AssetIDs {
+				if !assetSeen[assetID] {
+					assetSeen[assetID] = true
+					assets = append(assets, assetID)
+				}
+			}
 		}
 	}
-	s.Tasks = append(s.Tasks, Task{ID: ID(), VersionID: a.VersionID, Name: strings.TrimSpace(a.Name), CreatedBy: a.Author, CaseIDs: append([]string(nil), a.CaseIDs...), CreatedAt: now()})
+	s.Tasks = append(s.Tasks, Task{ID: ID(), VersionID: a.VersionID, Name: strings.TrimSpace(a.Name), CreatedBy: a.Author, CaseIDs: append([]string(nil), a.CaseIDs...), AssetIDs: assets, CreatedAt: now()})
 	return nil
 }
 func syncVersion(s *State, a Action) ([]string, error) {

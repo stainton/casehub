@@ -1287,7 +1287,7 @@ func TestSaveScriptUpsertsPerCaseAndTracksSourceText(t *testing.T) {
 	state := apply(t, service, core.Action{Type: "createVersion", Name: "v1"})
 	branch := branchID(t, state, "v1")
 	state = apply(t, service, core.Action{Type: "saveScript", VersionID: branch, CaseID: "CASE-0001",
-		ScriptCode: "import { test } from '@playwright/test';", ScriptSummary: "验证登录成功", ScriptJobID: "job-1",
+		ScriptCode: "import { test } from '@playwright/test';", ScriptSummary: "验证登录成功", ScriptJobID: "job-1", ScriptAssetIDs: []string{"asset-login"},
 		ScriptDeviations: []core.RiskNote{{Risk: "medium", Summary: "错误提示文案不同"}}})
 	script := scriptFor(t, state, branch, "CASE-0001")
 	if script.FileName != "CASE-0001.spec.ts" || script.Language != "typescript" || script.Status != "generated" {
@@ -1299,6 +1299,13 @@ func TestSaveScriptUpsertsPerCaseAndTracksSourceText(t *testing.T) {
 	}
 	if script.Title != source.Title || len(script.Deviations) != 1 {
 		t.Fatalf("script lost its case title or deviations: %+v", script)
+	}
+	if len(source.AssetIDs) != 1 || source.AssetIDs[0] != "asset-login" {
+		t.Fatalf("script assets were not associated with its case: %+v", source.AssetIDs)
+	}
+	state = apply(t, service, core.Action{Type: "createTask", VersionID: branch, Name: "带资产的任务", CaseIDs: []string{"CASE-0001"}})
+	if got := state.Tasks[len(state.Tasks)-1].AssetIDs; len(got) != 1 || got[0] != "asset-login" {
+		t.Fatalf("task did not carry its cases' assets: %+v", got)
 	}
 
 	// Regenerating replaces in place: one case has exactly one script.
