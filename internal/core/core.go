@@ -99,6 +99,10 @@ type ReqFolder struct {
 type ReqDoc struct {
 	ID, FolderID   string
 	Title, Content string
+	// ExplorationNotes is the reusable, requirement-scoped experience returned
+	// by the combined automation service after design or script generation.
+	// It is intentionally separate from the human-authored requirement content.
+	ExplorationNotes string
 	// Code is the confirmed requirement abbreviation (e.g. LOGIN) used as the
 	// second segment of AI-designed case IDs TC-<Code>-<MODULE>-<CATEGORY>-NNN.
 	Code                 string
@@ -186,6 +190,7 @@ type Action struct {
 	CaseIDs                                             []string
 	Submitted, Force                                    bool
 	DocID, Content, Code                                string
+	ExplorationNotes                                    string
 	Review                                              string
 	TargetFolderID                                      string
 	// importPendingCases: the review folder mapped onto TargetFolderID; its
@@ -424,6 +429,8 @@ func (s *Service) Apply(ctx context.Context, a Action) (Result, error) {
 		err = setReqDocCode(&st, a)
 	case "editReqDoc":
 		err = editReqDoc(&st, a)
+	case "saveReqExploration":
+		err = saveReqExploration(&st, a)
 	case "deleteReqFolder":
 		err = deleteReqFolder(&st, a)
 	case "deleteReqDoc":
@@ -1577,6 +1584,20 @@ func editReqDoc(s *State, a Action) error {
 	d.Content = a.Content
 	d.UpdatedBy = a.Author
 	d.UpdatedAt = now()
+	return nil
+}
+
+func saveReqExploration(s *State, a Action) error {
+	d, _ := reqDocAt(s, a.DocID)
+	if d == nil {
+		return errors.New("需求文档不存在")
+	}
+	// A model's bounded result is retained verbatim so it can be passed back to
+	// the service without a lossy UI transformation on the next run.
+	if len(a.ExplorationNotes) > 200000 {
+		return errors.New("探索记录过长")
+	}
+	d.ExplorationNotes = a.ExplorationNotes
 	return nil
 }
 func deleteReqFolder(s *State, a Action) error {

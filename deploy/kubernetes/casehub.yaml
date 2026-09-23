@@ -30,10 +30,8 @@ spec:
             - name: DATABASE_URL
               # Set a PostgreSQL URL here, or leave empty for local file storage.
               value: ""
-            - name: CASEHUB_PLANNER_URL
-              value: http://planner:4501
-            - name: CASEHUB_GENERATOR_URL
-              value: http://generator:4502
+            - name: CASEHUB_AUTOMATION_URL
+              value: http://automation:4501
             - name: CASEHUB_GENERAL_AGENT_URL
               value: http://general-agent:4503
           volumeMounts:

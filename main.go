@@ -132,8 +132,12 @@ func main() {
 	port := env("PORT", "8080")
 	svc := core.NewService(repo)
 	lookup := assetSource(svc)
-	plannerProxy, plannerEnabled := upstream.New(env("CASEHUB_PLANNER_URL", "http://localhost:4501"), "planner", agentSettingsOf(svc, "planner"), lookup)
-	generatorProxy, generatorEnabled := upstream.New(env("CASEHUB_GENERATOR_URL", "http://localhost:4502"), "generator", agentSettingsOf(svc, "generator"), lookup)
+	// Planner and generator are separate routes of one automation service. Keep
+	// their proxy names so the browser/API contract and independent settings stay
+	// stable while they share browser runtime and exploration experience.
+	automationURL := env("CASEHUB_AUTOMATION_URL", env("CASEHUB_PLANNER_URL", "http://localhost:4501"))
+	plannerProxy, plannerEnabled := upstream.New(automationURL, "planner", agentSettingsOf(svc, "planner"), lookup)
+	generatorProxy, generatorEnabled := upstream.New(automationURL, "generator", agentSettingsOf(svc, "generator"), nil)
 	generalAgentProxy, generalAgentEnabled := upstream.New(env("CASEHUB_GENERAL_AGENT_URL", "http://localhost:4503"), "general-agent", agentSettingsOf(svc, "general-agent"), nil)
 	log.Printf("CaseHub listening on :%s (store=%s, planner=%v, generator=%v, general-agent=%v)", port, kind, plannerEnabled, generatorEnabled, generalAgentEnabled)
 	log.Fatal(http.ListenAndServe(":"+port, routes(&api{service: svc},

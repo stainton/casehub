@@ -81,6 +81,7 @@ http://<可访问的节点 IP>:30080
 | `DATABASE_URL` | — | PostgreSQL 连接串；可通过 `-database-url` 启动参数覆盖 |
 | `CASEHUB_PLANNER_URL` | `http://localhost:4501` | auto-test planner 服务地址；Kubernetes 清单使用 `http://planner:4501` |
 | `CASEHUB_GENERATOR_URL` | `http://localhost:4502` | auto-test generator 服务地址；Kubernetes 中为 `http://generator:4502` |
+| `CASEHUB_AUTOMATION_URL` | — | 合并后的 auto-test automation 服务地址；设置后 planner 与 generator 均通过此地址访问（默认 `http://localhost:4501`） |
 | `CASEHUB_GENERAL_AGENT_URL` | `http://localhost:4503` | auto-test general-agent 服务地址；Kubernetes 中为 `http://general-agent:4503` |
 
 当前默认主线带有两条示例用例，因为设计文档尚未定义首次导入主线的来源与格式。
@@ -126,6 +127,8 @@ planner 不会绕开约束去试；同一段文字也会参与"建议覆盖用�
 `continuable` 时才出现，超时失败最常见）。两条路都会带出上次提交的表单——URL、补充说明、测试账号、用例数量、需求缩写和超时
 时间都保存在浏览器里，刷新、关标签页后仍在，因此「继续」前可以先把超时时间调大。只有测试账号密码不写进浏览器存储，刷新后
 需要重填，表单里会提示。失败任务本身也留在浏览器里，刷新后重新打开抽屉仍能看到失败原因和这两个按钮。
+
+每份需求文档还保存独立的探索记录：AI 设计完成时 CaseHub 保存 planner 返回的记录；脚本生成完成时保存 generator 按需求返回的记录。下一次针对同一需求设计用例或生成脚本时，CaseHub 会将该记录随请求带回 automation 服务，减少对已知入口、控件和路径的重复探索。
 
 脚本生成对应 auto-test 的另一个独立服务：准备 `build/generator/setting.json` 后运行 `node server/generator/main.mjs`（默认 4502），CaseHub 通过 `CASEHUB_GENERATOR_URL` 连接。general-agent（默认 4503）提供不带 Playwright 的通用 Claude CLI 调用，CaseHub 当前用它生成阅读友好版，通过 `CASEHUB_GENERAL_AGENT_URL` 连接。三个服务相互独立，可以只启动所需服务；未配置时对应入口会提示服务未配置，其余功能不受影响。
 

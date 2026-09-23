@@ -1381,3 +1381,15 @@ func TestCreatingAVersionDoesNotCopyScripts(t *testing.T) {
 		}
 	}
 }
+
+func TestRequirementExplorationNotesPersistSeparatelyFromRequirementText(t *testing.T) {
+	service := core.NewService(store.NewMemory())
+	state := apply(t, service, core.Action{Type: "saveReqExploration", DocID: "REQ-0001", ExplorationNotes: "登录入口在 /login；错误提示在表单下方", Author: "agent"})
+	if state.ReqDocs[0].ExplorationNotes == "" {
+		t.Fatal("exploration record was not saved")
+	}
+	state = apply(t, service, core.Action{Type: "editReqDoc", DocID: "REQ-0001", Title: state.ReqDocs[0].Title, Content: "新的需求正文", Author: "alice"})
+	if state.ReqDocs[0].ExplorationNotes == "" {
+		t.Fatal("editing requirement content must retain exploration record for a later redesign")
+	}
+}
