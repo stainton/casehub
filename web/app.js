@@ -1407,7 +1407,7 @@ function genValues(){
   const saved=loadGenTarget(),defaults=agentDefaultsCache.get('generator')||{};
   const pick=name=>((saved[name]??'')!==''?saved[name]:(defaults[name]??''));
   return {baseUrl:pick('baseUrl'),instructions:pick('instructions'),testAccount:pick('testAccount'),
-    testSecret:defaults.testSecret??'',reqDoc:saved.reqDoc||'auto',assetIds:saved.assetIds||[],caseTimeoutMinutes:defaults.caseTimeoutMinutes||10};
+    testSecret:defaults.testSecret??'',reqDoc:saved.reqDoc||'auto',assetIds:saved.assetIds||[],caseTimeoutMinutes:defaults.caseTimeoutMinutes||30};
 }
 function genDraftHTML(){
   const v=genValues(),d=genDraft;
