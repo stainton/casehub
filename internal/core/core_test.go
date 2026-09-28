@@ -836,6 +836,9 @@ func TestPendingCaseReviewAndImport(t *testing.T) {
 			t.Fatalf("review was not recorded: %+v", c)
 		}
 	}
+	if _, err := svc.Apply(context.Background(), core.Action{Type: "reviewPendingCase", CaseID: pending.ID, Review: "passed", Author: "bob"}); err == nil {
+		t.Fatal("an approved pending case must not be approvable again")
+	}
 	state = apply(t, svc, core.Action{Type: "editPendingCase", CaseID: pending.ID, Title: "退款成功（重审）", Priority: "P1", Author: "alice"})
 	for _, c := range state.PendingCases {
 		if c.ID == pending.ID && c.Review != "" {

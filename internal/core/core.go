@@ -1937,6 +1937,9 @@ func reviewPendingCase(s *State, a Action) error {
 	if a.Review != "passed" && a.Review != "rejected" {
 		return errors.New("评审结果必须是通过或不通过")
 	}
+	if a.Review == "passed" && c.Review == "passed" {
+		return errors.New("用例已评审通过")
+	}
 	c.Review = a.Review
 	c.ReviewedBy = a.Author
 	c.ReviewedAt = now()
