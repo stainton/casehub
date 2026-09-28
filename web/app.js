@@ -7,6 +7,7 @@ function saveClosedFolders(){try{localStorage.setItem(CLOSED_FOLDERS_KEY,JSON.st
 let state=null, focus=null, selected=new Map(), view='cases', modalSave=null, recordCase=null, recordTask='', recordEditor=null, recordViewers=[], recordHistoryLimit=3;
 let openTasks=new Set(), closedTaskVersions=new Set(), closedFolders=loadSet(CLOSED_FOLDERS_KEY), openMainlineFolders=loadSet(OPEN_MAINLINE_FOLDERS_KEY), closedReqFolders=new Set(), closedReviewFolders=new Set(), closedVersions=loadClosedVersions();
 let page='cases', reqFocus=null, reqEditor=null, reqSidebarWidth=null, aiDoc=null, reqPage='docs';
+let issueFocus=null, issueDescriptionEditor=null, issueCauseEditor=null, issueViewers=[];
 let aiSource=null, aiPlannerEnabled=null;
 let caseViewMode='friendly'; // 'friendly' | 'raw' — applies to whichever case detail is currently shown
 let caseViewFor=null; // simplifyKey of the case caseViewMode was chosen for; opening another case re-picks the default
@@ -14,10 +15,10 @@ const esc=s=>String(s??'').replace(/[&<>'"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&
 const fmt=s=>s?new Date(s).toLocaleString():'—';
 const version=id=>state.versions.find(v=>v.id===id), folders=id=>state.folders.filter(f=>f.VersionID===id), cases=id=>state.cases.filter(c=>c.VersionID===id);
 async function request(path,options){let r=await fetch(path,options),x=await r.json();if(!r.ok){let e=Error(x.error||'请求失败');e.status=r.status;e.conflicts=x.conflicts;throw e}return x}
-function normalizeState(s){s=s||{};for(const key of ['versions','folders','cases','histories','records','tasks','reqFolders','reqDocs','pendingFolders','pendingCases','scripts'])if(!Array.isArray(s[key]))s[key]=[];return s}
+function normalizeState(s){s=s||{};for(const key of ['versions','folders','cases','histories','records','tasks','reqFolders','reqDocs','issues','pendingFolders','pendingCases','scripts'])if(!Array.isArray(s[key]))s[key]=[];return s}
 async function refresh(){state=normalizeState(await request('/api/state'));let changed=false;state.folders.filter(f=>f.VersionID==='main').forEach(f=>{const key=`main:${f.ID}`;if(!openMainlineFolders.has(key)&&!closedFolders.has(key)){closedFolders.add(key);changed=true}});if(changed)saveClosedFolders();render();}
 async function act(type,data={},retry=false){try{let out=await request('/api/action',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({Type:type,Author:'本地用户',...data})});state=normalizeState(out.state);if(out.warnings?.length)toast(out.warnings.join('；'));render();return out}catch(e){if(e.status===409&&type.startsWith('merge')){alert(`${e.message}\n冲突用例：${(e.conflicts||[]).join(', ')}\n请拉取主线，然后打开冲突用例编辑并确认人工处理。`)}else if(e.status===409&&!retry&&confirm(`${e.message}\n冲突用例：${(e.conflicts||[]).join(', ')}\n是否以当前编辑内容作为人工解决结果？`))return act(type,{...data,Force:true},true);toast(e.message,true);throw e}}
-function render(){ renderVersions();renderTasks();renderFocus();if(recordTask)$('#edit-case')?.remove();updateBulk();if(location.hash)renderHistoryRoute();renderReqTree();renderReviewTree();renderScriptTree();renderAutoFocus(); }
+function render(){ renderVersions();renderTasks();renderFocus();if(recordTask)$('#edit-case')?.remove();updateBulk();if(location.hash)renderHistoryRoute();renderReqTree();renderReviewTree();renderScriptTree();renderAutoFocus();renderIssueList();renderIssueFocus(); }
 function renderVersions(){let box=$('#versions');box.innerHTML=state.versions.map(v=>`<div class="version" data-version="${v.id}"><div class="version-title"><span class="chev">⌄</span><span>${esc(v.name)}</span><span class="badge">${v.mainline?'只读主线':'测试版本'}</span>${v.mainline?'':`<span class="version-actions"><button data-sync="${v.id}">拉取主线</button><button data-merge="${v.id}">合并</button><button data-delete-version="${v.id}" class="danger">删除</button></span>`}</div><div class="version-body">${tree(v.id)}</div></div>`).join('');bindTree(box);}
 function tree(vid,onlyIDs=null,taskID=''){let fs=folders(vid),cs=cases(vid),roots=fs.filter(f=>!f.ParentID||!fs.some(x=>x.ID===f.ParentID));let branch=!version(vid).mainline,showCheck=branch&&!taskID;function node(f,depth){let children=fs.filter(x=>x.ParentID===f.ID),own=cs.filter(c=>c.FolderID===f.ID);let visible=!onlyIDs||own.some(c=>onlyIDs.has(c.ID))||children.some(ch=>hasHit(ch));if(!visible)return'';return `<div class="tree-row folder-row" style="padding-left:${8+depth*17}px" data-folder="${f.ID}" data-version="${vid}">${showCheck?'<input class="folder-check" type="checkbox">':''}<span class="chev">▾</span><span>📁</span><span class="label">${esc(f.Name)}</span></div><div>${own.filter(c=>!onlyIDs||onlyIDs.has(c.ID)).map(c=>caseRow(c,depth+1,branch&&!taskID,taskID)).join('')}${children.map(ch=>node(ch,depth+1)).join('')}</div>`}function hasHit(f){return cs.some(c=>c.FolderID===f.ID&&onlyIDs.has(c.ID))||fs.filter(x=>x.ParentID===f.ID).some(hasHit)}return roots.map(r=>node(r,0)).join('')||'<p class="meta">空版本</p>'}
 // 用例树（版本树、测试任务、用例评审）显示"<用例编号> <用例名称>"，完整内容也放在悬停提示里（名称过长会被截断）。
@@ -308,8 +309,9 @@ function bindResizer(handleSel,collapseSel,cssVar){$(handleSel).onmousedown=()=>
 bindResizer('#resize-left','#collapse','--side');
 bindResizer('#req-resize-left','#req-collapse','--req-side');
 bindResizer('#auto-resize-left','#auto-collapse','--auto-side');
+bindResizer('#issue-resize-left',null,'--issue-side');
 document.onmousemove=e=>{if(resizing){lastX=e.clientX;document.documentElement.style.setProperty(resizeVar,Math.max(0,Math.min(600,e.clientX))+'px')}};
-document.onmouseup=()=>{if(resizing&&lastX<70)$(resizeCollapse).click();else if(resizing&&lastX<220)document.documentElement.style.setProperty(resizeVar,'220px');resizing=false;$$('.resizer').forEach(r=>r.classList.remove('dragging'))};
+document.onmouseup=()=>{if(resizing&&lastX<70&&resizeCollapse)$(resizeCollapse).click();else if(resizing&&lastX<220)document.documentElement.style.setProperty(resizeVar,'220px');resizing=false;$$('.resizer').forEach(r=>r.classList.remove('dragging'))};
 document.documentElement.classList.toggle('dark',localStorage.getItem('casehub-theme')==='dark');
 window.addEventListener('hashchange',renderHistoryRoute);
 refresh().then(resumeGenTasks).catch(e=>toast(e.message,true));
@@ -1153,16 +1155,61 @@ function setReqSidebarCollapsed(collapsed){
 $('#req-collapse').onclick=()=>setReqSidebarCollapsed(true);
 $('#req-expand').onclick=$('#req-empty-expand').onclick=()=>setReqSidebarCollapsed(false);
 
+// ---- 问题单管理 -----------------------------------------------------------
+const issueByID=id=>state.issues.find(issue=>issue.ID===id);
+const issueRequirement=issue=>state.reqDocs.find(doc=>doc.ID===issue.RequirementID);
+function issueStatus(issue){return issue.Resolved?'已解决':'待解决'}
+function disposeIssueEditors(){issueDescriptionEditor?.destroy();issueCauseEditor?.destroy();issueDescriptionEditor=null;issueCauseEditor=null;issueViewers.forEach(viewer=>viewer.destroy());issueViewers=[];}
+function renderIssueList(){
+  const list=$('#issue-list');if(!list)return;
+  const issues=[...state.issues].sort((a,b)=>String(b.UpdatedAt).localeCompare(String(a.UpdatedAt)));
+  list.innerHTML=issues.length?issues.map(issue=>`<div class="tree-row issue-row${issueFocus?.id===issue.ID?' active':''}" data-issue="${esc(issue.ID)}"><span>🐞</span><span class="label"><b>${esc(issue.Title)}</b><small>${esc(issue.ID)} · ${esc(issueRequirement(issue)?.Title||'关联需求已删除')}</small></span><span class="badge ${issue.Resolved?'issue-status-resolved':'issue-status-open'}">${issueStatus(issue)}</span></div>`).join(''):'<p class="meta">暂无问题单</p>';
+  list.querySelectorAll('[data-issue]').forEach(row=>{row.onclick=()=>{issueFocus={type:'issue',id:row.dataset.issue};renderIssueList();renderIssueFocus()};row.oncontextmenu=event=>menu(event,[['查看详情',()=>{issueFocus={type:'issue',id:row.dataset.issue};renderIssueList();renderIssueFocus()}],['编辑',()=>startIssueEdit(issueByID(row.dataset.issue))],['删除',()=>deleteIssue(issueByID(row.dataset.issue))]])});
+}
+function startIssueCreate(){issueFocus={type:'create'};renderIssueList();renderIssueFocus()}
+function startIssueEdit(issue){if(!issue)return;issueFocus={type:'issue',id:issue.ID,editing:true};renderIssueList();renderIssueFocus()}
+async function deleteIssue(issue){if(!issue||!confirm(`确定删除问题单「${issue.Title}」？`))return;await act('deleteIssue',{IssueID:issue.ID});if(issueFocus?.id===issue.ID)issueFocus=null;renderIssueList();renderIssueFocus();}
+function issueEditor(el,value,height){return new toastui.Editor({el,height,initialEditType:'wysiwyg',previewStyle:'tab',initialValue:value||'',language:'zh-CN',theme:document.documentElement.classList.contains('dark')?'dark':'light',usageStatistics:false,autofocus:false});}
+function issueFormHTML(issue){
+  const docs=state.reqDocs.map(doc=>`<option value="${esc(doc.ID)}"${issue?.RequirementID===doc.ID?' selected':''}>${esc(doc.Title)}${doc.Code?`（${esc(doc.Code)}）`:''}</option>`).join('');
+  return `<div class="detail-head"><div><div class="eyebrow">${issue?'编辑问题单':'新建问题单'}</div><h1>${issue?esc(issue.ID):'新建问题单'}</h1></div><div class="detail-actions"><button type="button" class="secondary" id="issue-cancel">取消</button><button type="button" id="issue-save">保存</button></div></div><div class="card"><div class="issue-form-meta"><label>标题<input id="issue-title" required value="${esc(issue?.Title||'')}"></label><label>关联需求<select id="issue-requirement" required>${docs}</select></label></div><label><input type="checkbox" id="issue-resolved" ${issue?.Resolved?'checked':''}> 已解决</label><div class="issue-editor-label">问题描述</div><div id="issue-description-editor"></div><div class="issue-editor-label">问题根因（可选）</div><div id="issue-cause-editor"></div></div>`;
+}
+function renderIssueFocus(){
+  const empty=$('#issue-empty'),detail=$('#issue-detail');if(!empty||!detail)return;
+  disposeIssueEditors();
+  if(!issueFocus){empty.classList.remove('hidden');detail.classList.add('hidden');return;}
+  empty.classList.add('hidden');detail.classList.remove('hidden');
+  const issue=issueFocus.type==='issue'?issueByID(issueFocus.id):null;
+  if(issueFocus.type==='issue'&&!issue){issueFocus=null;return renderIssueFocus();}
+  if(issueFocus.type==='create'||issueFocus.editing){
+    if(!state.reqDocs.length){issueFocus=null;empty.classList.remove('hidden');detail.classList.add('hidden');toast('请先创建需求文档，再新建问题单',true);return;}
+    detail.innerHTML=issueFormHTML(issue);
+    issueDescriptionEditor=issueEditor($('#issue-description-editor'),issue?.Description,'420px');
+    issueCauseEditor=issueEditor($('#issue-cause-editor'),issue?.RootCause,'260px');
+    $('#issue-cancel').onclick=()=>{issueFocus=issue?{type:'issue',id:issue.ID}:null;renderIssueList();renderIssueFocus()};
+    $('#issue-save').onclick=async()=>{const data={Title:$('#issue-title').value,RequirementID:$('#issue-requirement').value,Description:issueDescriptionEditor.getMarkdown(),RootCause:issueCauseEditor.getMarkdown(),Resolved:$('#issue-resolved').checked};try{const before=new Set(state.issues.map(x=>x.ID));await act(issue?'editIssue':'createIssue',{...data,...(issue?{IssueID:issue.ID}:{})});issueFocus=issue?{type:'issue',id:issue.ID}:{type:'issue',id:state.issues.find(x=>!before.has(x.ID))?.ID};renderIssueList();renderIssueFocus();toast(issue?'问题单已保存':'问题单已创建')}catch{}};
+    return;
+  }
+  const requirement=issueRequirement(issue);
+  detail.innerHTML=`<div class="detail-head"><div><div class="eyebrow">${esc(issue.ID)} · <span class="badge ${issue.Resolved?'issue-status-resolved':'issue-status-open'}">${issueStatus(issue)}</span></div><h1>${esc(issue.Title)}</h1></div><div class="detail-actions"><button type="button" class="secondary" id="issue-edit">编辑</button><button type="button" class="secondary" id="issue-toggle">${issue.Resolved?'标记为待解决':'标记为已解决'}</button><button type="button" class="secondary" id="issue-delete">删除</button></div></div><div class="card meta-grid"><span>关联需求 <button type="button" class="req-rel-chip" id="issue-requirement-link">${esc(requirement?.Title||'关联需求已删除')}</button></span><span>创建者 <b>${esc(issue.CreatedBy)}</b></span><span>创建时间 <b>${fmt(issue.CreatedAt)}</b></span><span>更新者 <b>${esc(issue.UpdatedBy)}</b></span><span>更新时间 <b>${fmt(issue.UpdatedAt)}</b></span></div><div class="card"><h3>问题描述</h3><div id="issue-description-view" class="issue-viewer"></div></div>${issue.RootCause?'<div class="card"><h3>问题根因</h3><div id="issue-cause-view" class="issue-viewer"></div></div>':''}`;
+  const descriptionViewer=toastui.Editor.factory({el:$('#issue-description-view'),viewer:true,initialValue:issue.Description||'',usageStatistics:false});issueViewers.push(descriptionViewer);
+  if(issue.RootCause){const causeViewer=toastui.Editor.factory({el:$('#issue-cause-view'),viewer:true,initialValue:issue.RootCause,usageStatistics:false});issueViewers.push(causeViewer)}
+  $('#issue-edit').onclick=()=>startIssueEdit(issue);$('#issue-toggle').onclick=()=>act('editIssue',{IssueID:issue.ID,Title:issue.Title,RequirementID:issue.RequirementID,Description:issue.Description,RootCause:issue.RootCause,Resolved:!issue.Resolved});$('#issue-delete').onclick=()=>deleteIssue(issue);$('#issue-requirement-link').onclick=()=>{if(!requirement)return;setPage('requirements');setReqFocus({type:'doc',id:requirement.ID})};
+}
+$('#create-issue').onclick=$('#issue-empty-create').onclick=startIssueCreate;
+
 // ---- Page tab bar (用例管理 / 需求管理) ----
 function setPage(p){
   page=p;
   $$('.page-tab').forEach(b=>{const active=b.dataset.app===p;b.classList.toggle('active',active);b.setAttribute('aria-selected',String(active))});
-  $('#app-subtitle').textContent={requirements:'需求文档管理',automation:'自动化脚本管理'}[p]||'测试用例管理';
+  $('#app-subtitle').textContent={requirements:'需求文档管理',automation:'自动化脚本管理',issues:'问题单管理'}[p]||'测试用例管理';
   $('#workspace').classList.toggle('hidden',p!=='cases');
   $('#req-workspace').classList.toggle('hidden',p!=='requirements');
   $('#auto-workspace').classList.toggle('hidden',p!=='automation');
+  $('#issue-workspace').classList.toggle('hidden',p!=='issues');
   if(p==='requirements')updateReqEmptyHint();
   if(p==='automation')updateAutoEmptyHint();
+  if(p==='issues')renderIssueFocus();
 }
 $$('.page-tab').forEach(b=>b.onclick=()=>setPage(b.dataset.app));
 

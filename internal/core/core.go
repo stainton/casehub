@@ -114,6 +114,13 @@ type ReqDoc struct {
 	CreatedAt, UpdatedAt time.Time
 }
 
+type Issue struct {
+	ID, RequirementID, Title, Description, RootCause string
+	Resolved                                         bool
+	CreatedBy, UpdatedBy                             string
+	CreatedAt, UpdatedAt                             time.Time
+}
+
 type PendingFolder struct {
 	ID, ParentID, Name, CreatedBy string
 	// Code is the case-ID prefix the folder stands for (REQ, REQ-MODULE or
@@ -183,6 +190,7 @@ type State struct {
 	Tasks          []Task                   `json:"tasks"`
 	ReqFolders     []ReqFolder              `json:"reqFolders"`
 	ReqDocs        []ReqDoc                 `json:"reqDocs"`
+	Issues         []Issue                  `json:"issues"`
 	PendingFolders []PendingFolder          `json:"pendingFolders"`
 	PendingCases   []PendingCase            `json:"pendingCases"`
 	Scripts        []Script                 `json:"scripts"`
@@ -195,7 +203,9 @@ type Action struct {
 	Priority, Result, Note, Author                      string
 	CaseIDs                                             []string
 	Submitted, Force                                    bool
+	Resolved                                            bool
 	DocID, Content, Code                                string
+	IssueID, RequirementID, RootCause                   string
 	ExplorationNotes                                    string
 	Review                                              string
 	TargetFolderID                                      string
@@ -278,6 +288,15 @@ func reqDocAt(s *State, id string) (*ReqDoc, int) {
 	}
 	return nil, -1
 }
+func issueAt(s *State, id string) (*Issue, int) {
+	for i := range s.Issues {
+		if s.Issues[i].ID == id {
+			return &s.Issues[i], i
+		}
+	}
+	return nil, -1
+}
+
 func pendingFolderAt(s *State, id string) (*PendingFolder, int) {
 	for i := range s.PendingFolders {
 		if s.PendingFolders[i].ID == id {
@@ -306,6 +325,7 @@ func Seed() State {
 		Records:      []Record{},
 		Tasks:        []Task{},
 		Scripts:      []Script{},
+		Issues:       []Issue{},
 	}
 	s.Versions = []Version{{ID: "main", Name: "主线", Mainline: true, BaseMainRevision: 1, CreatedBy: "system", CreatedAt: t}}
 	s.Folders = []Folder{{ID: "root", VersionID: "main", Name: "全部用例", CreatedBy: "system", CreatedAt: t}, {ID: "auth", VersionID: "main", ParentID: "root", Name: "登录与认证", CreatedBy: "system", CreatedAt: t}}
@@ -348,6 +368,9 @@ func normalizeState(state *State) {
 	}
 	if state.ReqDocs == nil {
 		state.ReqDocs = []ReqDoc{}
+	}
+	if state.Issues == nil {
+		state.Issues = []Issue{}
 	}
 	if state.PendingFolders == nil {
 		state.PendingFolders = []PendingFolder{}
@@ -445,6 +468,12 @@ func (s *Service) Apply(ctx context.Context, a Action) (Result, error) {
 		err = deleteReqFolder(&st, a)
 	case "deleteReqDoc":
 		err = deleteReqDoc(&st, a)
+	case "createIssue":
+		err = createIssue(&st, a)
+	case "editIssue":
+		err = editIssue(&st, a)
+	case "deleteIssue":
+		err = deleteIssue(&st, a)
 	case "createPendingFolder":
 		err = createPendingFolder(&st, a)
 	case "renamePendingFolder":
@@ -1687,10 +1716,69 @@ func deleteReqFolder(s *State, a Action) error {
 	s.ReqFolders = append(s.ReqFolders[:i], s.ReqFolders[i+1:]...)
 	return nil
 }
+func nextIssueID(s *State) string {
+	for {
+		var random [2]byte
+		_, _ = rand.Read(random[:])
+		id := fmt.Sprintf("DTS%s%04d", now().Format("20060102150405"), (int(random[0])<<8|int(random[1]))%10000)
+		if issue, _ := issueAt(s, id); issue == nil {
+			return id
+		}
+	}
+}
+
+func createIssue(s *State, a Action) error {
+	if doc, _ := reqDocAt(s, a.RequirementID); doc == nil {
+		return errors.New("关联需求不存在")
+	}
+	if strings.TrimSpace(a.Title) == "" {
+		return errors.New("问题单标题不能为空")
+	}
+	if strings.TrimSpace(a.Description) == "" {
+		return errors.New("问题描述不能为空")
+	}
+	t := now()
+	s.Issues = append(s.Issues, Issue{ID: nextIssueID(s), RequirementID: a.RequirementID, Title: strings.TrimSpace(a.Title), Description: a.Description, RootCause: a.RootCause, Resolved: a.Resolved, CreatedBy: a.Author, UpdatedBy: a.Author, CreatedAt: t, UpdatedAt: t})
+	return nil
+}
+
+func editIssue(s *State, a Action) error {
+	issue, _ := issueAt(s, a.IssueID)
+	if issue == nil {
+		return errors.New("问题单不存在")
+	}
+	if doc, _ := reqDocAt(s, a.RequirementID); doc == nil {
+		return errors.New("关联需求不存在")
+	}
+	if strings.TrimSpace(a.Title) == "" {
+		return errors.New("问题单标题不能为空")
+	}
+	if strings.TrimSpace(a.Description) == "" {
+		return errors.New("问题描述不能为空")
+	}
+	issue.RequirementID, issue.Title, issue.Description, issue.RootCause = a.RequirementID, strings.TrimSpace(a.Title), a.Description, a.RootCause
+	issue.Resolved, issue.UpdatedBy, issue.UpdatedAt = a.Resolved, a.Author, now()
+	return nil
+}
+
+func deleteIssue(s *State, a Action) error {
+	_, i := issueAt(s, a.IssueID)
+	if i < 0 {
+		return errors.New("问题单不存在")
+	}
+	s.Issues = append(s.Issues[:i], s.Issues[i+1:]...)
+	return nil
+}
+
 func deleteReqDoc(s *State, a Action) error {
 	d, i := reqDocAt(s, a.DocID)
 	if d == nil {
 		return errors.New("需求文档不存在")
+	}
+	for _, issue := range s.Issues {
+		if issue.RequirementID == d.ID {
+			return errors.New("该需求有关联问题单，无法删除")
+		}
 	}
 	s.ReqDocs = append(s.ReqDocs[:i], s.ReqDocs[i+1:]...)
 	return nil

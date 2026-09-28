@@ -764,7 +764,7 @@ func TestEmptyCollectionsAreJSONArrays(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{`"histories":[]`, `"records":[]`, `"tasks":[]`} {
+	for _, want := range []string{`"histories":[]`, `"records":[]`, `"tasks":[]`, `"issues":[]`} {
 		if !strings.Contains(string(payload), want) {
 			t.Fatalf("response must contain %s: %s", want, payload)
 		}
@@ -1414,5 +1414,32 @@ func TestEditScriptKeepsGenerationSnapshots(t *testing.T) {
 	}
 	if after.FromSteps != before.FromSteps || after.JobID != before.JobID {
 		t.Fatalf("script edit must keep generator snapshots: before=%+v after=%+v", before, after)
+	}
+}
+
+func TestIssueWorkflowKeepsRequirementLink(t *testing.T) {
+	svc := core.NewService(store.NewMemory())
+	state := apply(t, svc, core.Action{Type: "createIssue", RequirementID: "REQ-0001", Title: "登录失败无提示", Description: "输入错误密码后页面没有反馈", Author: "alice"})
+	if len(state.Issues) != 1 {
+		t.Fatalf("issues: got %d, want 1", len(state.Issues))
+	}
+	issue := state.Issues[0]
+	if !strings.HasPrefix(issue.ID, "DTS") || len(issue.ID) != len("DTS200601021504050000") || issue.RequirementID != "REQ-0001" || issue.Resolved {
+		t.Fatalf("created issue is invalid: %+v", issue)
+	}
+	state = apply(t, svc, core.Action{Type: "editIssue", IssueID: issue.ID, RequirementID: "REQ-0001", Title: "登录失败提示缺失", Description: "错误密码没有错误提示", RootCause: "待开发分析", Resolved: true, Author: "bob"})
+	issue = state.Issues[0]
+	if issue.Title != "登录失败提示缺失" || issue.RootCause != "待开发分析" || !issue.Resolved || issue.UpdatedBy != "bob" {
+		t.Fatalf("issue was not updated: %+v", issue)
+	}
+	if _, err := svc.Apply(context.Background(), core.Action{Type: "deleteReqDoc", DocID: "REQ-0001", Author: "bob"}); err == nil {
+		t.Fatal("linked requirement should not be deletable")
+	}
+	state = apply(t, svc, core.Action{Type: "deleteIssue", IssueID: issue.ID, Author: "bob"})
+	if len(state.Issues) != 0 {
+		t.Fatalf("issues after delete: got %d, want 0", len(state.Issues))
+	}
+	if _, err := svc.Apply(context.Background(), core.Action{Type: "createIssue", RequirementID: "missing", Title: "x", Description: "x"}); err == nil {
+		t.Fatal("missing requirement should be rejected")
 	}
 }

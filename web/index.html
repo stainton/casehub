@@ -19,6 +19,7 @@
     <button type="button" class="page-tab active" role="tab" aria-selected="true" data-app="cases">🗂 用例管理</button>
     <button type="button" class="page-tab" role="tab" aria-selected="false" data-app="requirements">📄 需求管理</button>
     <button type="button" class="page-tab" role="tab" aria-selected="false" data-app="automation">🤖 自动化管理</button>
+    <button type="button" class="page-tab" role="tab" aria-selected="false" data-app="issues">🐞 问题单管理</button>
   </nav>
   <main id="workspace">
     <aside id="sidebar">
@@ -78,6 +79,17 @@
     <section id="auto-content">
       <div id="auto-empty" class="empty"><div class="empty-icon">🤖</div><h2 id="auto-empty-title">从一个脚本开始</h2><p id="auto-empty-hint">选择左侧的目录或脚本，即可在这里查看详情。脚本由用例管理里的「脚本生成」产生，与用例一一对应。</p><button type="button" id="auto-empty-expand" class="hidden">展开脚本树</button></div>
       <div id="auto-detail" class="hidden"></div>
+    </section>
+  </main>
+  <main id="issue-workspace" class="hidden">
+    <aside id="issue-sidebar">
+      <div class="sidebar-head"><strong>问题单</strong><button type="button" id="create-issue">＋ 新建问题单</button></div>
+      <div id="issue-list" class="versions"></div>
+    </aside>
+    <div id="issue-resize-left" class="resizer"></div>
+    <section id="issue-content">
+      <div id="issue-empty" class="empty"><div class="empty-icon">🐞</div><h2>从一个问题单开始</h2><p>新建问题单并关联对应需求，集中记录问题、根因和解决状态。</p><button type="button" id="issue-empty-create">新建问题单</button></div>
+      <div id="issue-detail" class="hidden"></div>
     </section>
   </main>
   <div id="context-menu" class="context-menu hidden"></div>
