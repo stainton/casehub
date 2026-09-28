@@ -107,6 +107,24 @@ func (a *api) assetByID(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write(asset.Data)
 }
 
+// recordImageByID serves test-record evidence on demand. State responses only
+// carry this URL, so screenshots are fetched after a person expands a record.
+func (a *api) recordImageByID(w http.ResponseWriter, r *http.Request) {
+	image, err := a.service.RecordImage(r.Context(), r.PathValue("id"))
+	if errors.Is(err, core.ErrNotFound) {
+		jsonOut(w, http.StatusNotFound, map[string]string{"error": "测试记录截图不存在"})
+		return
+	}
+	if err != nil {
+		jsonOut(w, http.StatusInternalServerError, map[string]string{"error": "读取测试记录截图失败"})
+		return
+	}
+	w.Header().Set("Cache-Control", "private, max-age=31536000, immutable")
+	w.Header().Set("Content-Type", image.MimeType)
+	w.Header().Set("Content-Length", strconv.Itoa(len(image.Data)))
+	_, _ = w.Write(image.Data)
+}
+
 // A filename never carries a quote or a newline into a header value.
 func sanitizeFilename(name string) string {
 	return strings.NewReplacer(`"`, "'", "\r", " ", "\n", " ").Replace(name)

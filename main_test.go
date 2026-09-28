@@ -113,3 +113,48 @@ func TestCrossOriginRequests(t *testing.T) {
 		}
 	}
 }
+
+func TestRecordImagesAreExternalizedAndLoadedLazily(t *testing.T) {
+	handler := routes(&api{service: core.NewService(store.NewMemory())}, disabledServices()...)
+	createBody, err := json.Marshal(core.Action{Type: "createVersion", Name: "lazy-image"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	created := httptest.NewRecorder()
+	handler.ServeHTTP(created, httptest.NewRequest(http.MethodPost, "/api/action", bytes.NewReader(createBody)))
+	if created.Code != http.StatusOK {
+		t.Fatalf("create version: %d %s", created.Code, created.Body.String())
+	}
+	var createdOut core.Result
+	if err := json.Unmarshal(created.Body.Bytes(), &createdOut); err != nil {
+		t.Fatal(err)
+	}
+	vid := createdOut.State.Versions[len(createdOut.State.Versions)-1].ID
+	body, err := json.Marshal(core.Action{Type: "submitRecord", VersionID: vid, CaseID: "CASE-0001", Result: "passed", Note: "![证据](data:image/png;base64,aGVsbG8=)"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/api/action", bytes.NewReader(body)))
+	if w.Code != http.StatusOK {
+		t.Fatalf("action: %d %s", w.Code, w.Body.String())
+	}
+	if strings.Contains(w.Body.String(), "aGVsbG8=") || !strings.Contains(w.Body.String(), "/api/record-images/") {
+		t.Fatalf("action response retained inline image: %s", w.Body.String())
+	}
+	state := httptest.NewRecorder()
+	handler.ServeHTTP(state, httptest.NewRequest(http.MethodGet, "/api/state", nil))
+	if strings.Contains(state.Body.String(), "aGVsbG8=") || !strings.Contains(state.Body.String(), "/api/record-images/") {
+		t.Fatalf("state retained inline image: %s", state.Body.String())
+	}
+	var out core.State
+	if err := json.Unmarshal(state.Body.Bytes(), &out); err != nil {
+		t.Fatal(err)
+	}
+	id := strings.TrimSuffix(strings.TrimPrefix(out.Records[0].Note, "![证据](/api/record-images/"), ")")
+	image := httptest.NewRecorder()
+	handler.ServeHTTP(image, httptest.NewRequest(http.MethodGet, "/api/record-images/"+id, nil))
+	if image.Code != http.StatusOK || image.Header().Get("Content-Type") != "image/png" || image.Body.String() != "hello" {
+		t.Fatalf("lazy image: %d %s %q", image.Code, image.Header().Get("Content-Type"), image.Body.String())
+	}
+}

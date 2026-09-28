@@ -74,6 +74,7 @@ func routes(a *api, services ...service) http.Handler {
 	m.HandleFunc("POST /api/assets", a.assets)
 	m.HandleFunc("GET /api/assets/{id}", a.assetByID)
 	m.HandleFunc("DELETE /api/assets/{id}", a.assetByID)
+	m.HandleFunc("GET /api/record-images/{id}", a.recordImageByID)
 	m.HandleFunc("POST /api/action", a.action)
 	for _, s := range services {
 		enabled := s.enabled

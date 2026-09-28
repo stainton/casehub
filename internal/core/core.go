@@ -33,6 +33,8 @@ type Repository interface {
 	GetAsset(ctx context.Context, id string) (Asset, error)
 	SaveAsset(ctx context.Context, a Asset) error
 	DeleteAsset(ctx context.Context, id string) error
+	SaveRecordImage(ctx context.Context, image RecordImage) error
+	GetRecordImage(ctx context.Context, id string) (RecordImage, error)
 }
 
 type Version struct {
@@ -405,6 +407,13 @@ func (s *Service) State(ctx context.Context) (State, error) {
 		err = s.repo.Save(ctx, st)
 	}
 	normalizeState(&st)
+	if changed, migrationErr := s.migrateRecordImages(ctx, &st); migrationErr != nil {
+		return State{}, migrationErr
+	} else if changed {
+		if err = s.repo.Save(ctx, st); err != nil {
+			return State{}, err
+		}
+	}
 	sort.SliceStable(st.Versions, func(i, j int) bool {
 		return st.Versions[i].Mainline || (!st.Versions[j].Mainline && st.Versions[i].CreatedAt.Before(st.Versions[j].CreatedAt))
 	})
@@ -450,6 +459,10 @@ func (s *Service) Apply(ctx context.Context, a Action) (Result, error) {
 		err = describePendingCase(&st, a)
 	case "saveRecord", "submitRecord":
 		warnings, err = recordCase(&st, a)
+		if err == nil {
+			last := &st.Records[len(st.Records)-1]
+			last.Note, err = s.externalizeRecordImages(ctx, last.Note)
+		}
 	case "createTask":
 		err = createTask(&st, a)
 	case "createReqFolder":

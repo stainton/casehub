@@ -15,14 +15,15 @@ import (
 )
 
 type Memory struct {
-	mu     sync.RWMutex
-	state  *core.State
-	agents map[string]core.AgentConfig
-	assets map[string]core.Asset
+	mu           sync.RWMutex
+	state        *core.State
+	agents       map[string]core.AgentConfig
+	assets       map[string]core.Asset
+	recordImages map[string]core.RecordImage
 }
 
 func NewMemory() *Memory {
-	return &Memory{agents: map[string]core.AgentConfig{}, assets: map[string]core.Asset{}}
+	return &Memory{agents: map[string]core.AgentConfig{}, assets: map[string]core.Asset{}, recordImages: map[string]core.RecordImage{}}
 }
 func clone(s core.State) (core.State, error) {
 	b, e := json.Marshal(s)
@@ -108,6 +109,24 @@ func (m *Memory) SaveAsset(_ context.Context, a core.Asset) error {
 	m.assets[a.ID] = a
 	return nil
 }
+func (m *Memory) SaveRecordImage(_ context.Context, image core.RecordImage) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	image.Data = append([]byte(nil), image.Data...)
+	m.recordImages[image.ID] = image
+	return nil
+}
+func (m *Memory) GetRecordImage(_ context.Context, id string) (core.RecordImage, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	image, ok := m.recordImages[id]
+	if !ok {
+		return core.RecordImage{}, core.ErrNotFound
+	}
+	image.Data = append([]byte(nil), image.Data...)
+	return image, nil
+}
+
 func (m *Memory) DeleteAsset(_ context.Context, id string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -288,6 +307,43 @@ func (f *File) DeleteAsset(_ context.Context, id string) error {
 	}
 	return e
 }
+func recordImagesDataDir(path string) string {
+	ext := filepath.Ext(path)
+	return strings.TrimSuffix(path, ext) + "-record-images"
+}
+func (f *File) SaveRecordImage(_ context.Context, image core.RecordImage) error {
+	f.assetsMu.Lock()
+	defer f.assetsMu.Unlock()
+	dir := recordImagesDataDir(f.path)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(dir, image.ID+"."+strings.ReplaceAll(image.MimeType, "/", "_")), image.Data, 0600)
+}
+func (f *File) GetRecordImage(_ context.Context, id string) (core.RecordImage, error) {
+	f.assetsMu.Lock()
+	defer f.assetsMu.Unlock()
+	entries, err := os.ReadDir(recordImagesDataDir(f.path))
+	if errors.Is(err, os.ErrNotExist) {
+		return core.RecordImage{}, core.ErrNotFound
+	}
+	if err != nil {
+		return core.RecordImage{}, err
+	}
+	for _, entry := range entries {
+		name := entry.Name()
+		if !strings.HasPrefix(name, id+".") {
+			continue
+		}
+		data, err := os.ReadFile(filepath.Join(recordImagesDataDir(f.path), name))
+		if err != nil {
+			return core.RecordImage{}, err
+		}
+		return core.RecordImage{ID: id, MimeType: strings.ReplaceAll(strings.TrimPrefix(name, id+"."), "_", "/"), Data: data}, nil
+	}
+	return core.RecordImage{}, core.ErrNotFound
+}
+
 func writeJSONFile(path string, v any) error {
 	if e := os.MkdirAll(filepath.Dir(path), 0755); e != nil {
 		return e
@@ -342,6 +398,7 @@ func NewPostgres(ctx context.Context, dsn string) (*Postgres, error) {
 		// Uploaded assets a design task can carry along. data is nullable only in spirit (SaveAsset
 		// always supplies it); metadata queries (list, resolving a task's chosen ids) never select it.
 		`CREATE TABLE IF NOT EXISTS casehub_assets (id TEXT PRIMARY KEY, type TEXT NOT NULL, name TEXT NOT NULL, mime_type TEXT NOT NULL, size BIGINT NOT NULL, sha256 TEXT NOT NULL, data BYTEA NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW())`,
+		`CREATE TABLE IF NOT EXISTS casehub_record_images (id TEXT PRIMARY KEY, mime_type TEXT NOT NULL, data BYTEA NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW())`,
 	} {
 		if _, e = db.ExecContext(ctx, ddl); e != nil {
 			db.Close()
@@ -457,6 +514,19 @@ func (p *Postgres) DeleteAsset(ctx context.Context, id string) error {
 	}
 	return nil
 }
+func (p *Postgres) SaveRecordImage(ctx context.Context, image core.RecordImage) error {
+	_, err := p.db.ExecContext(ctx, `INSERT INTO casehub_record_images(id,mime_type,data) VALUES($1,$2,$3) ON CONFLICT(id) DO UPDATE SET mime_type=EXCLUDED.mime_type,data=EXCLUDED.data`, image.ID, image.MimeType, image.Data)
+	return err
+}
+func (p *Postgres) GetRecordImage(ctx context.Context, id string) (core.RecordImage, error) {
+	var image core.RecordImage
+	err := p.db.QueryRowContext(ctx, `SELECT id,mime_type,data FROM casehub_record_images WHERE id=$1`, id).Scan(&image.ID, &image.MimeType, &image.Data)
+	if errors.Is(err, sql.ErrNoRows) {
+		return core.RecordImage{}, core.ErrNotFound
+	}
+	return image, err
+}
+
 func (p *Postgres) Close() error { return p.db.Close() }
 func (p *Postgres) Load(ctx context.Context) (core.State, error) {
 	var b []byte
