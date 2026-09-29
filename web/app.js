@@ -1437,7 +1437,7 @@ $('#auto-expand').onclick=$('#auto-empty-expand').onclick=()=>setAutoSidebarColl
 const GEN_TASKS_KEY='casehub-gen-tasks';
 // 上次填过的目标信息，下次生成默认带出；密码不保存，每次重新输入。
 const GEN_TARGET_KEY='casehub-gen-target';
-const GEN_MAX_CASES=50; // generator 单任务上限，超出自动拆成多个任务
+const GEN_MAX_CASES=1; // 每条用例独立任务：一条失败绝不影响其他用例的脚本与诊断
 const GEN_TERMINAL=['succeeded','failed','cancelled'];
 let genTasks=loadGenTasks(), genDraft=null, genEnabled=null;
 const genRuntime=new Map(); // jobId -> {source, log:[], stage, status}
@@ -1513,12 +1513,12 @@ function genValues(){
 function genDraftHTML(){
   const v=genValues(),d=genDraft;
   const existing=d.caseIDs.filter(id=>scriptFor(d.versionID,id)).length;
-  const batches=Math.ceil(d.caseIDs.length/GEN_MAX_CASES);
+  const batches=d.caseIDs.length;
   const docs=state.reqDocs.map(x=>`<option value="${x.ID}"${v.reqDoc===x.ID?' selected':''}>${esc(x.Title)}${x.Code?`（${esc(x.Code)}）`:''}</option>`).join('');
   return `<details class="gen-task" data-gen-panel="draft"${genOpen.has('draft')?' open':''}>
     <summary><span class="gen-task-title">新建生成任务 · ${esc(d.label)}</span><span class="gen-chip">${d.caseIDs.length} 条用例</span></summary>
     <form id="gen-form" autocomplete="off">
-      <p class="meta">脚本按用例原文（前置条件 / 步骤 / 预期结果）生成，一条用例一个 spec 文件，结果自动同步到「自动化管理」。${existing?`其中 ${existing} 条已有脚本，会被覆盖。`:''}${d.skipped?`已跳过 ${d.skipped} 条没有执行步骤的用例。`:''}${batches>1?`超过单任务上限，将拆成 ${batches} 个任务依次提交。`:''}</p>
+      <p class="meta">脚本按用例原文（前置条件 / 步骤 / 预期结果）生成，一条用例一个 spec 文件，结果自动同步到「自动化管理」。${existing?`其中 ${existing} 条已有脚本，会被覆盖。`:''}${d.skipped?`已跳过 ${d.skipped} 条没有执行步骤的用例。`:''}${batches>1?`将拆成 ${batches} 个独立任务：任一用例失败不会影响其他用例。`:''}</p>
       <label>被测系统 URL<input name="baseUrl" required placeholder="https://test.example.com" value="${esc(v.baseUrl||'')}"></label>
       <label>参考需求文档<select name="reqDoc"><option value="auto"${(v.reqDoc||'auto')==='auto'?' selected':''}>自动匹配（按用例编号前缀）</option><option value=""${v.reqDoc===''?' selected':''}>不附带需求文档</option>${docs}</select></label>
       <label>补充说明（可选）<textarea name="instructions" placeholder="登录方式、数据约束、需要避免的操作等">${esc(v.instructions||'')}</textarea></label>
@@ -1542,14 +1542,14 @@ function bindGenDraft(){
     const btn=form.querySelector('button[type="submit"]');btn.disabled=true;
     const d=genDraft,chunks=[];
     for(let i=0;i<d.caseIDs.length;i+=GEN_MAX_CASES)chunks.push(d.caseIDs.slice(i,i+GEN_MAX_CASES));
-    try{
-      for(const [i,ids] of chunks.entries()){
-        const label=chunks.length>1?`${d.label}（${i+1}/${chunks.length}）`:d.label;
-        await submitGenJob(d.versionID,ids,label,values);
-      }
-      genDraft=null;genOpen.delete('draft');
-      toast(chunks.length>1?`已提交 ${chunks.length} 个生成任务`:'生成任务已提交');
-    }catch(err){toast(err.message,true);btn.disabled=false}
+    let submitted=0,failed=0;
+    for(const [i,ids] of chunks.entries()){
+      const label=chunks.length>1?`${d.label}（${i+1}/${chunks.length}）`:d.label;
+      try{await submitGenJob(d.versionID,ids,label,values);submitted++}
+      catch(error){failed++;const task={jobId:`local-${crypto.randomUUID()}`,versionID:d.versionID,versionName:version(d.versionID)?.name||'',caseIDs:ids,assetIDs:values.assetIds||[],requirementIDs:[],label,createdAt:new Date().toISOString(),status:'failed',error:{code:error.code||'SUBMIT_FAILED',message:error.message||'提交生成任务失败'},input:{...values,testSecret:''}};genTasks.unshift(task);saveGenTasks();genOpen.add(task.jobId)}
+    }
+    genDraft=null;genOpen.delete('draft');
+    toast(failed?`已提交 ${submitted} 条；${failed} 条提交失败，可在下方故障排查后重试`:`已提交 ${submitted} 个独立生成任务` ,failed>0);
     renderGenDrawer();
   };
 }
@@ -1578,7 +1578,7 @@ function genPayload(vid,ids,values){
 async function submitGenJob(vid,ids,label,values){
   const payload=genPayload(vid,ids,values);
   const job=await serviceRequest('/api/generator/jobs',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
-  const task={jobId:job.id,versionID:vid,versionName:version(vid)?.name||'',caseIDs:ids,assetIDs:payload.context.assetIds||[],requirementIDs:(payload.requirements||[]).map(doc=>doc.id),label,createdAt:job.createdAt||new Date().toISOString(),status:job.status,stage:job.stage};
+  const task={jobId:job.id,versionID:vid,versionName:version(vid)?.name||'',caseIDs:ids,assetIDs:payload.context.assetIds||[],requirementIDs:(payload.requirements||[]).map(doc=>doc.id),label,createdAt:job.createdAt||new Date().toISOString(),status:job.status,stage:job.stage,input:{...values,testSecret:''}};
   genTasks.unshift(task);saveGenTasks();
   genOpen.add(job.id);
   routeGenJob(task,job);
@@ -1593,7 +1593,7 @@ function genTaskHTML(task){
   const limitations=task.limitations?.length?`<div class="card"><h3>未生成的用例 <small class="meta">按风险从高到低</small></h3>${aiRiskListHTML(task.limitations,l=>esc(l.summary))}</div>`:'';
   const error=task.error?`<p class="meta">${esc(task.error.code||'')}${task.error.code?'：':''}${esc(task.error.message||'')}</p>`:'';
   const actions=GEN_TERMINAL.includes(task.status)
-    ?`<button type="button" class="secondary" data-gen-forget="${task.jobId}">移除记录</button>${task.status==='succeeded'&&!task.saved?`<button type="button" data-gen-import="${task.jobId}">重试保存</button>`:''}${task.status!=='succeeded'?`<button type="button" data-gen-retry="${task.jobId}">重新生成</button>`:''}`
+    ?`<button type="button" class="secondary" data-gen-forget="${task.jobId}">移除记录</button>${task.status==='succeeded'&&!task.saved?`<button type="button" data-gen-import="${task.jobId}">重试保存</button>`:''}${task.status!=='succeeded'||task.saved?.blocked?`<button type="button" data-gen-intervene="${task.jobId}">故障排查并重新生成</button>`:''}`
     :`<button type="button" class="secondary" data-gen-cancel="${task.jobId}">取消任务</button>`;
   return `<details class="gen-task" data-gen-panel="${task.jobId}"${genOpen.has(task.jobId)?' open':''}>
     <summary><span class="gen-task-title">${esc(task.label)}</span><span class="gen-chip">${genCaseCount(task)} 条</span><span class="gen-chip gen-status-${GEN_TERMINAL.includes(task.status)?task.status:'running'}" data-gen-status="${task.jobId}">${genStatusText(task)}</span></summary>
@@ -1612,13 +1612,17 @@ function bindGenTasks(){
     try{await serviceRequest(`/api/generator/jobs/${b.dataset.genCancel}`,{method:'DELETE'})}catch(e){toast(e.message,true);b.disabled=false}
   });
   $$('#gen-drawer-body [data-gen-import]').forEach(b=>b.onclick=()=>{const t=genTask(b.dataset.genImport);if(t)importGenResult(t)});
-  $$('#gen-drawer-body [data-gen-retry]').forEach(b=>b.onclick=()=>{const t=genTask(b.dataset.genRetry);if(t)startGeneration(t.versionID,t.caseIDs,t.label)});
+  $$('#gen-drawer-body [data-gen-intervene]').forEach(b=>b.onclick=()=>{const t=genTask(b.dataset.genIntervene);if(t)interveneGenTask(t)});
   $$('#gen-drawer-body [data-gen-forget]').forEach(b=>b.onclick=()=>{
     const id=b.dataset.genForget;
     closeGenStream(id);
     genTasks=genTasks.filter(t=>t.jobId!==id);saveGenTasks();genRuntime.delete(id);genOpen.delete(id);
     renderGenDrawer();
   });
+}
+function interveneGenTask(task){
+  const saved=task.input||genValues();
+  showModal('生成故障排查',`<p class="meta">会为 ${esc(task.caseIDs.join('、'))} 新建独立任务；已生成的其他用例不会受影响。请补充故障现象、可用路径或账号条件，Generator 会据此重新探索。</p><label>排查提示词<textarea name="instructions" required placeholder="例如：登录后需先进入素材管理；上传按钮在右侧工具栏；上次失败时显示的错误是…">${esc(saved.instructions||'')}</textarea></label><label>测试账号 · 用户名（可选）<input name="testAccount" value="${esc(saved.testAccount||'')}"></label><label>测试账号 · 密码（如需重新填写）<input name="testSecret" type="text" class="fake-password" autocomplete="off"></label>`,async values=>{const next={...saved,...values,assetIds:saved.assetIds||[],caseTimeoutMinutes:saved.caseTimeoutMinutes||60};await submitGenJob(task.versionID,task.caseIDs,`${task.label} · 故障排查`,next);toast('已提交故障排查任务')});
 }
 function genLogLine(jobId,msg){
   const runtime=genRuntime.get(jobId)||{log:[]};
