@@ -1435,15 +1435,18 @@ $('#auto-expand').onclick=$('#auto-empty-expand').onclick=()=>setAutoSidebarColl
 // 继续在后台跑，重新打开按 ID 恢复查看。任务清单存在 localStorage，脚本本身存在
 // 服务端 state 里（saveScript）。
 const GEN_TASKS_KEY='casehub-gen-tasks';
+const GEN_GROUPS_KEY='casehub-gen-task-groups';
 // 上次填过的目标信息，下次生成默认带出；密码不保存，每次重新输入。
 const GEN_TARGET_KEY='casehub-gen-target';
 const GEN_MAX_CASES=1; // 每条用例独立任务：一条失败绝不影响其他用例的脚本与诊断
 const GEN_TERMINAL=['succeeded','failed','cancelled'];
-let genTasks=loadGenTasks(), genDraft=null, genEnabled=null;
+let genTasks=loadGenTasks(), genGroups=loadGenGroups(), genDraft=null, genEnabled=null;
 const genRuntime=new Map(); // jobId -> {source, log:[], stage, status}
 const genOpen=new Set();    // 展开的选项卡（'draft' 或 jobId）
 function loadGenTasks(){try{const x=JSON.parse(localStorage.getItem(GEN_TASKS_KEY));return Array.isArray(x)?x:[]}catch{return []}}
-function saveGenTasks(){try{localStorage.setItem(GEN_TASKS_KEY,JSON.stringify(genTasks.slice(0,30)))}catch{}}
+function saveGenTasks(){try{localStorage.setItem(GEN_TASKS_KEY,JSON.stringify(genTasks.slice(0,30)));localStorage.setItem(GEN_GROUPS_KEY,JSON.stringify(genGroups.slice(0,20)))}catch{}}
+function loadGenGroups(){try{const x=JSON.parse(localStorage.getItem(GEN_GROUPS_KEY));return Array.isArray(x)?x:[]}catch{return []}}
+const genGroup=id=>genGroups.find(group=>group.id===id);
 function loadGenTarget(){try{return JSON.parse(localStorage.getItem(GEN_TARGET_KEY))||{}}catch{return {}}}
 function saveGenTarget(v){try{localStorage.setItem(GEN_TARGET_KEY,JSON.stringify({baseUrl:v.baseUrl||'',instructions:v.instructions||'',testAccount:v.testAccount||'',reqDoc:v.reqDoc||'auto',assetIds:v.assetIds||[]}))}catch{}}
 const isGenDrawerOpen=()=>!$('#gen-drawer').classList.contains('hidden');
@@ -1498,7 +1501,7 @@ async function renderGenDrawer(){
     body.innerHTML='<p class="meta">脚本生成服务未配置（缺少 CASEHUB_GENERATOR_URL），暂时无法使用。</p>';
     return;
   }
-  body.innerHTML=`${genDraft?genDraftHTML():''}${genTasks.length?genTasks.map(genTaskHTML).join(''):(genDraft?'':'<p class="meta">还没有生成任务。在「用例管理」里右键目录或用例，选择「脚本生成」。</p>')}`;
+  body.innerHTML=`${genDraft?genDraftHTML():''}${genTasks.length?genTaskListHTML():(genDraft?'':'<p class="meta">还没有生成任务。在「用例管理」里右键目录或用例，选择「脚本生成」。</p>')}`;
   bindGenDraft();
   bindGenTasks();
 }
@@ -1542,11 +1545,13 @@ function bindGenDraft(){
     const btn=form.querySelector('button[type="submit"]');btn.disabled=true;
     const d=genDraft,chunks=[];
     for(let i=0;i<d.caseIDs.length;i+=GEN_MAX_CASES)chunks.push(d.caseIDs.slice(i,i+GEN_MAX_CASES));
+    const group=chunks.length>1?{id:`group-${crypto.randomUUID()}`,label:d.label,versionID:d.versionID,createdAt:new Date().toISOString(),caseTotal:d.caseIDs.length}:null;
+    if(group){genGroups.unshift(group);genOpen.add(group.id)}
     let submitted=0,failed=0;
     for(const [i,ids] of chunks.entries()){
       const label=chunks.length>1?`${d.label}（${i+1}/${chunks.length}）`:d.label;
-      try{await submitGenJob(d.versionID,ids,label,values);submitted++}
-      catch(error){failed++;const task={jobId:`local-${crypto.randomUUID()}`,versionID:d.versionID,versionName:version(d.versionID)?.name||'',caseIDs:ids,assetIDs:values.assetIds||[],requirementIDs:[],label,createdAt:new Date().toISOString(),status:'failed',error:{code:error.code||'SUBMIT_FAILED',message:error.message||'提交生成任务失败'},input:{...values,testSecret:''}};genTasks.unshift(task);saveGenTasks();genOpen.add(task.jobId)}
+      try{await submitGenJob(d.versionID,ids,label,values,group?.id);submitted++}
+      catch(error){failed++;const task={jobId:`local-${crypto.randomUUID()}`,groupID:group?.id,versionID:d.versionID,versionName:version(d.versionID)?.name||'',caseIDs:ids,assetIDs:values.assetIds||[],requirementIDs:[],label,createdAt:new Date().toISOString(),status:'failed',error:{code:error.code||'SUBMIT_FAILED',message:error.message||'提交生成任务失败'},input:{...values,testSecret:''}};genTasks.unshift(task);saveGenTasks();genOpen.add(task.jobId)}
     }
     genDraft=null;genOpen.delete('draft');
     toast(failed?`已提交 ${submitted} 条；${failed} 条提交失败，可在下方故障排查后重试`:`已提交 ${submitted} 个独立生成任务` ,failed>0);
@@ -1575,10 +1580,10 @@ function genPayload(vid,ids,values){
   if(values.testAccount||values.testSecret)payload.context.testData={username:values.testAccount||'',password:values.testSecret||''};
   return payload;
 }
-async function submitGenJob(vid,ids,label,values){
+async function submitGenJob(vid,ids,label,values,groupID=''){
   const payload=genPayload(vid,ids,values);
   const job=await serviceRequest('/api/generator/jobs',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
-  const task={jobId:job.id,versionID:vid,versionName:version(vid)?.name||'',caseIDs:ids,assetIDs:payload.context.assetIds||[],requirementIDs:(payload.requirements||[]).map(doc=>doc.id),label,createdAt:job.createdAt||new Date().toISOString(),status:job.status,stage:job.stage,input:{...values,testSecret:''}};
+  const task={jobId:job.id,...(groupID?{groupID}:{}),versionID:vid,versionName:version(vid)?.name||'',caseIDs:ids,assetIDs:payload.context.assetIds||[],requirementIDs:(payload.requirements||[]).map(doc=>doc.id),label,createdAt:job.createdAt||new Date().toISOString(),status:job.status,stage:job.stage,input:{...values,testSecret:''}};
   genTasks.unshift(task);saveGenTasks();
   genOpen.add(job.id);
   routeGenJob(task,job);
@@ -1586,6 +1591,11 @@ async function submitGenJob(vid,ids,label,values){
 function genStatusText(task){
   const status={queued:'排队中',running:'进行中',succeeded:'已完成',failed:'失败',cancelled:'已取消',importing:'正在保存脚本'}[task.status]||task.status;
   return task.stage&&!GEN_TERMINAL.includes(task.status)?`${status} · ${esc(task.stage)}`:status;
+}
+function genTaskListHTML(){
+  const grouped=new Set(),parts=[];
+  for(const group of genGroups){const children=genTasks.filter(task=>task.groupID===group.id);if(!children.length)continue;children.forEach(task=>grouped.add(task.jobId));const running=children.filter(task=>!GEN_TERMINAL.includes(task.status)).length,failed=children.filter(task=>task.status==='failed'||task.saved?.blocked).length,done=children.filter(task=>task.status==='succeeded'&&task.saved&&!task.saved.blocked).length;parts.push(`<details class="gen-task gen-parent-task" data-gen-panel="${group.id}"${genOpen.has(group.id)?' open':''}><summary><span class="gen-task-title">${esc(group.label)}</span><span class="gen-chip">${children.length}/${group.caseTotal||children.length} 条用例</span><span class="gen-chip ${failed?'gen-status-failed':''}">${running?`${running} 进行中`:failed?`${failed} 条需处理`:`${done} 已完成`}</span></summary><p class="meta">批量父任务 · 子用例独立运行，展开查看每条任务的进度、错误和故障排查入口。</p><div class="gen-children">${children.map(genTaskHTML).join('')}</div></details>`)}
+  return parts.join('')+genTasks.filter(task=>!grouped.has(task.jobId)).map(genTaskHTML).join('');
 }
 function genTaskHTML(task){
   const runtime=genRuntime.get(task.jobId);
@@ -1616,7 +1626,7 @@ function bindGenTasks(){
   $$('#gen-drawer-body [data-gen-forget]').forEach(b=>b.onclick=()=>{
     const id=b.dataset.genForget;
     closeGenStream(id);
-    genTasks=genTasks.filter(t=>t.jobId!==id);saveGenTasks();genRuntime.delete(id);genOpen.delete(id);
+    genTasks=genTasks.filter(t=>t.jobId!==id);genGroups=genGroups.filter(group=>genTasks.some(task=>task.groupID===group.id));saveGenTasks();genRuntime.delete(id);genOpen.delete(id);
     renderGenDrawer();
   });
 }

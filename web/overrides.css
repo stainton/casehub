@@ -194,3 +194,7 @@ button.avatar{padding:0;color:#fff;cursor:pointer;border:1px solid #ffffff40}
 #issue-resize-left{grid-column:2;grid-row:1}
 #issue-content{overflow:auto;padding:28px 36px;background:var(--bg);grid-column:3;grid-row:1;min-width:0}
 #issue-empty p{max-width:460px;line-height:1.8}.issue-row{align-items:flex-start;padding-top:9px;padding-bottom:9px}.issue-row small{display:block;color:var(--muted);margin-top:2px}.issue-row .badge{margin-left:auto;font-size:11px;white-space:nowrap}.issue-status-open{background:#fef3c7;color:#92400e}.issue-status-resolved{background:#dcfce7;color:#166534}.issue-editor-label{margin:18px 0 8px;color:var(--muted);font-size:12px;font-weight:600}.issue-form-meta{display:grid;grid-template-columns:1fr 1fr;gap:14px}.issue-form-meta label{margin:0}.issue-viewer{padding:0}.issue-viewer .toastui-editor-contents{color:var(--text)}
+/* 批量生成父任务：子用例各自运行，父任务只负责汇总和折叠。 */
+.gen-parent-task{background:var(--surface2)}
+.gen-parent-task>.gen-children{margin:10px 0 0 12px;padding-left:10px;border-left:2px solid var(--line)}
+.gen-parent-task>.gen-children>.gen-task{background:var(--surface);margin-bottom:8px}
