@@ -157,6 +157,7 @@ type Script struct {
 	ID, VersionID, CaseID string
 	// Title snapshots the case title so a script row reads correctly on its own.
 	Title, FileName, Language, Code string
+	Revision                        int64
 	// Status is "generated" or "blocked"; Summary says what the script verifies,
 	// or for a blocked case what input the generator was missing.
 	Status, Summary string
@@ -221,6 +222,9 @@ type Action struct {
 	// Result/Note above; the frontend sends exactly these keys.
 	ScriptFileName, ScriptLanguage, ScriptCode string
 	ScriptStatus, ScriptSummary, ScriptJobID   string
+	ScriptBaseID                               string
+	ScriptBaseRevision                         int64
+	ScriptBaseUpdatedAt                        time.Time
 	ScriptDeviations                           []RiskNote
 	ScriptMissingInputs                        []string
 	ScriptAssetIDs                             []string
@@ -447,6 +451,8 @@ func (s *Service) Apply(ctx context.Context, a Action) (Result, error) {
 		err = simplifyCase(&st, a)
 	case "saveScript":
 		err = saveScript(&st, a)
+	case "saveHealedScript":
+		err = saveHealedScript(&st, a)
 	case "editScript":
 		err = editScript(&st, a)
 	case "deleteScripts":
@@ -878,6 +884,45 @@ func saveScript(s *State, a Action) error {
 	script.JobID = a.ScriptJobID
 	script.UpdatedBy = a.Author
 	script.UpdatedAt = t
+	script.Revision++
+	return nil
+}
+
+// Save repairs only over the exact script the healer received. Failed repairs never reach this action.
+func saveHealedScript(s *State, a Action) error {
+	script, _ := scriptAt(s, a.VersionID, a.CaseID)
+	if script == nil {
+		return errors.New("原脚本已删除，无法保存修复结果")
+	}
+	if a.ScriptJobID != "" && script.JobID == a.ScriptJobID {
+		return nil
+	}
+	if script.ID != a.ScriptBaseID || script.Revision != a.ScriptBaseRevision || !script.UpdatedAt.Equal(a.ScriptBaseUpdatedAt) {
+		return errors.New("脚本在修复期间已被修改，修复结果未覆盖当前脚本；请下载结果对比或重新修复")
+	}
+	if a.ScriptStatus != "generated" || strings.TrimSpace(a.ScriptCode) == "" {
+		return errors.New("仅能保存验证通过的修复脚本")
+	}
+	if a.ScriptAssetIDs != nil {
+		seen := map[string]bool{}
+		for _, id := range a.ScriptAssetIDs {
+			if strings.TrimSpace(id) == "" || seen[id] {
+				return errors.New("脚本资产不能为空且不能重复")
+			}
+			seen[id] = true
+		}
+	}
+	if err := editScript(s, a); err != nil {
+		return err
+	}
+	if a.ScriptAssetIDs != nil {
+		c, _ := caseAt(s, a.VersionID, a.CaseID)
+		if c != nil {
+			c.AssetIDs = append([]string(nil), a.ScriptAssetIDs...)
+		}
+	}
+	script.Summary = strings.TrimSpace(a.ScriptSummary)
+	script.JobID = a.ScriptJobID
 	return nil
 }
 
@@ -900,6 +945,7 @@ func editScript(s *State, a Action) error {
 			s.Scripts[i].Code = code
 			s.Scripts[i].UpdatedBy = a.Author
 			s.Scripts[i].UpdatedAt = now()
+			s.Scripts[i].Revision++
 			return nil
 		}
 	}

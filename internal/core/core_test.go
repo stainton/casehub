@@ -1446,3 +1446,36 @@ func TestIssueWorkflowKeepsRequirementLink(t *testing.T) {
 		t.Fatal("missing requirement should be rejected")
 	}
 }
+
+func TestSaveHealedScriptProtectsOriginalAndConcurrentEdits(t *testing.T) {
+	svc := core.NewService(store.NewMemory())
+	st := apply(t, svc, core.Action{Type: "createVersion", Name: "heal"})
+	vid := branchID(t, st, "heal")
+	st = apply(t, svc, core.Action{Type: "saveScript", VersionID: vid, CaseID: "CASE-0001", ScriptCode: "original", ScriptSummary: "original", ScriptAssetIDs: []string{"asset-1"}})
+	before := scriptFor(t, st, vid, "CASE-0001")
+	repair := core.Action{Type: "saveHealedScript", VersionID: vid, CaseID: "CASE-0001", ScriptBaseID: before.ID, ScriptBaseRevision: before.Revision, ScriptBaseUpdatedAt: before.UpdatedAt, ScriptStatus: "generated", ScriptCode: "repaired", ScriptJobID: "heal-job", ScriptSummary: "修复定位"}
+	blocked := repair
+	blocked.ScriptStatus = "blocked"
+	blocked.ScriptCode = ""
+	if _, err := svc.Apply(context.Background(), blocked); err == nil {
+		t.Fatal("blocked repair accepted")
+	}
+	st = apply(t, svc, repair)
+	after := scriptFor(t, st, vid, "CASE-0001")
+	if after.Code != "repaired" || after.FromSteps != before.FromSteps || after.JobID != "heal-job" {
+		t.Fatalf("bad repair: %+v", after)
+	}
+	st = apply(t, svc, repair) // retrying import is idempotent
+	st = apply(t, svc, core.Action{Type: "editScript", VersionID: vid, CaseID: "CASE-0001", ScriptCode: "manual edit"})
+	repair.ScriptJobID = "old-heal-job"
+	if _, err := svc.Apply(context.Background(), repair); err == nil {
+		t.Fatal("stale repair overwrote edit")
+	}
+	st, err := svc.State(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if scriptFor(t, st, vid, "CASE-0001").Code != "manual edit" {
+		t.Fatal("manual edit lost")
+	}
+}

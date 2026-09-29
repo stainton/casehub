@@ -156,7 +156,13 @@ func TestProxySendsTheStoredConfigurationOfItsOwnAgent(t *testing.T) {
 	if revision, content, err = agentSettingsOf(svc, "general-agent")(context.Background()); err != nil || revision != "1" || content != `{"model":"general-model"}` {
 		t.Fatalf("general-agent proxy would send %q/%q (%v)", revision, content, err)
 	}
-	if agentSettingsOf(svc, "healer") != nil {
+	if _, err := svc.SaveAgentSettings(context.Background(), "healer", `{"model":"healer-model"}`, 0); err != nil {
+		t.Fatal(err)
+	}
+	if _, content, err := agentSettingsOf(svc, "healer")(context.Background()); err != nil || content != `{"model":"healer-model"}` {
+		t.Fatalf("healer settings: %s %v", content, err)
+	}
+	if agentSettingsOf(svc, "unknown-agent") != nil {
 		t.Fatal("a service with no agent must not inject anything")
 	}
 }

@@ -139,12 +139,14 @@ func main() {
 	automationURL := env("CASEHUB_AUTOMATION_URL", env("CASEHUB_PLANNER_URL", "http://localhost:4501"))
 	plannerProxy, plannerEnabled := upstream.New(automationURL, "planner", agentSettingsOf(svc, "planner"), lookup)
 	generatorProxy, generatorEnabled := upstream.New(automationURL, "generator", agentSettingsOf(svc, "generator"), lookup)
+	healerProxy, healerEnabled := upstream.New(automationURL, "healer", agentSettingsOf(svc, "healer"), lookup)
 	executorProxy, executorEnabled := upstream.New(env("CASEHUB_EXECUTOR_URL", "http://localhost:4504"), "executor", agentSettingsOf(svc, "planner"), nil)
 	generalAgentProxy, generalAgentEnabled := upstream.New(env("CASEHUB_GENERAL_AGENT_URL", "http://localhost:4503"), "general-agent", agentSettingsOf(svc, "general-agent"), nil)
-	log.Printf("CaseHub listening on :%s (store=%s, planner=%v, generator=%v, executor=%v, general-agent=%v)", port, kind, plannerEnabled, generatorEnabled, executorEnabled, generalAgentEnabled)
+	log.Printf("CaseHub listening on :%s (store=%s, planner=%v, generator=%v, healer=%v, executor=%v, general-agent=%v)", port, kind, plannerEnabled, generatorEnabled, healerEnabled, executorEnabled, generalAgentEnabled)
 	log.Fatal(http.ListenAndServe(":"+port, routes(&api{service: svc},
 		service{name: "planner", proxy: plannerProxy, enabled: plannerEnabled},
 		service{name: "generator", proxy: generatorProxy, enabled: generatorEnabled},
+		service{name: "healer", proxy: healerProxy, enabled: healerEnabled},
 		service{name: "executor", proxy: executorProxy, enabled: executorEnabled},
 		service{name: "general-agent", proxy: generalAgentProxy, enabled: generalAgentEnabled})))
 }

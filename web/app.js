@@ -626,7 +626,7 @@ const aiDesignAgents=[{id:'playwright',label:'aigc用例设计',render:renderPla
 // 设置弹窗里可配置的 agent：用例设计（planner）、脚本生成（generator）和通用 AI。配置都存在 CaseHub 的
 // agent 配置表里，发起任务时随请求下发，agent 据此覆写自己的 setting.json。
 const generatorSettingsFields=[...agentSettingsFields,{name:'caseTimeoutMinutes',label:'单用例生成时长（分钟）',type:'number',min:1,max:60,required:true}];
-const configurableAgents=[...aiDesignAgents,{id:'generator',label:'脚本生成',settingsFields:generatorSettingsFields},{id:'general-agent',label:'通用 AI',settingsFields:[]}];
+const configurableAgents=[...aiDesignAgents,{id:'generator',label:'脚本生成',settingsFields:generatorSettingsFields},{id:'healer',label:'脚本修复',settingsFields:agentSettingsFields.map(f=>f.name==='timeoutMinutes'?{...f,max:60}:f)},{id:'general-agent',label:'通用 AI',settingsFields:[]}];
 const agentDefaultsCache=new Map();
 async function loadAgentDefaults(id){
   const config=await request(`/api/agent-settings/${encodeURIComponent(id)}`);
@@ -1335,6 +1335,7 @@ function scriptFolderMenu(vid,folderId){
 function scriptMenu(vid,caseID){
   return [['查看详情',()=>setAutoFocus({type:'script',versionID:vid,id:caseID})],
     ['重新生成',()=>startGeneration(vid,[caseID],caseID)],
+    [hasHealing(vid,caseID)?'修复中 · 查看进度':'修复脚本',()=>startHealing(vid,caseID),'',!scriptFor(vid,caseID)?.Code],
     ['在用例管理中打开',()=>openCaseFromScript(vid,caseID)],
     ['删除脚本',()=>{if(confirm('确定删除这个脚本？用例本身不受影响，可以重新生成。'))act('deleteScripts',{VersionID:vid,CaseIDs:[caseID]}).then(()=>{if(autoFocus?.id===caseID)autoFocus=null;toast('脚本已删除')}).catch(()=>{})},'danger']];
 }
@@ -1375,7 +1376,7 @@ function renderAutoFocus(){
   if(!s){autoFocus=null;return renderAutoFocus()}
   $('#auto-empty').classList.add('hidden');box.classList.remove('hidden');
   const c=caseOfScript(s),stale=scriptStale(s),blocked=s.Status==='blocked';
-  const regenerating=hasGenerationForCases(s.VersionID,[s.CaseID]);
+  const regenerating=hasGenerationForCases(s.VersionID,[s.CaseID]),healing=hasHealing(s.VersionID,s.CaseID);
   const run=scriptRunResults.get(`${s.VersionID}:${s.CaseID}`);
   const deviations=s.Deviations?.length?`<div class="card"><h3>与用例预期的实测偏差 <small class="meta">脚本按实测行为断言，并在对应行标注 // deviation:</small></h3>${aiRiskListHTML(s.Deviations.map(d=>({risk:d.Risk,summary:d.Summary})),d=>esc(d.summary))}</div>`:'';
   const staleHint=stale?`<div class="card script-stale"><b>用例内容已变更</b><p class="meta">这个脚本是按变更前的用例生成的，断言可能已经不符合当前用例。确认用例后可以重新生成。</p><p class="drawer-actions"><button type="button" id="script-regen-stale" class="${regenerating?'ai-running':''}">${regenerating?'重新生成中':'重新生成'}</button></p></div>`:'';
@@ -1387,10 +1388,11 @@ function renderAutoFocus(){
   const runCard=run?`<div class="card"><h3>脚本运行</h3><p class="meta">${run.status==='completed'?'已完成并保存为测试记录':esc(run.stage||run.status||'运行中')}</p><p class="drawer-actions"><button type="button" class="secondary" id="script-run-progress">查看执行进度</button></p>${run.result?`<div id="script-run-markdown"></div><p class="drawer-actions"><button type="button" class="secondary" id="script-run-download">下载 Markdown 测试记录</button></p>`:''}</div>`:'';
   const lastRun=[...state.records].filter(record=>record.VersionID===s.VersionID&&record.CaseID===s.CaseID&&record.Submitted).sort((a,b)=>String(b.UpdatedAt||b.CreatedAt).localeCompare(String(a.UpdatedAt||a.CreatedAt)))[0];
   const infoCard=`<div class="card script-info-card"><div class="meta-grid"><span>状态 <b>${scriptStatusName(s)}${stale?' · 已过时':''}</b></span><span>文件 <b>${esc(s.FileName)}</b></span><span>更新时间 <b>${fmt(s.UpdatedAt)}</b></span><span>生成者 <b>${esc(s.UpdatedBy||'—')}</b></span><span>最后执行时间 <b>${lastRun?fmt(lastRun.UpdatedAt||lastRun.CreatedAt):'未执行'}</b></span><span>最后执行结果 <b>${lastRun?resultName(lastRun.Result):'未执行'}</b></span></div>${s.Summary&&!blocked?`<div class="script-summary"><h3>脚本验证的内容</h3><p>${esc(s.Summary)}</p></div>`:''}</div>`;
-  box.innerHTML=`<div class="detail-head"><div><div class="eyebrow">${esc(s.CaseID)} · ${esc(version(s.VersionID)?.name||'')}</div><h1>${esc(s.Title||c?.Title||s.CaseID)}</h1></div><div class="detail-actions"><button class="secondary" id="script-open-case">查看用例</button>${blocked?'':`<button id="script-run">运行脚本</button>`}<button id="script-regen" class="${regenerating?'ai-running':''}">${regenerating?'重新生成中':'重新生成'}</button></div></div>${infoCard}${staleHint}${deviations}${body}${runCard}`;
+  box.innerHTML=`<div class="detail-head"><div><div class="eyebrow">${esc(s.CaseID)} · ${esc(version(s.VersionID)?.name||'')}</div><h1>${esc(s.Title||c?.Title||s.CaseID)}</h1></div><div class="detail-actions"><button class="secondary" id="script-open-case">查看用例</button>${blocked?'':`<button id="script-run">运行脚本</button>`}<button id="script-heal" class="${healing?'ai-running':'secondary'}"${s.Code?'':' disabled'}>${healing?'修复中 · 查看进度':'修复脚本'}</button><button id="script-regen" class="${regenerating?'ai-running':''}">${regenerating?'重新生成中':'重新生成'}</button></div></div>${infoCard}${staleHint}${deviations}${body}${runCard}`;
   $('#script-open-case').onclick=()=>openCaseFromScript(s.VersionID,s.CaseID);
   const regen=()=>{if(regenerating)openGenerationProgress(s.VersionID,[s.CaseID]);else startGeneration(s.VersionID,[s.CaseID],s.CaseID)};
   $('#script-regen').onclick=regen;
+  $('#script-heal').onclick=()=>startHealing(s.VersionID,s.CaseID);
 	$('#script-run')?.addEventListener('click',()=>runScriptModal(s));
   $('#script-run-progress')?.addEventListener('click',()=>openScriptRunProgress(run.jobId));
 	$('#script-code-toggle')?.addEventListener('click',()=>{codeExpanded?expandedScriptCode.delete(scriptKey):expandedScriptCode.add(scriptKey);renderAutoFocus()});
@@ -1441,7 +1443,10 @@ const GEN_GROUPS_KEY='casehub-gen-task-groups';
 const GEN_TARGET_KEY='casehub-gen-target';
 const GEN_MAX_CASES=1; // 每条用例独立任务：一条失败绝不影响其他用例的脚本与诊断
 const GEN_TERMINAL=['succeeded','failed','cancelled'];
-let genTasks=loadGenTasks(), genGroups=loadGenGroups(), genDraft=null, genEnabled=null;
+let genTasks=loadGenTasks(), genGroups=loadGenGroups(), genDraft=null;
+const scriptServiceEnabled=new Map();
+const taskService=task=>task?.kind==='healer'?'healer':'generator';
+const hasHealing=(vid,id)=>genRunning().some(t=>taskService(t)==='healer'&&t.versionID===vid&&t.caseIDs.includes(id));
 const genRuntime=new Map(); // jobId -> {source, log:[], stage, status}
 const genOpen=new Set();    // 展开的选项卡（'draft' 或 jobId）
 function loadGenTasks(){try{const x=JSON.parse(localStorage.getItem(GEN_TASKS_KEY));return Array.isArray(x)?x:[]}catch{return []}}
@@ -1453,7 +1458,7 @@ function saveGenTarget(v){try{localStorage.setItem(GEN_TARGET_KEY,JSON.stringify
 const isGenDrawerOpen=()=>!$('#gen-drawer').classList.contains('hidden');
 const genTask=jobId=>genTasks.find(t=>t.jobId===jobId);
 const genRunning=()=>genTasks.filter(t=>!GEN_TERMINAL.includes(t.status));
-const hasGenerationForCases=(versionID,caseIDs)=>genRunning().some(task=>task.versionID===versionID&&task.caseIDs.some(id=>caseIDs.includes(id)));
+const hasGenerationForCases=(versionID,caseIDs)=>genRunning().some(task=>taskService(task)==='generator'&&task.versionID===versionID&&task.caseIDs.some(id=>caseIDs.includes(id)));
 function refreshAutoFocusForGeneration(task){
   if(!autoFocus||autoFocus.versionID!==task.versionID)return;
   const visible=autoFocus.type==='script'?[autoFocus.id]:scriptCaseIdsIn(autoFocus.versionID,autoFocus.id);
@@ -1483,6 +1488,17 @@ function startGeneration(vid,caseIDs,label){
   genOpen.add('draft');
   openGenDrawer();
 }
+function startHealing(vid,caseID){
+  if(page!=='automation')return;
+  if(genRunning().some(t=>t.versionID===vid&&t.caseIDs.includes(caseID)))return openGenerationProgress(vid,[caseID]);
+  const script=scriptFor(vid,caseID),c=state.cases.find(c=>c.VersionID===vid&&c.ID===caseID);
+  if(!script?.Code||!c)return toast('该用例没有可修复的脚本',true);
+  const run=scriptRunResults.get(`${vid}:${caseID}`);
+  const latest=state.records.filter(r=>r.VersionID===vid&&r.CaseID===caseID&&r.Submitted).sort((a,b)=>String(b.CreatedAt).localeCompare(String(a.CreatedAt)))[0];
+  const failureDetails=run?.result?.output||run?.output||latest?.Note||'';
+  genDraft={kind:'healer',versionID:vid,caseIDs:[caseID],label:`修复 · ${caseLabel(c)}`,failureDetails:String(failureDetails).replace(/data:image\/[^)\s]+/g,'[图片已省略]').slice(-100000)};
+  genOpen.add('draft');openGenDrawer();
+}
 function openGenDrawer(){
   $('#gen-drawer').classList.remove('hidden');
   renderGenDrawer();
@@ -1491,16 +1507,15 @@ $('#gen-drawer-close').onclick=()=>$('#gen-drawer').classList.add('hidden');
 
 async function renderGenDrawer(){
   const body=$('#gen-drawer-body');
-  if(genEnabled===null){
-    body.innerHTML='<p class="meta">正在检查脚本生成服务…</p>';
-    try{genEnabled=(await serviceRequest('/api/generator/status')).enabled}catch{genEnabled=false}
-    // 生成任务的表单默认值来自 generator 自己那份业务默认参数（设置里保存），本机草稿优先。
-    try{await Promise.all([loadAgentDefaults('generator'),loadAssets()])}catch{}
+  const service=taskService(genDraft);
+  if(!scriptServiceEnabled.has(service)){
+    body.innerHTML='<p class="meta">正在读取脚本服务配置…</p>';
+    try{scriptServiceEnabled.set(service,(await serviceRequest(`/api/${service}/status`)).enabled)}catch{scriptServiceEnabled.set(service,false)}
+    try{await Promise.all([loadAgentDefaults(service),loadAssets()])}catch{}
   }
   $('#gen-drawer-sub').textContent=genRunning().length?`${genRunning().length} 个任务进行中`:`${genTasks.length} 个任务`;
-  if(!genEnabled){
-    body.innerHTML='<p class="meta">脚本生成服务未配置（缺少 CASEHUB_GENERATOR_URL），暂时无法使用。</p>';
-    return;
+  if(genDraft&&!scriptServiceEnabled.get(service)){
+    body.innerHTML=`<p class="meta">${service==='healer'?'脚本修复':'脚本生成'}服务未配置或不可用。</p>${genTaskListHTML()}`;bindGenTasks();return;
   }
   body.innerHTML=`${genDraft?genDraftHTML():''}${genTasks.length?genTaskListHTML():(genDraft?'':'<p class="meta">还没有生成任务。在「用例管理」里右键目录或用例，选择「脚本生成」。</p>')}`;
   bindGenDraft();
@@ -1508,29 +1523,31 @@ async function renderGenDrawer(){
 }
 const genCaseCount=t=>t.caseIDs.length;
 // 本机上次填过的值优先，留空的字段回落到设置里保存的 generator 默认参数。
-function genValues(){
-  const saved=loadGenTarget(),defaults=agentDefaultsCache.get('generator')||{};
+function genValues(kind='generator'){
+  const saved=loadGenTarget(),defaults=agentDefaultsCache.get(kind)||{};
   const pick=name=>((saved[name]??'')!==''?saved[name]:(defaults[name]??''));
   return {baseUrl:pick('baseUrl'),instructions:pick('instructions'),testAccount:pick('testAccount'),
-    testSecret:defaults.testSecret??'',reqDoc:saved.reqDoc||'auto',assetIds:saved.assetIds||[],caseTimeoutMinutes:defaults.caseTimeoutMinutes||60};
+    testSecret:defaults.testSecret??'',reqDoc:saved.reqDoc||'auto',assetIds:saved.assetIds||[],caseTimeoutMinutes:(kind==='healer'?defaults.timeoutMinutes:defaults.caseTimeoutMinutes)||60};
 }
 function genDraftHTML(){
-  const v=genValues(),d=genDraft;
+  const d=genDraft,heal=taskService(d)==='healer',v=genValues(taskService(d));
+  if(heal)v.assetIds=state.cases.find(c=>c.VersionID===d.versionID&&c.ID===d.caseIDs[0])?.AssetIDs||[];
   const existing=d.caseIDs.filter(id=>scriptFor(d.versionID,id)).length;
   const batches=d.caseIDs.length;
   const docs=state.reqDocs.map(x=>`<option value="${x.ID}"${v.reqDoc===x.ID?' selected':''}>${esc(x.Title)}${x.Code?`（${esc(x.Code)}）`:''}</option>`).join('');
   return `<details class="gen-task" data-gen-panel="draft"${genOpen.has('draft')?' open':''}>
-    <summary><span class="gen-task-title">新建生成任务 · ${esc(d.label)}</span><span class="gen-chip">${d.caseIDs.length} 条用例</span></summary>
+    <summary><span class="gen-task-title">新建${heal?'修复':'生成'}任务 · ${esc(d.label)}</span><span class="gen-chip">${d.caseIDs.length} 条用例</span></summary>
     <form id="gen-form" autocomplete="off">
-      <p class="meta">脚本按用例原文（前置条件 / 步骤 / 预期结果）生成，一条用例一个 spec 文件，结果自动同步到「自动化管理」。${existing?`其中 ${existing} 条已有脚本，会被覆盖。`:''}${d.skipped?`已跳过 ${d.skipped} 条没有执行步骤的用例。`:''}${batches>1?`将拆成 ${batches} 个独立任务：任一用例失败不会影响其他用例。`:''}</p>
+      <p class="meta">${heal?'Healer 将基于已有脚本复现并修复，通过验证后保存；失败保留原脚本和诊断现场。':'脚本按用例原文（前置条件 / 步骤 / 预期结果）生成，'}一条用例一个 spec 文件，结果自动同步到「自动化管理」。${existing&&!heal?`其中 ${existing} 条已有脚本，会被覆盖。`:''}${d.skipped?`已跳过 ${d.skipped} 条没有执行步骤的用例。`:''}${batches>1?`将拆成 ${batches} 个独立任务：任一用例失败不会影响其他用例。`:''}</p>
+      ${heal?`<label>失败详情 / 修复目标<textarea name="failureDetails" placeholder="失败步骤、错误日志，或希望修复的问题">${esc(d.failureDetails||'')}</textarea></label>`:''}
       <label>被测系统 URL<input name="baseUrl" required placeholder="https://test.example.com" value="${esc(v.baseUrl||'')}"></label>
       <label>参考需求文档<select name="reqDoc"><option value="auto"${(v.reqDoc||'auto')==='auto'?' selected':''}>自动匹配（按用例编号前缀）</option><option value=""${v.reqDoc===''?' selected':''}>不附带需求文档</option>${docs}</select></label>
       <label>补充说明（可选）<textarea name="instructions" placeholder="登录方式、数据约束、需要避免的操作等">${esc(v.instructions||'')}</textarea></label>
       <label>测试账号 · 用户名（可选）<input name="testAccount" autocomplete="off" value="${esc(v.testAccount||'')}"></label>
       <label>测试账号 · 密码（可选）<input name="testSecret" type="text" class="fake-password" autocomplete="off" spellcheck="false" value="${esc(v.testSecret||'')}"></label>
-      <label>单用例生成时长（分钟）<input name="caseTimeoutMinutes" type="number" min="1" max="60" required value="${esc(v.caseTimeoutMinutes)}"><small class="meta">探索与脚本验证共用此时长；超时后本次生成会结束。</small></label>
-      <fieldset class="ai-assets"><legend>生成脚本可使用的资产（可选）</legend>${assetsCache.length?assetsCache.map(a=>`<label class="ai-asset"><input type="checkbox" name="assetIds" value="${esc(a.id)}"${v.assetIds.includes(a.id)?' checked':''}> ${esc(assetTypeLabel(a.type))} · ${esc(a.name)} <small>${assetSize(a.size)}</small></label>`).join(''):'<small class="meta">还没有资产，可在头像菜单的「资产」里上传。</small>'}<small class="meta">资产会推送给 generator，在生成脚本时按需使用；生成后的用例将关联这些资产，之后创建执行任务时会一并带上。</small></fieldset>
-      <p class="drawer-actions"><button type="button" class="secondary" id="gen-cancel-draft">取消</button><button type="submit">开始生成</button></p>
+      <label>单用例${heal?'修复':'生成'}时长（分钟）<input name="caseTimeoutMinutes" type="number" min="1" max="60" required value="${esc(v.caseTimeoutMinutes)}"><small class="meta">探索与脚本验证共用此时长；超时后本次${heal?'修复':'生成'}会结束并保留现场。</small></label>
+      <fieldset class="ai-assets"><legend>${heal?'修复':'生成'}脚本可使用的资产（可选）</legend>${assetsCache.length?assetsCache.map(a=>`<label class="ai-asset"><input type="checkbox" name="assetIds" value="${esc(a.id)}"${v.assetIds.includes(a.id)?' checked':''}> ${esc(assetTypeLabel(a.type))} · ${esc(a.name)} <small>${assetSize(a.size)}</small></label>`).join(''):'<small class="meta">还没有资产，可在头像菜单的「资产」里上传。</small>'}<small class="meta">资产会推送给 ${heal?'healer':'generator'}，在${heal?'修复':'生成'}脚本时按需使用；生成后的用例将关联这些资产，之后创建执行任务时会一并带上。</small></fieldset>
+      <p class="drawer-actions"><button type="button" class="secondary" id="gen-cancel-draft">取消</button><button type="submit">开始${heal?'修复':'生成'}</button></p>
     </form>
   </details>`;
 }
@@ -1551,11 +1568,11 @@ function bindGenDraft(){
     let submitted=0,failed=0;
     for(const [i,ids] of chunks.entries()){
       const label=chunks.length>1?`${d.label}（${i+1}/${chunks.length}）`:d.label;
-      try{await submitGenJob(d.versionID,ids,label,values,group?.id);submitted++}
-      catch(error){failed++;const task={jobId:`local-${crypto.randomUUID()}`,groupID:group?.id,versionID:d.versionID,versionName:version(d.versionID)?.name||'',caseIDs:ids,assetIDs:values.assetIds||[],requirementIDs:[],label,createdAt:new Date().toISOString(),status:'failed',error:{code:error.code||'SUBMIT_FAILED',message:error.message||'提交生成任务失败'},input:{...values,testSecret:''}};genTasks.unshift(task);saveGenTasks();genOpen.add(task.jobId)}
+      try{await submitGenJob(d.versionID,ids,label,values,group?.id,taskService(d));submitted++}
+      catch(error){failed++;const task={kind:taskService(d),jobId:`local-${crypto.randomUUID()}`,groupID:group?.id,versionID:d.versionID,versionName:version(d.versionID)?.name||'',caseIDs:ids,assetIDs:values.assetIds||[],requirementIDs:[],label,createdAt:new Date().toISOString(),status:'failed',error:{code:error.code||'SUBMIT_FAILED',message:error.message||'提交生成任务失败'},input:{...values,testSecret:''}};genTasks.unshift(task);saveGenTasks();genOpen.add(task.jobId)}
     }
     genDraft=null;genOpen.delete('draft');
-    toast(failed?`已提交 ${submitted} 条；${failed} 条提交失败，可在下方故障排查后重试`:`已提交 ${submitted} 个独立生成任务` ,failed>0);
+    toast(failed?`已提交 ${submitted} 条；${failed} 条提交失败，可在下方故障排查后重试`:`已提交 ${submitted} 个独立${taskService(d)==='healer'?'修复':'生成'}任务` ,failed>0);
     renderGenDrawer();
   };
 }
@@ -1581,10 +1598,12 @@ function genPayload(vid,ids,values){
   if(values.testAccount||values.testSecret)payload.context.testData={username:values.testAccount||'',password:values.testSecret||''};
   return payload;
 }
-async function submitGenJob(vid,ids,label,values,groupID=''){
+async function submitGenJob(vid,ids,label,values,groupID='',kind='generator'){
   const payload=genPayload(vid,ids,values);
-  const job=await serviceRequest('/api/generator/jobs',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
-  const task={jobId:job.id,...(groupID?{groupID}:{}),versionID:vid,versionName:version(vid)?.name||'',caseIDs:ids,assetIDs:payload.context.assetIds||[],requirementIDs:(payload.requirements||[]).map(doc=>doc.id),label,createdAt:job.createdAt||new Date().toISOString(),status:job.status,stage:job.stage,input:{...values,testSecret:''}};
+  let original;
+  if(kind==='healer'){original=scriptFor(vid,ids[0]);if(ids.length!==1||!original?.Code)throw Error('修复需要一条已有脚本');payload.cases[0].script=original.Code;payload.cases[0].failureDetails=values.failureDetails||'';}
+  const job=await serviceRequest(`/api/${kind}/jobs`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+  const task={kind,...(original?{scriptBaseID:original.ID,scriptBaseRevision:original.Revision||0,scriptBaseUpdatedAt:original.UpdatedAt}:{}),jobId:job.id,...(groupID?{groupID}:{}),versionID:vid,versionName:version(vid)?.name||'',caseIDs:ids,assetIDs:payload.context.assetIds||[],requirementIDs:(payload.requirements||[]).map(doc=>doc.id),label,createdAt:job.createdAt||new Date().toISOString(),status:job.status,stage:job.stage,input:{...values,testSecret:''}};
   genTasks.unshift(task);saveGenTasks();
   genOpen.add(job.id);
   routeGenJob(task,job);
@@ -1600,11 +1619,11 @@ function genTaskListHTML(){
 }
 function genTaskHTML(task){
   const runtime=genRuntime.get(task.jobId);
-  const done=task.saved?`<div class="card meta-grid"><span>已生成 <b>${task.saved.generated}</b></span><span>受阻 <b>${task.saved.blocked}</b></span>${task.saved.failed?`<span>保存失败 <b>${task.saved.failed}</b></span>`:''}</div>`:'';
-  const limitations=task.limitations?.length?`<div class="card"><h3>未生成的用例 <small class="meta">按风险从高到低</small></h3>${aiRiskListHTML(task.limitations,l=>esc(l.summary))}</div>`:'';
+  const done=task.saved?`<div class="card meta-grid"><span>${taskService(task)==='healer'?'已修复':'已生成'} <b>${task.saved.generated}</b></span><span>受阻 <b>${task.saved.blocked}</b></span>${task.saved.failed?`<span>保存失败 <b>${task.saved.failed}</b></span>`:''}</div>`:'';
+  const limitations=task.limitations?.length?`<div class="card"><h3>${taskService(task)==='healer'?'未完成修复':'未生成的用例'} <small class="meta">按风险从高到低</small></h3>${aiRiskListHTML(task.limitations,l=>esc(l.summary))}</div>`:'';
   const error=task.error?`<p class="meta">${esc(task.error.code||'')}${task.error.code?'：':''}${esc(task.error.message||'')}</p>`:'';
   const actions=GEN_TERMINAL.includes(task.status)
-    ?`<button type="button" class="secondary" data-gen-forget="${task.jobId}">移除记录</button>${task.status==='succeeded'&&!task.saved?`<button type="button" data-gen-import="${task.jobId}">重试保存</button>`:''}${task.status!=='succeeded'||task.saved?.blocked?`<button type="button" data-gen-intervene="${task.jobId}">故障排查并重新生成</button>`:''}`
+    ?`<button type="button" class="secondary" data-gen-forget="${task.jobId}">移除记录</button>${taskService(task)==='healer'&&task.status==='succeeded'?`<button type="button" class="secondary" data-heal-download="${task.jobId}">下载修复结果</button>`:''}${task.status==='succeeded'&&(!task.saved||task.saved.failed)?`<button type="button" data-gen-import="${task.jobId}">重试保存</button>`:''}${task.status!=='succeeded'||task.saved?.blocked||task.saved?.failed?`<button type="button" data-gen-intervene="${task.jobId}">${taskService(task)==='healer'?'补充说明并再次修复':'故障排查并重新生成'}</button>`:''}`
     :`<button type="button" class="secondary" data-gen-cancel="${task.jobId}">取消任务</button>`;
   return `<details class="gen-task" data-gen-panel="${task.jobId}"${genOpen.has(task.jobId)?' open':''}>
     <summary><span class="gen-task-title">${esc(task.label)}</span><span class="gen-chip">${genCaseCount(task)} 条</span><span class="gen-chip gen-status-${GEN_TERMINAL.includes(task.status)?task.status:'running'}" data-gen-status="${task.jobId}">${genStatusText(task)}</span></summary>
@@ -1620,7 +1639,13 @@ function bindGenTasks(){
   });
   $$('#gen-drawer-body [data-gen-cancel]').forEach(b=>b.onclick=async()=>{
     b.disabled=true;
-    try{await serviceRequest(`/api/generator/jobs/${b.dataset.genCancel}`,{method:'DELETE'})}catch(e){toast(e.message,true);b.disabled=false}
+    try{await serviceRequest(`/api/${taskService(genTask(b.dataset.genCancel))}/jobs/${b.dataset.genCancel}`,{method:'DELETE'})}catch(e){toast(e.message,true);b.disabled=false}
+  });
+  $$('#gen-drawer-body [data-heal-download]').forEach(b=>b.onclick=async()=>{
+    try{const result=await serviceRequest(`/api/healer/jobs/${b.dataset.healDownload}/result`),sc=result.scripts?.find(sc=>sc.status==='generated'&&sc.code);
+      if(!sc)return toast('此次修复未产出验证通过的脚本',true);
+      const url=URL.createObjectURL(new Blob([sc.code],{type:'text/plain;charset=utf-8'})),a=document.createElement('a');a.href=url;a.download=sc.fileName;a.click();setTimeout(()=>URL.revokeObjectURL(url),0);
+    }catch(error){toast(error.message,true)}
   });
   $$('#gen-drawer-body [data-gen-import]').forEach(b=>b.onclick=()=>{const t=genTask(b.dataset.genImport);if(t)importGenResult(t)});
   $$('#gen-drawer-body [data-gen-intervene]').forEach(b=>b.onclick=()=>{const t=genTask(b.dataset.genIntervene);if(t)interveneGenTask(t)});
@@ -1632,8 +1657,9 @@ function bindGenTasks(){
   });
 }
 function interveneGenTask(task){
-  const saved=task.input||genValues();
-  showModal('生成故障排查',`<p class="meta">会为 ${esc(task.caseIDs.join('、'))} 新建独立任务；已生成的其他用例不会受影响。请补充故障现象、可用路径或账号条件，Generator 会据此重新探索。</p><label>排查提示词<textarea name="instructions" required placeholder="例如：登录后需先进入素材管理；上传按钮在右侧工具栏；上次失败时显示的错误是…">${esc(saved.instructions||'')}</textarea></label><label>测试账号 · 用户名（可选）<input name="testAccount" value="${esc(saved.testAccount||'')}"></label><label>测试账号 · 密码（如需重新填写）<input name="testSecret" type="text" class="fake-password" autocomplete="off"></label>`,async values=>{const next={...saved,...values,assetIds:saved.assetIds||[],caseTimeoutMinutes:saved.caseTimeoutMinutes||60};await submitGenJob(task.versionID,task.caseIDs,`${task.label} · 故障排查`,next);toast('已提交故障排查任务')});
+  const saved=task.input||genValues(taskService(task));
+  if(taskService(task)==='healer'&&page!=='automation'){setPage('automation');setAutoFocus({type:'script',versionID:task.versionID,id:task.caseIDs[0]})}
+  showModal(taskService(task)==='healer'?'修复故障排查':'生成故障排查',`<p class="meta">会为 ${esc(task.caseIDs.join('、'))} 新建独立任务；已生成的其他用例不会受影响。请补充故障现象、可用路径或账号条件，${taskService(task)==='healer'?'Healer 会基于已有脚本继续排查。':'Generator 会据此重新探索。'}</p><label>排查提示词<textarea name="instructions" required placeholder="例如：登录后需先进入素材管理；上传按钮在右侧工具栏；上次失败时显示的错误是…">${esc(saved.instructions||'')}</textarea></label><label>测试账号 · 用户名（可选）<input name="testAccount" value="${esc(saved.testAccount||'')}"></label><label>测试账号 · 密码（如需重新填写）<input name="testSecret" type="text" class="fake-password" autocomplete="off"></label>`,async values=>{const next={...saved,...values,assetIds:saved.assetIds||[],caseTimeoutMinutes:saved.caseTimeoutMinutes||60};await submitGenJob(task.versionID,task.caseIDs,`${task.label} · 故障排查`,next,'',taskService(task));toast('已提交故障排查任务')});
 }
 function genLogLine(jobId,msg){
   const runtime=genRuntime.get(jobId)||{log:[]};
@@ -1661,13 +1687,13 @@ function routeGenJob(task,job){
   refreshAutoFocusForGeneration(task);
   if(!GEN_TERMINAL.includes(job.status))return ensureGenStream(task);
   closeGenStream(task.jobId);
-  if(job.status==='succeeded'&&!task.saved)return importGenResult(task);
+  if(job.status==='succeeded'&&(!task.saved||task.saved.failed))return importGenResult(task);
   if(isGenDrawerOpen())renderGenDrawer();
 }
 function ensureGenStream(task){
   const runtime=genRuntime.get(task.jobId)||{log:[]};
   if(runtime.source)return;
-  const source=new EventSource(`/api/generator/jobs/${task.jobId}/events`);
+  const source=new EventSource(`/api/${taskService(task)}/jobs/${task.jobId}/events`);
   runtime.source=source;genRuntime.set(task.jobId,runtime);
   source.addEventListener('snapshot',e=>{
     const job=JSON.parse(e.data);
@@ -1678,7 +1704,7 @@ function ensureGenStream(task){
     const ev=JSON.parse(e.data);
     task.stage=ev.stage;updateGenStatusChip(task);
     genLogLine(task.jobId,`[${fmt(ev.createdAt)}] ${ev.stage||''} ${ev.message||''}${ev.tool?` (${ev.tool} ${ev.toolStatus||''})`:''}`.trim());
-    if(GEN_TERMINAL.includes(ev.status))serviceRequest(`/api/generator/jobs/${task.jobId}`).then(job=>routeGenJob(task,job)).catch(()=>{});
+    if(GEN_TERMINAL.includes(ev.status))serviceRequest(`/api/${taskService(task)}/jobs/${task.jobId}`).then(job=>routeGenJob(task,job)).catch(()=>{});
   });
   source.addEventListener('reset',e=>{
     const r=JSON.parse(e.data);
@@ -1692,20 +1718,22 @@ async function importGenResult(task){
   if(task.importing)return;
   task.importing=true;task.status='importing';updateGenStatusChip(task);refreshAutoFocusForGeneration(task);
   try{
-    const result=await serviceRequest(`/api/generator/jobs/${task.jobId}/result`);
+    const result=await serviceRequest(`/api/${taskService(task)}/jobs/${task.jobId}/result`);
     for(const docID of task.requirementIDs||[]){const notes=result.explorationRecords?.[docID]??result.explorationNotes;if(notes?.trim())await act('saveReqExploration',{DocID:docID,ExplorationNotes:notes});}
-    let failed=0;
+    let failed=0;task.error=null;
     for(const sc of result.scripts||[]){
       try{
-        await act('saveScript',{VersionID:task.versionID,CaseID:sc.caseId,ScriptFileName:sc.fileName,ScriptLanguage:sc.language,
+        if(taskService(task)==='healer'&&sc.status!=='generated')continue;
+        await act(taskService(task)==='healer'?'saveHealedScript':'saveScript',{ScriptBaseID:task.scriptBaseID,ScriptBaseRevision:task.scriptBaseRevision,ScriptBaseUpdatedAt:task.scriptBaseUpdatedAt,VersionID:task.versionID,CaseID:sc.caseId,ScriptFileName:sc.fileName,ScriptLanguage:sc.language,
           ScriptCode:sc.code||'',ScriptStatus:sc.status,ScriptSummary:sc.summary||'',ScriptJobID:task.jobId,
           ScriptDeviations:(sc.deviations||[]).map(d=>({Risk:d.risk,Summary:d.summary})),ScriptMissingInputs:sc.missingInputs||[],ScriptAssetIDs:task.assetIDs});
-      }catch{failed++} // act 已提示失败原因（例如用例在生成期间被删除）
+      }catch(error){failed++;task.error={code:'SAVE_FAILED',message:error.message}} // act 已提示失败原因（例如用例在生成期间被删除）
     }
     task.status='succeeded';
     task.saved={generated:result.generated??0,blocked:result.blocked??0,failed};
     task.limitations=result.limitations||[];
-    toast(`「${task.label}」生成完成：${task.saved.generated} 个脚本已保存${task.saved.blocked?`，${task.saved.blocked} 条用例未生成`:''}`);
+    if(taskService(task)==='healer')task.limitations=(result.scripts||[]).filter(sc=>sc.status==='blocked').map(sc=>({risk:'high',summary:(sc.missingInputs||[]).join('；')||sc.summary}));
+    toast(`「${task.label}」${taskService(task)==='healer'?'修复':'生成'}完成：${Math.max(0,task.saved.generated-failed)} 个脚本已保存${task.saved.blocked?`，${task.saved.blocked} 条用例未生成`:''}`);
   }catch(e){
     task.status='succeeded'; // 任务本身成功了，只是结果还没保存下来
     task.error={code:'SAVE_FAILED',message:`保存脚本失败：${e.message}`};
@@ -1719,9 +1747,9 @@ async function importGenResult(task){
 // 刷新页面后恢复未完成的任务：按 ID 查状态，继续订阅或补做保存。
 async function resumeGenTasks(){
   for(const task of genTasks){
-    if(GEN_TERMINAL.includes(task.status)&&task.saved)continue;
+    if(GEN_TERMINAL.includes(task.status)&&task.saved&&!task.saved.failed)continue;
     try{
-      const job=await serviceRequest(`/api/generator/jobs/${task.jobId}`);
+      const job=await serviceRequest(`/api/${taskService(task)}/jobs/${task.jobId}`);
       routeGenJob(task,job);
     }catch(e){
       if(!GEN_TERMINAL.includes(task.status)){
