@@ -1063,7 +1063,7 @@ function updateReviewBulk(){
 }
 $('#review-bulk [data-review-bulk="clear"]').onclick=()=>{reviewSelected.clear();reviewPickedFolders.clear();updateReviewBulk()};
 // 批量导入的来源层：优先取勾选过、且恰好覆盖全部已选用例的最上层文件夹（保留该文件夹本身）；
-// 否则取已选用例所在文件夹的最近公共祖先（保留该层）；只选了一条用例时直接放进父目录。
+// 否则从评审区根完整保留目录层级（不再按最近公共祖先裁剪，否则单链目录只剩最后一级）；只选了一条用例时直接放进父目录。
 function reviewImportSource(ids){
   const sel=new Set(ids);
   const covering=[...reviewPickedFolders].filter(fid=>{const inside=pendingCaseIdsIn(fid);return inside.length&&inside.every(id=>sel.has(id))&&ids.every(id=>inside.includes(id))});
@@ -1071,10 +1071,8 @@ function reviewImportSource(ids){
   if(covering.length){const top=covering.map(ancestors).sort((a,b)=>a.length-b.length)[0];return pendingParentOf(top[top.length-1])}
   const folderOf=id=>state.pendingCases.find(c=>c.ID===id)?.FolderID||'pending-root';
   if(ids.length===1)return folderOf(ids[0]);
-  const paths=ids.map(id=>ancestors(folderOf(id)));
-  let lca='pending-root';
-  for(let i=0;i<paths[0].length&&paths.every(p=>p[i]===paths[0][i]);i++)lca=paths[0][i];
-  return pendingParentOf(lca);
+  // 仅按用例勾选时没有明确的起点：从评审区根开始完整保留目录层级（即使每层只有一个文件夹）。
+  return 'pending-root';
 }
 $('#review-bulk [data-review-bulk="import"]').onclick=()=>{const ids=[...reviewSelected];if(ids.length)importReviewModal(ids,reviewImportSource(ids))};
 $('#review-bulk [data-review-bulk="delete"]').onclick=async()=>{
@@ -1437,6 +1435,16 @@ $('#auto-expand').onclick=$('#auto-empty-expand').onclick=()=>setAutoSidebarColl
 // 所以抽屉里是一个任务列表，每个任务一个可展开选项卡，可以同时跑多个、关掉抽屉后
 // 继续在后台跑，重新打开按 ID 恢复查看。任务清单存在 localStorage，脚本本身存在
 // 服务端 state 里（saveScript）。
+// crypto.randomUUID 只在安全上下文（HTTPS / localhost）可用；用 http://IP 访问时为 undefined，
+// 批量生成创建任务组时会直接抛错，所以这里降级到 getRandomValues / Math.random。
+function uuid(){
+  if(typeof crypto!=='undefined'&&typeof crypto.randomUUID==='function')return crypto.randomUUID();
+  const b=new Uint8Array(16);
+  if(typeof crypto!=='undefined'&&crypto.getRandomValues)crypto.getRandomValues(b);else for(let i=0;i<16;i++)b[i]=Math.random()*256;
+  b[6]=b[6]&0x0f|0x40;b[8]=b[8]&0x3f|0x80;
+  const h=[...b].map(x=>x.toString(16).padStart(2,'0')).join('');
+  return `${h.slice(0,8)}-${h.slice(8,12)}-${h.slice(12,16)}-${h.slice(16,20)}-${h.slice(20)}`;
+}
 const GEN_TASKS_KEY='casehub-gen-tasks';
 const GEN_GROUPS_KEY='casehub-gen-task-groups';
 // 上次填过的目标信息，下次生成默认带出；密码不保存，每次重新输入。
@@ -1538,7 +1546,8 @@ function genDraftHTML(){
   return `<details class="gen-task" data-gen-panel="draft"${genOpen.has('draft')?' open':''}>
     <summary><span class="gen-task-title">新建${heal?'修复':'生成'}任务 · ${esc(d.label)}</span><span class="gen-chip">${d.caseIDs.length} 条用例</span></summary>
     <form id="gen-form" autocomplete="off">
-      <p class="meta">${heal?'Healer 将基于已有脚本复现并修复，通过验证后保存；失败保留原脚本和诊断现场。':'脚本按用例原文（前置条件 / 步骤 / 预期结果）生成，'}一条用例一个 spec 文件，结果自动同步到「自动化管理」。${existing&&!heal?`其中 ${existing} 条已有脚本，会被覆盖。`:''}${d.skipped?`已跳过 ${d.skipped} 条没有执行步骤的用例。`:''}${batches>1?`将拆成 ${batches} 个独立任务：任一用例失败不会影响其他用例。`:''}</p>
+      <p class="meta">${heal?'Healer 将基于已有脚本复现并修复，通过验证后保存；失败保留原脚本和诊断现场。':'脚本按用例原文（前置条件 / 步骤 / 预期结果）生成，'}一条用例一个 spec 文件，结果自动同步到「自动化管理」。${existing&&!heal?`其中 ${existing} 条已有脚本，见下方「覆盖已有脚本」选项。`:''}${d.skipped?`已跳过 ${d.skipped} 条没有执行步骤的用例。`:''}${batches>1?`将拆成 ${batches} 个独立任务：任一用例失败不会影响其他用例。`:''}</p>
+      ${existing&&!heal?`<label class="inline-check"><input type="checkbox" name="overwrite" value="1"${existing===batches?' checked':''}> 覆盖已有脚本（重新生成 ${existing} 条已有脚本的用例；不勾选则只为尚无脚本的 ${batches-existing} 条生成）</label>`:''}
       ${heal?`<label>失败详情 / 修复目标<textarea name="failureDetails" placeholder="失败步骤、错误日志，或希望修复的问题">${esc(d.failureDetails||'')}</textarea></label>`:''}
       <label>被测系统 URL<input name="baseUrl" required placeholder="https://test.example.com" value="${esc(v.baseUrl||'')}"></label>
       <label>参考需求文档<select name="reqDoc"><option value="auto"${(v.reqDoc||'auto')==='auto'?' selected':''}>自动匹配（按用例编号前缀）</option><option value=""${v.reqDoc===''?' selected':''}>不附带需求文档</option>${docs}</select></label>
@@ -1559,17 +1568,23 @@ function bindGenDraft(){
     e.preventDefault();
     const data=new FormData(form),values=Object.fromEntries(data);values.assetIds=data.getAll('assetIds');
     if(!values.baseUrl.trim())return toast('请填写被测系统 URL',true);if(!Number.isInteger(Number(values.caseTimeoutMinutes))||Number(values.caseTimeoutMinutes)<1||Number(values.caseTimeoutMinutes)>60)return toast('单用例生成时长需为 1–60 分钟',true);
+    const d=genDraft;
+    if(taskService(d)==='generator'&&form.elements.overwrite&&!values.overwrite){
+      const todo=d.caseIDs.filter(id=>!scriptFor(d.versionID,id));
+      if(!todo.length)return toast('选中的用例都已有脚本；勾选「覆盖已有脚本」可重新生成',true);
+      d.skipped=(d.skipped||0)+d.caseIDs.length-todo.length;d.caseIDs=todo;
+    }
     saveGenTarget(values);
     const btn=form.querySelector('button[type="submit"]');btn.disabled=true;
-    const d=genDraft,chunks=[];
+    const chunks=[];
     for(let i=0;i<d.caseIDs.length;i+=GEN_MAX_CASES)chunks.push(d.caseIDs.slice(i,i+GEN_MAX_CASES));
-    const group=chunks.length>1?{id:`group-${crypto.randomUUID()}`,label:d.label,versionID:d.versionID,createdAt:new Date().toISOString(),caseTotal:d.caseIDs.length}:null;
+    const group=chunks.length>1?{id:`group-${uuid()}`,label:d.label,versionID:d.versionID,createdAt:new Date().toISOString(),caseTotal:d.caseIDs.length}:null;
     if(group){genGroups.unshift(group);genOpen.add(group.id)}
     let submitted=0,failed=0;
     for(const [i,ids] of chunks.entries()){
       const label=chunks.length>1?`${d.label}（${i+1}/${chunks.length}）`:d.label;
       try{await submitGenJob(d.versionID,ids,label,values,group?.id,taskService(d));submitted++}
-      catch(error){failed++;const task={kind:taskService(d),jobId:`local-${crypto.randomUUID()}`,groupID:group?.id,versionID:d.versionID,versionName:version(d.versionID)?.name||'',caseIDs:ids,assetIDs:values.assetIds||[],requirementIDs:[],label,createdAt:new Date().toISOString(),status:'failed',error:{code:error.code||'SUBMIT_FAILED',message:error.message||'提交生成任务失败'},input:{...values,testSecret:''}};genTasks.unshift(task);saveGenTasks();genOpen.add(task.jobId)}
+      catch(error){failed++;const task={kind:taskService(d),jobId:`local-${uuid()}`,groupID:group?.id,versionID:d.versionID,versionName:version(d.versionID)?.name||'',caseIDs:ids,assetIDs:values.assetIds||[],requirementIDs:[],label,createdAt:new Date().toISOString(),status:'failed',error:{code:error.code||'SUBMIT_FAILED',message:error.message||'提交生成任务失败'},input:{...values,testSecret:''}};genTasks.unshift(task);saveGenTasks();genOpen.add(task.jobId)}
     }
     genDraft=null;genOpen.delete('draft');
     toast(failed?`已提交 ${submitted} 条；${failed} 条提交失败，可在下方故障排查后重试`:`已提交 ${submitted} 个独立${taskService(d)==='healer'?'修复':'生成'}任务` ,failed>0);

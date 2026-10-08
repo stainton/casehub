@@ -8,14 +8,6 @@
       "baseMainRevision": 1,
       "createdBy": "system",
       "createdAt": "2026-09-04T09:40:50.387Z"
-    },
-    {
-      "id": "8474c186e4ea6823",
-      "name": "321",
-      "mainline": false,
-      "baseMainRevision": 2,
-      "createdBy": "本地用户",
-      "createdAt": "2026-09-04T09:52:06.572Z"
     }
   ],
   "folders": [
@@ -25,7 +17,8 @@
       "ParentID": "",
       "Name": "全部用例",
       "CreatedBy": "system",
-      "CreatedAt": "2026-09-04T09:40:50.387Z"
+      "CreatedAt": "2026-09-04T09:40:50.387Z",
+      "Moved": false
     },
     {
       "ID": "auth",
@@ -33,23 +26,8 @@
       "ParentID": "root",
       "Name": "登录与认证",
       "CreatedBy": "system",
-      "CreatedAt": "2026-09-04T09:40:50.387Z"
-    },
-    {
-      "ID": "root",
-      "VersionID": "8474c186e4ea6823",
-      "ParentID": "",
-      "Name": "全部用例",
-      "CreatedBy": "本地用户",
-      "CreatedAt": "2026-09-04T09:52:06.572Z"
-    },
-    {
-      "ID": "auth",
-      "VersionID": "8474c186e4ea6823",
-      "ParentID": "root",
-      "Name": "登录与认证",
-      "CreatedBy": "本地用户",
-      "CreatedAt": "2026-09-04T09:52:06.572Z"
+      "CreatedAt": "2026-09-04T09:40:50.387Z",
+      "Moved": false
     }
   ],
   "cases": [
@@ -69,7 +47,16 @@
       "UpdatedAt": "2026-09-04T09:40:50.387Z",
       "BaseRevision": 0,
       "Revision": 1,
-      "Dirty": false
+      "Dirty": false,
+      "Description": "",
+      "SimplifiedPreconditions": "",
+      "SimplifiedSteps": "",
+      "SimplifiedExpected": "",
+      "SimplifiedFromPreconditions": "",
+      "SimplifiedFromSteps": "",
+      "SimplifiedFromExpected": "",
+      "SimplifiedAt": "0001-01-01T00:00:00Z",
+      "AssetIDs": null
     },
     {
       "ID": "CASE-0002",
@@ -87,43 +74,16 @@
       "UpdatedAt": "2026-09-04T09:40:50.387Z",
       "BaseRevision": 0,
       "Revision": 1,
-      "Dirty": false
-    },
-    {
-      "ID": "CASE-0001",
-      "VersionID": "8474c186e4ea6823",
-      "FolderID": "auth",
-      "Title": "正确账号密码登录",
-      "Preconditions": "用户账号已启用",
-      "Steps": "1. 打开登录页\n2. 输入正确账号和密码\n3. 点击登录",
-      "Expected": "进入系统首页",
-      "Priority": "P0",
-      "CreatedBy": "本地用户",
-      "UpdatedBy": "本地用户",
-      "Result": "",
-      "CreatedAt": "2026-09-04T09:52:06.572Z",
-      "UpdatedAt": "2026-09-04T09:52:06.572Z",
-      "BaseRevision": 1,
-      "Revision": 0,
-      "Dirty": false
-    },
-    {
-      "ID": "CASE-0002",
-      "VersionID": "8474c186e4ea6823",
-      "FolderID": "auth",
-      "Title": "错误密码登录失败",
-      "Preconditions": "用户账号已启用",
-      "Steps": "输入正确账号和错误密码后提交",
-      "Expected": "提示账号或密码错误",
-      "Priority": "P1",
-      "CreatedBy": "本地用户",
-      "UpdatedBy": "本地用户",
-      "Result": "",
-      "CreatedAt": "2026-09-04T09:52:06.572Z",
-      "UpdatedAt": "2026-09-04T09:52:06.572Z",
-      "BaseRevision": 1,
-      "Revision": 0,
-      "Dirty": false
+      "Dirty": false,
+      "Description": "",
+      "SimplifiedPreconditions": "",
+      "SimplifiedSteps": "",
+      "SimplifiedExpected": "",
+      "SimplifiedFromPreconditions": "",
+      "SimplifiedFromSteps": "",
+      "SimplifiedFromExpected": "",
+      "SimplifiedAt": "0001-01-01T00:00:00Z",
+      "AssetIDs": null
     },
     {
       "ID": "CASE-257007",
@@ -141,25 +101,16 @@
       "UpdatedAt": "2026-09-04T09:53:20.117Z",
       "BaseRevision": 0,
       "Revision": 2,
-      "Dirty": false
-    },
-    {
-      "ID": "CASE-257007",
-      "VersionID": "8474c186e4ea6823",
-      "FolderID": "auth",
-      "Title": "dosa",
-      "Preconditions": "das",
-      "Steps": "dasdfgh",
-      "Expected": "dasd",
-      "Priority": "P0",
-      "CreatedBy": "本地用户",
-      "UpdatedBy": "本地用户",
-      "Result": "",
-      "CreatedAt": "2026-09-04T09:52:27.418Z",
-      "UpdatedAt": "2026-09-04T09:53:20.117Z",
-      "BaseRevision": 2,
-      "Revision": 0,
-      "Dirty": false
+      "Dirty": false,
+      "Description": "",
+      "SimplifiedPreconditions": "",
+      "SimplifiedSteps": "",
+      "SimplifiedExpected": "",
+      "SimplifiedFromPreconditions": "",
+      "SimplifiedFromSteps": "",
+      "SimplifiedFromExpected": "",
+      "SimplifiedAt": "0001-01-01T00:00:00Z",
+      "AssetIDs": null
     }
   ],
   "histories": [
@@ -187,7 +138,16 @@
         "UpdatedAt": "2026-09-04T09:53:20.117Z",
         "BaseRevision": 0,
         "Revision": 2,
-        "Dirty": false
+        "Dirty": false,
+        "Description": "",
+        "SimplifiedPreconditions": "",
+        "SimplifiedSteps": "",
+        "SimplifiedExpected": "",
+        "SimplifiedFromPreconditions": "",
+        "SimplifiedFromSteps": "",
+        "SimplifiedFromExpected": "",
+        "SimplifiedAt": "0001-01-01T00:00:00Z",
+        "AssetIDs": null
       },
       "CreatedAt": "2026-09-04T09:53:20.117Z"
     }
@@ -209,6 +169,8 @@
       "FolderID": "207a8bccf8f987c2",
       "Title": "微信开发文档",
       "Content": "页面布局：页面顶部有“开发”、“介绍”、“设计”、“运营”、“数据”这几个板块",
+      "ExplorationNotes": "",
+      "Code": "",
       "CreatedBy": "本地用户",
       "UpdatedBy": "本地用户",
       "CreatedAt": "2026-09-12T14:09:45.167Z",
@@ -219,18 +181,22 @@
       "FolderID": "207a8bccf8f987c2",
       "Title": "123",
       "Content": "",
+      "ExplorationNotes": "",
+      "Code": "",
       "CreatedBy": "本地用户",
       "UpdatedBy": "本地用户",
       "CreatedAt": "2026-09-15T06:48:24.939Z",
       "UpdatedAt": "2026-09-15T06:48:24.939Z"
     }
   ],
+  "issues": [],
   "pendingFolders": [
     {
       "ID": "pending-root",
       "ParentID": "",
       "Name": "待评审用例",
       "CreatedBy": "system",
+      "Code": "",
       "CreatedAt": "2026-09-12T14:09:32.896Z"
     },
     {
@@ -238,6 +204,7 @@
       "ParentID": "pending-root",
       "Name": "REQ-D08750 · 微信开发文档",
       "CreatedBy": "本地用户",
+      "Code": "",
       "CreatedAt": "2026-09-12T15:04:44.275Z"
     }
   ],
@@ -251,12 +218,20 @@
       "Expected": "1. 页面加载成功，URL为 https://developers.weixin.qq.com/miniprogram/dev/reference/\n2. 页面顶部存在导航栏元素\n3. 导航栏中包含开发、介绍、设计、运营、数据5个元素\n4. 5个板块按正确顺序排列：开发 -\u003e 介绍 -\u003e 设计 -\u003e 运营 -\u003e 数据\n5. 所有5个板块在视口中可见且未被隐藏",
       "Priority": "P0",
       "Review": "",
+      "Description": "",
       "CreatedBy": "本地用户",
       "UpdatedBy": "本地用户",
       "ReviewedBy": "",
       "CreatedAt": "2026-09-12T15:04:44.289Z",
       "UpdatedAt": "2026-09-12T15:04:44.289Z",
-      "ReviewedAt": "0001-01-01T00:00:00Z"
+      "ReviewedAt": "0001-01-01T00:00:00Z",
+      "SimplifiedPreconditions": "",
+      "SimplifiedSteps": "",
+      "SimplifiedExpected": "",
+      "SimplifiedFromPreconditions": "",
+      "SimplifiedFromSteps": "",
+      "SimplifiedFromExpected": "",
+      "SimplifiedAt": "0001-01-01T00:00:00Z"
     },
     {
       "ID": "CASE-2EE8A5",
@@ -267,12 +242,20 @@
       "Expected": "1. 开发板块在导航栏中可见\n2. 开发板块具有可点击的光标样式\n3. 页面成功导航到新的URL\n4. 页面加载完成\n5. 页面URL为 /miniprogram/dev/framework/ 或类似的开发相关路径",
       "Priority": "P0",
       "Review": "",
+      "Description": "",
       "CreatedBy": "本地用户",
       "UpdatedBy": "本地用户",
       "ReviewedBy": "",
       "CreatedAt": "2026-09-12T15:04:44.296Z",
       "UpdatedAt": "2026-09-12T15:04:44.296Z",
-      "ReviewedAt": "0001-01-01T00:00:00Z"
+      "ReviewedAt": "0001-01-01T00:00:00Z",
+      "SimplifiedPreconditions": "",
+      "SimplifiedSteps": "",
+      "SimplifiedExpected": "",
+      "SimplifiedFromPreconditions": "",
+      "SimplifiedFromSteps": "",
+      "SimplifiedFromExpected": "",
+      "SimplifiedAt": "0001-01-01T00:00:00Z"
     },
     {
       "ID": "CASE-8B47B9",
@@ -283,12 +266,20 @@
       "Expected": "1. 介绍板块在导航栏中可见\n2. 介绍板块具有可点击的光标样式\n3. 页面成功导航到新的URL\n4. 页面加载完成\n5. 页面URL为 /miniprogram/introduction/ 或类似的介绍相关路径",
       "Priority": "P0",
       "Review": "",
+      "Description": "",
       "CreatedBy": "本地用户",
       "UpdatedBy": "本地用户",
       "ReviewedBy": "",
       "CreatedAt": "2026-09-12T15:04:44.307Z",
       "UpdatedAt": "2026-09-12T15:04:44.307Z",
-      "ReviewedAt": "0001-01-01T00:00:00Z"
+      "ReviewedAt": "0001-01-01T00:00:00Z",
+      "SimplifiedPreconditions": "",
+      "SimplifiedSteps": "",
+      "SimplifiedExpected": "",
+      "SimplifiedFromPreconditions": "",
+      "SimplifiedFromSteps": "",
+      "SimplifiedFromExpected": "",
+      "SimplifiedAt": "0001-01-01T00:00:00Z"
     },
     {
       "ID": "CASE-F81923",
@@ -299,12 +290,20 @@
       "Expected": "1. 设计板块在导航栏中可见\n2. 设计板块具有可点击的光标样式\n3. 页面成功导航到新的URL\n4. 页面加载完成\n5. 页面URL为 /miniprogram/design/ 或类似的设计相关路径",
       "Priority": "P0",
       "Review": "",
+      "Description": "",
       "CreatedBy": "本地用户",
       "UpdatedBy": "本地用户",
       "ReviewedBy": "",
       "CreatedAt": "2026-09-12T15:04:44.313Z",
       "UpdatedAt": "2026-09-12T15:04:44.313Z",
-      "ReviewedAt": "0001-01-01T00:00:00Z"
+      "ReviewedAt": "0001-01-01T00:00:00Z",
+      "SimplifiedPreconditions": "",
+      "SimplifiedSteps": "",
+      "SimplifiedExpected": "",
+      "SimplifiedFromPreconditions": "",
+      "SimplifiedFromSteps": "",
+      "SimplifiedFromExpected": "",
+      "SimplifiedAt": "0001-01-01T00:00:00Z"
     },
     {
       "ID": "CASE-43096C",
@@ -315,12 +314,20 @@
       "Expected": "1. 运营板块在导航栏中可见\n2. 运营板块具有可点击的光标样式\n3. 页面成功导航到新的URL\n4. 页面加载完成\n5. 页面URL为 /miniprogram/product/ 或类似的运营相关路径",
       "Priority": "P0",
       "Review": "",
+      "Description": "",
       "CreatedBy": "本地用户",
       "UpdatedBy": "本地用户",
       "ReviewedBy": "",
       "CreatedAt": "2026-09-12T15:04:44.319Z",
       "UpdatedAt": "2026-09-12T15:04:44.319Z",
-      "ReviewedAt": "0001-01-01T00:00:00Z"
+      "ReviewedAt": "0001-01-01T00:00:00Z",
+      "SimplifiedPreconditions": "",
+      "SimplifiedSteps": "",
+      "SimplifiedExpected": "",
+      "SimplifiedFromPreconditions": "",
+      "SimplifiedFromSteps": "",
+      "SimplifiedFromExpected": "",
+      "SimplifiedAt": "0001-01-01T00:00:00Z"
     },
     {
       "ID": "CASE-E3C677",
@@ -331,12 +338,20 @@
       "Expected": "1. 数据板块在导航栏中可见\n2. 数据板块具有可点击的光标样式\n3. 页面成功导航到新的URL\n4. 页面加载完成\n5. 页面URL为 /miniprogram/analysis/ 或类似的数据相关路径",
       "Priority": "P0",
       "Review": "",
+      "Description": "",
       "CreatedBy": "本地用户",
       "UpdatedBy": "本地用户",
       "ReviewedBy": "",
       "CreatedAt": "2026-09-12T15:04:44.325Z",
       "UpdatedAt": "2026-09-12T15:04:44.325Z",
-      "ReviewedAt": "0001-01-01T00:00:00Z"
+      "ReviewedAt": "0001-01-01T00:00:00Z",
+      "SimplifiedPreconditions": "",
+      "SimplifiedSteps": "",
+      "SimplifiedExpected": "",
+      "SimplifiedFromPreconditions": "",
+      "SimplifiedFromSteps": "",
+      "SimplifiedFromExpected": "",
+      "SimplifiedAt": "0001-01-01T00:00:00Z"
     },
     {
       "ID": "CASE-6E2E67",
@@ -347,12 +362,20 @@
       "Expected": "1. 初始加载时，5个板块都可见\n2. 页面成功刷新\n3. 页面加载完成\n4. 刷新后，导航栏中的5个板块仍然可见且位置未改变",
       "Priority": "P1",
       "Review": "",
+      "Description": "",
       "CreatedBy": "本地用户",
       "UpdatedBy": "本地用户",
       "ReviewedBy": "",
       "CreatedAt": "2026-09-12T15:04:44.33Z",
       "UpdatedAt": "2026-09-12T15:04:44.33Z",
-      "ReviewedAt": "0001-01-01T00:00:00Z"
+      "ReviewedAt": "0001-01-01T00:00:00Z",
+      "SimplifiedPreconditions": "",
+      "SimplifiedSteps": "",
+      "SimplifiedExpected": "",
+      "SimplifiedFromPreconditions": "",
+      "SimplifiedFromSteps": "",
+      "SimplifiedFromExpected": "",
+      "SimplifiedAt": "0001-01-01T00:00:00Z"
     },
     {
       "ID": "CASE-BA51AC",
@@ -363,12 +386,20 @@
       "Expected": "1. 导航栏位于页面顶部显眼位置\n2. 5个板块都完全可见且未被遮挡\n3. 文字具有良好的对比度和可读性\n4. 各板块之间有适当的间距，易于识别和点击",
       "Priority": "P1",
       "Review": "",
+      "Description": "",
       "CreatedBy": "本地用户",
       "UpdatedBy": "本地用户",
       "ReviewedBy": "",
       "CreatedAt": "2026-09-12T15:04:44.336Z",
       "UpdatedAt": "2026-09-12T15:04:44.336Z",
-      "ReviewedAt": "0001-01-01T00:00:00Z"
+      "ReviewedAt": "0001-01-01T00:00:00Z",
+      "SimplifiedPreconditions": "",
+      "SimplifiedSteps": "",
+      "SimplifiedExpected": "",
+      "SimplifiedFromPreconditions": "",
+      "SimplifiedFromSteps": "",
+      "SimplifiedFromExpected": "",
+      "SimplifiedAt": "0001-01-01T00:00:00Z"
     },
     {
       "ID": "CASE-CF2D2E",
@@ -379,12 +410,20 @@
       "Expected": "1. 初始导航栏中5个板块都可见\n2. 开发页面加载成功\n3. 开发页面的导航栏与初始导航栏布局一致\n4. 介绍页面加载成功\n5. 介绍页面的导航栏与初始导航栏布局一致，所有5个板块仍然可见",
       "Priority": "P1",
       "Review": "",
+      "Description": "",
       "CreatedBy": "本地用户",
       "UpdatedBy": "本地用户",
       "ReviewedBy": "",
       "CreatedAt": "2026-09-12T15:04:44.341Z",
       "UpdatedAt": "2026-09-12T15:04:44.341Z",
-      "ReviewedAt": "0001-01-01T00:00:00Z"
+      "ReviewedAt": "0001-01-01T00:00:00Z",
+      "SimplifiedPreconditions": "",
+      "SimplifiedSteps": "",
+      "SimplifiedExpected": "",
+      "SimplifiedFromPreconditions": "",
+      "SimplifiedFromSteps": "",
+      "SimplifiedFromExpected": "",
+      "SimplifiedAt": "0001-01-01T00:00:00Z"
     },
     {
       "ID": "CASE-96FACA",
@@ -395,12 +434,21 @@
       "Expected": "1. 初始状态下导航栏可见\n2. 页面成功向下滚动\n3. 滚动后导航栏仍然可见于页面顶部\n4. 继续滚动后导航栏仍然可见\n5. 导航栏中的5个板块仍然可点击且可用",
       "Priority": "P2",
       "Review": "",
+      "Description": "",
       "CreatedBy": "本地用户",
       "UpdatedBy": "本地用户",
       "ReviewedBy": "",
       "CreatedAt": "2026-09-12T15:04:44.347Z",
       "UpdatedAt": "2026-09-12T15:04:44.347Z",
-      "ReviewedAt": "0001-01-01T00:00:00Z"
+      "ReviewedAt": "0001-01-01T00:00:00Z",
+      "SimplifiedPreconditions": "",
+      "SimplifiedSteps": "",
+      "SimplifiedExpected": "",
+      "SimplifiedFromPreconditions": "",
+      "SimplifiedFromSteps": "",
+      "SimplifiedFromExpected": "",
+      "SimplifiedAt": "0001-01-01T00:00:00Z"
     }
-  ]
+  ],
+  "scripts": []
 }
