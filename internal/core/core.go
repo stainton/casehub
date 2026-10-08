@@ -118,9 +118,12 @@ type ReqDoc struct {
 
 type Issue struct {
 	ID, RequirementID, Title, Description, RootCause string
-	Resolved                                         bool
-	CreatedBy, UpdatedBy                             string
-	CreatedAt, UpdatedAt                             time.Time
+	// Source is the dedupe key of an issue reported by an auto-test job
+	// (planner/generator), empty for hand-written ones.
+	Source               string
+	Resolved             bool
+	CreatedBy, UpdatedBy string
+	CreatedAt, UpdatedAt time.Time
 }
 
 type PendingFolder struct {
@@ -228,6 +231,13 @@ type Action struct {
 	ScriptDeviations                           []RiskNote
 	ScriptMissingInputs                        []string
 	ScriptAssetIDs                             []string
+	// reportIssues: product defects found by planner/generator jobs.
+	Reports []IssueReport
+}
+
+// IssueReport is one product defect an auto-test job reported back.
+type IssueReport struct {
+	RequirementID, Title, Description, Source string
 }
 
 type Result struct {
@@ -489,6 +499,8 @@ func (s *Service) Apply(ctx context.Context, a Action) (Result, error) {
 		err = deleteReqDoc(&st, a)
 	case "createIssue":
 		err = createIssue(&st, a)
+	case "reportIssues":
+		err = reportIssues(&st, a)
 	case "editIssue":
 		err = editIssue(&st, a)
 	case "deleteIssue":
@@ -1801,6 +1813,39 @@ func createIssue(s *State, a Action) error {
 	return nil
 }
 
+// reportIssues files product defects reported by planner/generator jobs. It is
+// idempotent per Source: an open issue with the same Source is left alone, a
+// resolved one is reopened because the defect reproduced again.
+func reportIssues(s *State, a Action) error {
+	for _, r := range a.Reports {
+		src, title := strings.TrimSpace(r.Source), strings.TrimSpace(r.Title)
+		if src == "" || title == "" || strings.TrimSpace(r.Description) == "" {
+			return errors.New("问题上报缺少来源、标题或描述")
+		}
+		if doc, _ := reqDocAt(s, r.RequirementID); doc == nil {
+			return errors.New("关联需求不存在")
+		}
+		dup := false
+		for i := range s.Issues {
+			if s.Issues[i].Source != src {
+				continue
+			}
+			dup = true
+			if s.Issues[i].Resolved {
+				s.Issues[i].Resolved, s.Issues[i].UpdatedBy, s.Issues[i].UpdatedAt = false, a.Author, now()
+				s.Issues[i].Description += "\n\n> 自动测试再次复现，已重新打开。"
+			}
+			break
+		}
+		if dup {
+			continue
+		}
+		t := now()
+		s.Issues = append(s.Issues, Issue{ID: nextIssueID(s), RequirementID: r.RequirementID, Title: title, Description: r.Description, Source: src, CreatedBy: a.Author, UpdatedBy: a.Author, CreatedAt: t, UpdatedAt: t})
+	}
+	return nil
+}
+
 func editIssue(s *State, a Action) error {
 	issue, _ := issueAt(s, a.IssueID)
 	if issue == nil {
@@ -2143,6 +2188,19 @@ func importPendingCases(s *State, a Action) error {
 	}
 	if len(conflicts) > 0 {
 		return fmt.Errorf("目标版本已存在同名用例，导入已取消：%s", strings.Join(conflicts, "、"))
+	}
+	// Case IDs are unique within a version regardless of folder or title.
+	var dupIDs []string
+	for _, pc := range targets {
+		for _, c := range s.Cases {
+			if c.VersionID == v.ID && c.ID == pc.ID {
+				dupIDs = append(dupIDs, pc.ID)
+				break
+			}
+		}
+	}
+	if len(dupIDs) > 0 {
+		return fmt.Errorf("目标版本已存在相同 ID 的用例，导入已取消：%s", strings.Join(dupIDs, "、"))
 	}
 
 	s.Folders = append(s.Folders, newFolders...)

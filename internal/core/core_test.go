@@ -1479,3 +1479,26 @@ func TestSaveHealedScriptProtectsOriginalAndConcurrentEdits(t *testing.T) {
 		t.Fatal("manual edit lost")
 	}
 }
+
+func TestReportIssuesIsIdempotentAndReopens(t *testing.T) {
+	svc := core.NewService(store.NewMemory())
+	report := core.Action{Type: "reportIssues", Author: "generator", Reports: []core.IssueReport{
+		{RequirementID: "REQ-0001", Title: "[高] TC-1 登录失败无提示", Description: "缺陷", Source: "generator:TC-1:登录失败无提示"}}}
+	state := apply(t, svc, report)
+	if len(state.Issues) != 1 || state.Issues[0].Resolved {
+		t.Fatalf("expected one open issue: %+v", state.Issues)
+	}
+	if state = apply(t, svc, report); len(state.Issues) != 1 {
+		t.Fatalf("same source must not create a second issue: %+v", state.Issues)
+	}
+	apply(t, svc, core.Action{Type: "editIssue", IssueID: state.Issues[0].ID, RequirementID: "REQ-0001", Title: "t", Description: "d", Resolved: true})
+	state = apply(t, svc, report)
+	if len(state.Issues) != 1 || state.Issues[0].Resolved {
+		t.Fatalf("a resolved issue must reopen when the defect reproduces: %+v", state.Issues)
+	}
+	bad := report
+	bad.Reports = []core.IssueReport{{RequirementID: "missing", Title: "x", Description: "d", Source: "s"}}
+	if _, err := svc.Apply(context.Background(), bad); err == nil {
+		t.Fatal("unknown requirement must be rejected")
+	}
+}

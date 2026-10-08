@@ -980,6 +980,7 @@ function renderAiImportConfirmation(doc,job,result){
     const button=e.currentTarget;button.disabled=true;
     try{
       await importAiResult(doc,result);
+      await reportDefects((result.issues||[]).map(i=>({RequirementID:doc.ID,Title:`[${RISK_LABEL[i.risk]||'未评级'}] ${i.scenario}`,Description:`**场景**：${i.scenario}\n\n**现象**：${i.symptom}\n\n来源：用例设计探索（风险 ${RISK_LABEL[i.risk]||'未评级'}）`,Source:`planner:${doc.ID}:${i.scenario}`})));
       const summary={count:planned.length,limitations:result.limitations||[],issues:result.issues||[]};
       localStorage.setItem(aiResultKey(doc),JSON.stringify(summary));
       localStorage.removeItem(aiJobKey(doc));
@@ -1591,6 +1592,14 @@ function bindGenDraft(){
     renderGenDrawer();
   };
 }
+// auto-test 发现的产品缺陷（planner 探索问题 / generator 偏差）自动记入问题单管理，由人工后续处理。
+// 服务端按 Source 去重：同一缺陷重复生成不会重复建单，已解决的会被重新打开。
+const RISK_LABEL={high:'高',medium:'中',low:'低'};
+async function reportDefects(reports){
+  if(!reports.length)return;
+  try{await act('reportIssues',{Reports:reports});toast(`已记录 ${reports.length} 个产品缺陷到问题单管理`)}
+  catch(error){toast(`记录问题单失败：${error.message}`,true)}
+}
 // 用例编号 TC-<需求缩写>-… 的第二段就是需求缩写，用它自动匹配需求文档；匹配不到就不附带。
 function reqDocForCase(c){
   const m=/^TC-([A-Z][A-Z0-9]{1,11})-/.exec(c.ID||'');
@@ -1742,6 +1751,12 @@ async function importGenResult(task){
         await act(taskService(task)==='healer'?'saveHealedScript':'saveScript',{ScriptBaseID:task.scriptBaseID,ScriptBaseRevision:task.scriptBaseRevision,ScriptBaseUpdatedAt:task.scriptBaseUpdatedAt,VersionID:task.versionID,CaseID:sc.caseId,ScriptFileName:sc.fileName,ScriptLanguage:sc.language,
           ScriptCode:sc.code||'',ScriptStatus:sc.status,ScriptSummary:sc.summary||'',ScriptJobID:task.jobId,
           ScriptDeviations:(sc.deviations||[]).map(d=>({Risk:d.risk,Summary:d.summary})),ScriptMissingInputs:sc.missingInputs||[],ScriptAssetIDs:task.assetIDs});
+        if(taskService(task)==='generator'&&sc.deviations?.length){
+          const c=state.cases.find(x=>x.VersionID===task.versionID&&x.ID===sc.caseId);
+          const docId=(c&&reqDocForCase(c)?.ID)||task.requirementIDs?.[0];
+          if(docId)await reportDefects(sc.deviations.map(d=>({RequirementID:docId,Title:`[${RISK_LABEL[d.risk]||'未评级'}] ${sc.caseId} ${d.summary}`,Description:`**用例**：${sc.caseId} ${c?.Title||''}\n\n**缺陷**：${d.summary}\n\n**风险**：${RISK_LABEL[d.risk]||'未评级'}\n\n来源：脚本生成发现的预期与实际不符，脚本已按预期断言，运行会失败。生成任务 ${task.jobId}`,Source:`generator:${sc.caseId}:${d.summary}`})));
+          else toast(`${sc.caseId} 发现产品缺陷但无法关联需求，未记入问题单`,true);
+        }
       }catch(error){failed++;task.error={code:'SAVE_FAILED',message:error.message}} // act 已提示失败原因（例如用例在生成期间被删除）
     }
     task.status='succeeded';
