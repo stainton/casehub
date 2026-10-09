@@ -1663,7 +1663,13 @@ function bindGenTasks(){
   });
   $$('#gen-drawer-body [data-gen-cancel]').forEach(b=>b.onclick=async()=>{
     b.disabled=true;
-    try{await serviceRequest(`/api/${taskService(genTask(b.dataset.genCancel))}/jobs/${b.dataset.genCancel}`,{method:'DELETE'})}catch(e){toast(e.message,true);b.disabled=false}
+    const task=genTask(b.dataset.genCancel);
+    try{
+      const job=await serviceRequest(`/api/${taskService(task)}/jobs/${task.jobId}`,{method:'DELETE'});
+      // 排队中的任务立刻就是 cancelled；运行中的要等 worker 退出，状态芯片先显示"正在停止"。
+      routeGenJob(task,job);
+      if(!GEN_TERMINAL.includes(job.status)){task.stage='cancelling';updateGenStatusChip(task);genLogLine(task.jobId,'正在停止任务和浏览器进程……')}
+    }catch(e){toast(e.message,true);b.disabled=false}
   });
   $$('#gen-drawer-body [data-heal-download]').forEach(b=>b.onclick=async()=>{
     try{const result=await serviceRequest(`/api/healer/jobs/${b.dataset.healDownload}/result`),sc=result.scripts?.find(sc=>sc.status==='generated'&&sc.code);
@@ -1683,7 +1689,10 @@ function bindGenTasks(){
 function interveneGenTask(task){
   const saved=task.input||genValues(taskService(task));
   if(taskService(task)==='healer'&&page!=='automation'){setPage('automation');setAutoFocus({type:'script',versionID:task.versionID,id:task.caseIDs[0]})}
-  showModal(taskService(task)==='healer'?'修复故障排查':'生成故障排查',`<p class="meta">会为 ${esc(task.caseIDs.join('、'))} 新建独立任务；已生成的其他用例不会受影响。请补充故障现象、可用路径或账号条件，${taskService(task)==='healer'?'Healer 会基于已有脚本继续排查。':'Generator 会据此重新探索。'}</p><label>排查提示词<textarea name="instructions" required placeholder="例如：登录后需先进入素材管理；上传按钮在右侧工具栏；上次失败时显示的错误是…">${esc(saved.instructions||'')}</textarea></label><label>测试账号 · 用户名（可选）<input name="testAccount" value="${esc(saved.testAccount||'')}"></label><label>测试账号 · 密码（如需重新填写）<input name="testSecret" type="text" class="fake-password" autocomplete="off"></label>`,async values=>{const next={...saved,...values,assetIds:saved.assetIds||[],caseTimeoutMinutes:saved.caseTimeoutMinutes||60};await submitGenJob(task.versionID,task.caseIDs,`${task.label} · 故障排查`,next,'',taskService(task));toast('已提交故障排查任务')});
+  showModal(taskService(task)==='healer'?'修复故障排查':'生成故障排查',`<p class="meta">会为 ${esc(task.caseIDs.join('、'))} 新建独立任务；已生成的其他用例不会受影响。请补充故障现象、可用路径或账号条件，${taskService(task)==='healer'?'Healer 会基于已有脚本继续排查。':'Generator 会据此重新探索。'}</p><label>排查提示词<textarea name="instructions" required placeholder="例如：登录后需先进入素材管理；上传按钮在右侧工具栏；上次失败时显示的错误是…">${esc(saved.instructions||'')}</textarea></label><label>测试账号 · 用户名（可选）<input name="testAccount" value="${esc(saved.testAccount||'')}"></label><label>测试账号 · 密码（如需重新填写）<input name="testSecret" type="text" class="fake-password" autocomplete="off"></label>`,async values=>{const next={...saved,...values,assetIds:saved.assetIds||[],caseTimeoutMinutes:saved.caseTimeoutMinutes||60};await submitGenJob(task.versionID,task.caseIDs,`${task.label} · 故障排查`,next,task.groupID||'',taskService(task));
+    // 批量任务里的重试直接替换原来失败的子任务，状态就在父任务里刷新，不会掉到批量任务下方。
+    if(task.groupID){closeGenStream(task.jobId);genTasks=genTasks.filter(t=>t.jobId!==task.jobId);genRuntime.delete(task.jobId);genOpen.delete(task.jobId);saveGenTasks();genOpen.add(task.groupID)}
+    renderGenDrawer();toast('已提交故障排查任务')});
 }
 function genLogLine(jobId,msg){
   const runtime=genRuntime.get(jobId)||{log:[]};
@@ -1714,9 +1723,27 @@ function routeGenJob(task,job){
   if(job.status==='succeeded'&&(!task.saved||task.saved.failed))return importGenResult(task);
   if(isGenDrawerOpen())renderGenDrawer();
 }
+// 浏览器对同一来源的 HTTP/1.1 连接最多 6 条，批量生成时每个任务一条 SSE 会把它们占满，
+// 之后的请求（尤其是「取消任务」的 DELETE）一直排队发不出去。所以 SSE 只给少数任务，
+// 其余的任务轮询状态，始终给普通请求留出连接。
+const GEN_MAX_STREAMS=3,GEN_POLL_MS=3000;
+let genPollTimer=null;
+const genStreamCount=()=>[...genRuntime.values()].filter(r=>r.source).length;
+function ensureGenPolling(){
+  if(genPollTimer)return;
+  genPollTimer=setInterval(async()=>{
+    const pending=genTasks.filter(t=>!GEN_TERMINAL.includes(t.status)&&!genRuntime.get(t.jobId)?.source&&t.status!=='importing');
+    if(!pending.length){clearInterval(genPollTimer);genPollTimer=null;return}
+    for(const task of pending){
+      try{routeGenJob(task,await serviceRequest(`/api/${taskService(task)}/jobs/${task.jobId}`))}
+      catch(e){if(e.status===404){task.status='failed';task.error={code:e.code||'JOB_LOST',message:e.message||'任务状态已失效'};saveGenTasks();updateGenStatusChip(task);if(isGenDrawerOpen())renderGenDrawer()}}
+    }
+  },GEN_POLL_MS);
+}
 function ensureGenStream(task){
   const runtime=genRuntime.get(task.jobId)||{log:[]};
   if(runtime.source)return;
+  if(genStreamCount()>=GEN_MAX_STREAMS){genRuntime.set(task.jobId,runtime);ensureGenPolling();return}
   const source=new EventSource(`/api/${taskService(task)}/jobs/${task.jobId}/events`);
   runtime.source=source;genRuntime.set(task.jobId,runtime);
   source.addEventListener('snapshot',e=>{
