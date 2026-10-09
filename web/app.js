@@ -1,11 +1,14 @@
 const $=s=>document.querySelector(s), $$=s=>[...document.querySelectorAll(s)];
 const CLOSED_VERSIONS_KEY='casehub-closed-versions', CLOSED_FOLDERS_KEY='casehub-closed-case-folders', OPEN_MAINLINE_FOLDERS_KEY='casehub-open-mainline-folders';
 function loadSet(key){try{const saved=JSON.parse(localStorage.getItem(key));if(Array.isArray(saved))return new Set(saved)}catch{}return new Set()}
-function loadClosedVersions(){const saved=loadSet(CLOSED_VERSIONS_KEY);return saved.size?saved:new Set(['main'])}
-function saveClosedVersions(){try{localStorage.setItem(CLOSED_VERSIONS_KEY,JSON.stringify([...closedVersions]))}catch{}}
-function saveClosedFolders(){try{localStorage.setItem(CLOSED_FOLDERS_KEY,JSON.stringify([...closedFolders]));localStorage.setItem(OPEN_MAINLINE_FOLDERS_KEY,JSON.stringify([...openMainlineFolders]))}catch{}}
+// 所有树默认全部折叠，只记住「展开过」的节点（localStorage）。节点的 key 只在展开时才写入，所以新建的节点天然是折叠的。
+function persistedSet(key){const set=loadSet(key),save=()=>{try{localStorage.setItem(key,JSON.stringify([...set]))}catch{}};return {has:k=>set.has(k),add:k=>{set.add(k);save()},delete:k=>{set.delete(k);save()}}}
+// 保持原来「closedX.has / add / delete」的调用方式：has 表示折叠，add 表示折叠它，delete 表示展开它。
+function collapseSet(key){const open=persistedSet(key);return {has:k=>!open.has(k),add:k=>open.delete(k),delete:k=>open.add(k)}}
+function saveClosedVersions(){}
+function saveClosedFolders(){}
 let state=null, focus=null, selected=new Map(), view='cases', modalSave=null, recordCase=null, recordTask='', recordEditor=null, recordViewers=[], recordHistoryLimit=3;
-let openTasks=new Set(), closedTaskVersions=new Set(), closedFolders=loadSet(CLOSED_FOLDERS_KEY), openMainlineFolders=loadSet(OPEN_MAINLINE_FOLDERS_KEY), closedReqFolders=new Set(), closedReviewFolders=new Set(), closedVersions=loadClosedVersions();
+let openTasks=persistedSet('casehub-open-tasks'), closedTaskVersions=collapseSet('casehub-open-task-versions'), closedFolders=collapseSet('casehub-open-folders'), openMainlineFolders=persistedSet('casehub-open-mainline-folders-v2'), closedReqFolders=collapseSet('casehub-open-req-folders'), closedReviewFolders=collapseSet('casehub-open-review-folders'), closedVersions=collapseSet('casehub-open-versions');
 let page='cases', reqFocus=null, reqEditor=null, reqSidebarWidth=null, aiDoc=null, reqPage='docs';
 let issueFocus=null, issueDescriptionEditor=null, issueCauseEditor=null, issueViewers=[];
 let aiSource=null, aiPlannerEnabled=null;
@@ -27,7 +30,16 @@ function caseRow(c,depth,branch,taskID=''){let checked=selected.get(c.VersionID)
 function bindTree(root){root.querySelectorAll('.version-title').forEach(e=>{let v=e.parentElement,key=v.dataset.version;if(closedVersions.has(key))v.classList.add('closed');e.onclick=x=>{if(x.target.closest('button'))return;let closed=v.classList.toggle('closed');closed?closedVersions.add(key):closedVersions.delete(key);saveClosedVersions()}});root.querySelectorAll('.folder-row').forEach(e=>{let key=`${e.dataset.version}:${e.dataset.folder}`;if(closedFolders.has(key))e.classList.add('closed');e.querySelector('.chev').onclick=x=>{x.stopPropagation();let closed=e.classList.toggle('closed');closed?closedFolders.add(key):closedFolders.delete(key);if(e.dataset.version==='main'){closed?openMainlineFolders.delete(key):openMainlineFolders.add(key)}saveClosedFolders()};let fc=e.querySelector('.folder-check');if(fc)fc.onclick=x=>{x.stopPropagation();toggleFolderSelect(e.dataset.version,e.dataset.folder,fc.checked)};e.onclick=x=>{if(x.target.matches('input'))return;setFocus({type:'folder',versionID:e.dataset.version,id:e.dataset.folder})};e.oncontextmenu=x=>menu(x,folderMenu(e.dataset.version,e.dataset.folder))});root.querySelectorAll('.case-row').forEach(e=>{e.onclick=x=>{if(x.target.matches('input')){toggleSelect(e.dataset.version,e.dataset.case,x.target.checked);return}setFocus({type:'case',versionID:e.dataset.version,id:e.dataset.case})};e.oncontextmenu=x=>menu(x,caseMenu(e.dataset.version,e.dataset.case))});root.querySelectorAll('[data-sync]').forEach(e=>e.onclick=()=>act('sync',{VersionID:e.dataset.sync}));root.querySelectorAll('[data-merge]').forEach(e=>e.onclick=()=>{if(confirm('将此版本中的文本变更与新增目录合并到只读主线？'))act('merge',{VersionID:e.dataset.merge})});root.querySelectorAll('[data-delete-version]').forEach(e=>e.onclick=()=>{if(confirm('确定删除这个测试版本？其目录、用例、测试任务和执行记录都会一并删除，且无法恢复。'))act('deleteVersion',{VersionID:e.dataset.deleteVersion})});updateFolderChecks(root)}
 function updateFolderChecks(root=document){root.querySelectorAll('.folder-row').forEach(e=>{let fc=e.querySelector('.folder-check');if(!fc)return;let f=state.folders.find(x=>x.VersionID===e.dataset.version&&x.ID===e.dataset.folder);if(!f)return;let subIDs=[f.ID,...descendantFolders(f)],all=cases(e.dataset.version).filter(c=>subIDs.includes(c.FolderID)),selSet=selected.get(e.dataset.version),selCount=all.filter(c=>selSet?.has(c.ID)).length;fc.checked=all.length>0&&selCount===all.length;fc.indeterminate=selCount>0&&selCount<all.length})}
 function toggleFolderSelect(vid,folderId,checked){let f=state.folders.find(x=>x.VersionID===vid&&x.ID===folderId);if(!f)return;let subIDs=[f.ID,...descendantFolders(f)];if(!selected.has(vid))selected.set(vid,new Set());let s=selected.get(vid);cases(vid).filter(c=>subIDs.includes(c.FolderID)).forEach(c=>checked?s.add(c.ID):s.delete(c.ID));updateBulk();renderVersions()}
-function setFocus(x){if(!$('#drawer').classList.contains('hidden')&&!(x.type==='case'&&recordCase?.ID===x.id))closeRecordDrawer();if(location.hash)history.replaceState(null,'',location.pathname+location.search);focus=x;recordTask=x.taskID||'';renderVersions();renderFocus()}
+// 树默认折叠：从别处跳转（链接、定位、导入后选中）时，把目标的所有祖先展开，目标才看得见。
+function openAncestors(set,list,startID,keyOf){for(let id=startID,guard=0;id&&guard<50;guard++){set.delete(keyOf(id));id=list.find(f=>f.ID===id)?.ParentID||''}}
+function revealCase(x){
+  if(x.taskID)return;
+  const c=x.type==='case'?state.cases.find(k=>k.VersionID===x.versionID&&k.ID===x.id):null,start=x.type==='folder'?x.id:c?.FolderID;
+  if(!start)return;
+  closedVersions.delete(x.versionID);
+  openAncestors(closedFolders,state.folders.filter(f=>f.VersionID===x.versionID),start,id=>`${x.versionID}:${id}`);
+}
+function setFocus(x){revealCase(x);if(!$('#drawer').classList.contains('hidden')&&!(x.type==='case'&&recordCase?.ID===x.id))closeRecordDrawer();if(location.hash)history.replaceState(null,'',location.pathname+location.search);focus=x;recordTask=x.taskID||'';renderVersions();renderFocus()}
 function closeRecordDrawer(){$('#record-form').reset();recordEditor?.setMarkdown('');$('#drawer').classList.add('hidden')}
 // ---- 用例详情：Planner 原始内容 / 阅读友好版 切换 ----------------------------
 // Planner 生成的用例是给 generator 用的，步骤/预期结果信息密度很高，人读起来负担大。
@@ -433,7 +445,12 @@ function bindReqTree(root){
   root.querySelectorAll('[data-req-folder]').forEach(e=>{let key=e.dataset.reqFolder;if(closedReqFolders.has(key))e.classList.add('closed');e.querySelector('.chev').onclick=x=>{x.stopPropagation();let closed=e.classList.toggle('closed');closed?closedReqFolders.add(key):closedReqFolders.delete(key)};e.onclick=()=>setReqFocus({type:'folder',id:e.dataset.reqFolder});e.oncontextmenu=x=>menu(x,reqFolderMenu(e.dataset.reqFolder))});
   root.querySelectorAll('[data-req-doc]').forEach(e=>{e.onclick=()=>setReqFocus({type:'doc',id:e.dataset.reqDoc});e.oncontextmenu=x=>menu(x,reqDocMenu(e.dataset.reqDoc))});
 }
-function setReqFocus(x){reqFocus=x;renderReqTree();renderReviewTree();renderReqFocus()}
+function revealReq(x){
+  if(x.type==='doc'){const d=state.reqDocs.find(k=>k.ID===x.id);if(d)openAncestors(closedReqFolders,state.reqFolders,d.FolderID,id=>id)}
+  else if(x.type==='folder')openAncestors(closedReqFolders,state.reqFolders,x.id,id=>id);
+  else if(x.type==='reviewCase'){const c=state.pendingCases.find(k=>k.ID===x.id);if(c)openAncestors(closedReviewFolders,state.pendingFolders,c.FolderID,id=>id)}
+}
+function setReqFocus(x){revealReq(x);reqFocus=x;renderReqTree();renderReviewTree();renderReqFocus()}
 function renderReqFocus(){
   if(!reqFocus){updateReqEmptyHint();$('#req-empty').classList.remove('hidden');$('#req-detail').classList.add('hidden');return}
   $('#req-empty').classList.add('hidden');
@@ -1165,10 +1182,22 @@ const issueByID=id=>state.issues.find(issue=>issue.ID===id);
 const issueRequirement=issue=>state.reqDocs.find(doc=>doc.ID===issue.RequirementID);
 function issueStatus(issue){return issue.Resolved?'已解决':'待解决'}
 function disposeIssueEditors(){issueDescriptionEditor?.destroy();issueCauseEditor?.destroy();issueDescriptionEditor=null;issueCauseEditor=null;issueViewers.forEach(viewer=>viewer.destroy());issueViewers=[];}
+// 问题单按关联需求分组（需求 → 问题单，两层），默认全部折叠并记住展开状态。问题单本身没有版本属性，所以不按版本划分。
+const closedIssueGroups=collapseSet('casehub-open-issue-groups');
+let issueRevealed=null;
+const issueGroupKey=issue=>`issue:${issueRequirement(issue)?.ID||'none'}`;
 function renderIssueList(){
   const list=$('#issue-list');if(!list)return;
   const issues=[...state.issues].sort((a,b)=>String(b.UpdatedAt).localeCompare(String(a.UpdatedAt)));
-  list.innerHTML=issues.length?issues.map(issue=>`<div class="tree-row issue-row${issueFocus?.id===issue.ID?' active':''}" data-issue="${esc(issue.ID)}"><span>🐞</span><span class="label"><b>${esc(issue.Title)}</b><small>${esc(issue.ID)} · ${esc(issueRequirement(issue)?.Title||'关联需求已删除')}</small></span><span class="badge ${issue.Resolved?'issue-status-resolved':'issue-status-open'}">${issueStatus(issue)}</span></div>`).join(''):'<p class="meta">暂无问题单</p>';
+  // 选中的问题单所在分组自动展开一次（例如新建、从别处跳转），之后用户仍可手动折叠。
+  const focused=issueFocus?.type==='issue'?issueByID(issueFocus.id):null;
+  if(focused&&issueRevealed!==focused.ID){closedIssueGroups.delete(issueGroupKey(focused));issueRevealed=focused.ID}
+  const groups=new Map();
+  for(const issue of issues){const key=issueGroupKey(issue);if(!groups.has(key))groups.set(key,{key,doc:issueRequirement(issue),items:[]});groups.get(key).items.push(issue)}
+  const ordered=[...groups.values()].sort((a,b)=>(a.doc?0:1)-(b.doc?0:1)||String(a.doc?.Title||'').localeCompare(String(b.doc?.Title||''),'zh'));
+  const issueRow=issue=>`<div class="tree-row issue-row${issueFocus?.id===issue.ID?' active':''}" data-issue="${esc(issue.ID)}" style="padding-left:34px"><span>🐞</span><span class="label"><b>${esc(issue.Title)}</b><small>${esc(issue.ID)}</small></span><span class="badge ${issue.Resolved?'issue-status-resolved':'issue-status-open'}">${issueStatus(issue)}</span></div>`;
+  list.innerHTML=ordered.length?ordered.map(g=>{const open=g.items.filter(x=>!x.Resolved).length;return `<div class="tree-row folder-row${closedIssueGroups.has(g.key)?' closed':''}" data-issue-group="${esc(g.key)}"><span class="chev">▾</span><span>📄</span><span class="label">${esc(g.doc?`${g.doc.Title}${g.doc.Code?`（${g.doc.Code}）`:''}`:'关联需求已删除')}</span><span class="badge ${open?'issue-status-open':'issue-status-resolved'}">${open?`${open} 待解决`:'全部已解决'}</span></div><div>${g.items.map(issueRow).join('')}</div>`}).join(''):'<p class="meta">暂无问题单</p>';
+  list.querySelectorAll('[data-issue-group]').forEach(row=>{row.onclick=()=>{const closed=row.classList.toggle('closed');closed?closedIssueGroups.add(row.dataset.issueGroup):closedIssueGroups.delete(row.dataset.issueGroup)}});
   list.querySelectorAll('[data-issue]').forEach(row=>{row.onclick=()=>{issueFocus={type:'issue',id:row.dataset.issue};renderIssueList();renderIssueFocus()};row.oncontextmenu=event=>menu(event,[['查看详情',()=>{issueFocus={type:'issue',id:row.dataset.issue};renderIssueList();renderIssueFocus()}],['编辑',()=>startIssueEdit(issueByID(row.dataset.issue))],['删除',()=>deleteIssue(issueByID(row.dataset.issue))]])});
 }
 function startIssueCreate(){issueFocus={type:'create'};renderIssueList();renderIssueFocus()}
@@ -1382,7 +1411,12 @@ function watchScriptRun(s,jobID,poll=false){
   source.addEventListener('snapshot',e=>update(JSON.parse(e.data)));source.addEventListener('progress',e=>{const event=JSON.parse(e.data);update({...event,id:jobID});if(['succeeded','failed','cancelled'].includes(event.status))serviceRequest(`/api/executor/jobs/${jobID}`).then(update)});source.onerror=()=>{};
   if(poll)timer=setInterval(async()=>{try{update(await serviceRequest(`/api/executor/jobs/${jobID}`))}catch(e){if(e.status===404)source.close()}},3000);
 }
-function setAutoFocus(x){autoFocus=x;renderScriptTree();renderAutoFocus()}
+function revealScript(x){
+  const folders=state.folders.filter(f=>f.VersionID===x.versionID),c=x.type==='script'?state.cases.find(k=>k.VersionID===x.versionID&&k.ID===x.id):null,start=x.type==='folder'?x.id:c?.FolderID;
+  closedVersions.delete(`script:${x.versionID}`);
+  if(start)openAncestors(closedFolders,folders,start,id=>`script:${x.versionID}:${id}`);
+}
+function setAutoFocus(x){if(x)revealScript(x);autoFocus=x;renderScriptTree();renderAutoFocus()}
 function renderAutoFocus(){
   const box=$('#auto-detail');
   if(!box)return;
