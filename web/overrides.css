@@ -199,3 +199,14 @@ button.avatar{padding:0;color:#fff;cursor:pointer;border:1px solid #ffffff40}
 .gen-parent-task>.gen-children{margin:10px 0 0 12px;padding-left:10px;border-left:2px solid var(--line)}
 .gen-parent-task>.gen-children>.gen-task{background:var(--surface);margin-bottom:8px}
 .dark .issue-status-open{background:#78350f55;color:#fcd34d}.dark .issue-status-resolved{background:#14532d55;color:#86efac}.dark .issue-viewer .toastui-editor-contents{color:var(--text)}
+
+#task-center{position:fixed;right:0;top:45%;z-index:25;display:flex;flex-direction:column;align-items:flex-end;gap:8px}
+body:has(.drawer:not(.hidden)) #task-center{right:min(640px,96vw)}
+#tc-handle{writing-mode:vertical-rl;padding:14px 8px;border-radius:10px 0 0 10px;box-shadow:-3px 0 12px #0002;letter-spacing:2px;position:relative}
+#tc-badge{position:absolute;top:-6px;left:-6px;writing-mode:horizontal-tb;min-width:18px;height:18px;border-radius:9px;background:var(--danger);color:#fff;font-size:11px;line-height:18px;text-align:center;letter-spacing:0}
+#tc-panel{width:300px;max-height:60vh;overflow:auto;background:var(--surface);color:var(--text);border:1px solid var(--line);border-radius:10px;box-shadow:0 8px 30px #0003;padding:6px;order:2}
+#tc-panel .tc-row{display:flex;align-items:center;gap:8px;width:100%;text-align:left;background:transparent;color:var(--text);border:0;padding:10px;border-radius:8px}
+#tc-panel .tc-row:hover{background:var(--brand-soft)}
+#tc-panel .tc-row b{margin-left:auto;font-weight:600}
+#tc-panel .tc-sub{padding-left:26px}#tc-panel .tc-sub small{margin-left:auto;color:var(--muted)}
+#tc-panel .tc-title{display:block;color:var(--muted);font-size:12px;padding:6px 10px 2px}

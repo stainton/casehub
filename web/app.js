@@ -1816,3 +1816,28 @@ async function resumeGenTasks(){
     }
   }
 }
+
+// ---- 任务中心：右侧拉手，随时查看 planner / generator / executor 任务，不必先新建任务 ----
+const tcPlannerDocs=()=>(state?.reqDocs||[]).filter(doc=>localStorage.getItem(aiJobKey(doc))||isAiActive(doc));
+function tcCloseDrawers(){['#ai-drawer','#gen-drawer','#run-drawer'].forEach(sel=>$(sel).classList.add('hidden'))}
+function renderTaskCenter(){
+  const panel=$('#tc-panel');
+  const plannerDocs=tcPlannerDocs(),genRun=genRunning().length,execRun=activeScriptRuns().length,planRun=plannerDocs.filter(isAiActive).length;
+  const total=genRun+execRun+planRun,badge=$('#tc-badge');
+  badge.textContent=total;badge.classList.toggle('hidden',!total);
+  if(panel.classList.contains('hidden'))return;
+  const count=(running,all)=>`<b>${running?`${running} 进行中 / `:''}${all}</b>`;
+  panel.innerHTML=`<span class="tc-title">Planner · 需求设计</span>${plannerDocs.length?plannerDocs.map(doc=>`<button type="button" class="tc-row tc-sub" data-tc-plan="${esc(doc.ID)}"><span>${esc(doc.Title)}</span><small>${isAiActive(doc)?'进行中':'待查看'}</small></button>`).join(''):'<p class="meta tc-sub">暂无设计任务（在需求文档里点「AI 设计」）</p>'}
+    <span class="tc-title">Generator · 脚本生成 / 修复</span><button type="button" class="tc-row" data-tc="gen"><span>生成 / 修复任务</span>${count(genRun,genTasks.length)}</button>
+    <span class="tc-title">Executor · 脚本执行</span><button type="button" class="tc-row" data-tc="run"><span>执行任务</span>${count(execRun,scriptRunTasks.length)}</button>`;
+  $$('#tc-panel [data-tc-plan]').forEach(b=>b.onclick=()=>{const doc=state.reqDocs.find(d=>d.ID===b.dataset.tcPlan);if(!doc)return;tcCloseDrawers();openAiDrawer(doc);toggleTaskCenter(false)});
+  $$('#tc-panel [data-tc]').forEach(b=>b.onclick=()=>{tcCloseDrawers();b.dataset.tc==='gen'?openGenDrawer():openScriptRunDrawer();toggleTaskCenter(false)});
+}
+function toggleTaskCenter(open){
+  const panel=$('#tc-panel');
+  panel.classList.toggle('hidden',!open);$('#tc-handle').setAttribute('aria-expanded',String(open));
+  if(open)renderTaskCenter();
+}
+$('#tc-handle').onclick=()=>toggleTaskCenter($('#tc-panel').classList.contains('hidden'));
+document.addEventListener('mousedown',e=>{if(!e.target.closest('#task-center'))toggleTaskCenter(false)});
+setInterval(renderTaskCenter,2000);
