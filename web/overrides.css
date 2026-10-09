@@ -209,3 +209,8 @@ button.avatar{padding:0;color:#fff;cursor:pointer;border:1px solid #ffffff40}
 .tc-tab small{margin-left:4px;color:var(--muted);font-weight:400}
 .tc-list{padding:14px 20px}.tc-list .tc-row{display:flex;align-items:center;gap:8px;width:100%;text-align:left;background:var(--surface);color:var(--text);border:1px solid var(--line);padding:10px 12px;border-radius:8px;margin-bottom:8px;cursor:pointer}
 .tc-list .tc-row small{margin-left:auto;color:var(--muted)}
+.ai-diff{border:1px solid var(--line);border-radius:8px;overflow:auto;font:13px/1.6 ui-monospace,SFMono-Regular,Menlo,monospace;margin:6px 0 14px}
+.ai-diff>div{white-space:pre-wrap;overflow-wrap:anywhere;padding:0 8px}.ai-diff-mark{display:inline-block;width:1.4em;color:var(--muted)}
+.ai-diff-add{background:#dcfce7;color:#14532d}.ai-diff-del{background:#fee2e2;color:#7f1d1d;text-decoration:line-through}
+.dark .ai-diff-add{background:#14532d55;color:#86efac}.dark .ai-diff-del{background:#7f1d1d55;color:#fca5a5}
+.ai-diff-block h4{margin:10px 0 0}.script-version{border-top:1px solid var(--line);padding:8px 0}.script-version summary{cursor:pointer}

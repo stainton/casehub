@@ -1502,3 +1502,24 @@ func TestReportIssuesIsIdempotentAndReopens(t *testing.T) {
 		t.Fatal("unknown requirement must be rejected")
 	}
 }
+
+func TestRegeneratingScriptArchivesPreviousVersion(t *testing.T) {
+	service := core.NewService(store.NewMemory())
+	state := apply(t, service, core.Action{Type: "createVersion", Name: "v1"})
+	branch := branchID(t, state, "v1")
+	state = apply(t, service, core.Action{Type: "saveScript", VersionID: branch, CaseID: "CASE-0001", ScriptCode: "// v1"})
+	if len(state.ScriptVersions) != 0 {
+		t.Fatalf("first save must not archive anything: %+v", state.ScriptVersions)
+	}
+	state = apply(t, service, core.Action{Type: "saveScript", VersionID: branch, CaseID: "CASE-0001", ScriptCode: "// v2"})
+	if len(state.ScriptVersions) != 1 || state.ScriptVersions[0].Code != "// v1" || state.ScriptVersions[0].Revision != 1 {
+		t.Fatalf("previous script was not archived: %+v", state.ScriptVersions)
+	}
+	if scriptFor(t, state, branch, "CASE-0001").Code != "// v2" {
+		t.Fatalf("current script must be the new one")
+	}
+	state = apply(t, service, core.Action{Type: "deleteScripts", VersionID: branch, CaseIDs: []string{"CASE-0001"}})
+	if len(state.ScriptVersions) != 0 {
+		t.Fatalf("archive must go with its script: %+v", state.ScriptVersions)
+	}
+}

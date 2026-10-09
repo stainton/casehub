@@ -177,6 +177,59 @@ type Script struct {
 	CreatedAt, UpdatedAt                       time.Time
 }
 
+// ScriptVersion is a superseded copy of a Script. Regenerating or healing a
+// script archives the previous one here instead of discarding it, so older
+// versions stay readable (same idea as TestCase edits stacking in Histories).
+// Revision is the revision the script had while it was current.
+type ScriptVersion struct {
+	ID, ScriptID, VersionID, CaseID            string
+	Revision                                   int64
+	Title, FileName, Language, Code            string
+	Status, Summary                            string
+	FromPreconditions, FromSteps, FromExpected string
+	JobID, UpdatedBy                           string
+	UpdatedAt, ArchivedAt                      time.Time
+}
+
+// maxScriptVersions bounds the archive kept per case.
+const maxScriptVersions = 20
+
+// archiveScript stores the current content of script before it is replaced.
+func archiveScript(s *State, script *Script) {
+	if script == nil || strings.TrimSpace(script.Code) == "" {
+		return
+	}
+	s.ScriptVersions = append(s.ScriptVersions, ScriptVersion{ID: ID(), ScriptID: script.ID, VersionID: script.VersionID, CaseID: script.CaseID, Revision: script.Revision,
+		Title: script.Title, FileName: script.FileName, Language: script.Language, Code: script.Code, Status: script.Status, Summary: script.Summary,
+		FromPreconditions: script.FromPreconditions, FromSteps: script.FromSteps, FromExpected: script.FromExpected,
+		JobID: script.JobID, UpdatedBy: script.UpdatedBy, UpdatedAt: script.UpdatedAt, ArchivedAt: now()})
+	n := 0
+	for _, x := range s.ScriptVersions {
+		if x.VersionID == script.VersionID && x.CaseID == script.CaseID {
+			n++
+		}
+	}
+	for i := 0; n > maxScriptVersions && i < len(s.ScriptVersions); {
+		if x := s.ScriptVersions[i]; x.VersionID == script.VersionID && x.CaseID == script.CaseID {
+			s.ScriptVersions = append(s.ScriptVersions[:i], s.ScriptVersions[i+1:]...)
+			n--
+			continue
+		}
+		i++
+	}
+}
+
+// dropScriptVersions removes archived versions whose (version, case) matches.
+func dropScriptVersions(s *State, match func(versionID, caseID string) bool) {
+	kept := make([]ScriptVersion, 0, len(s.ScriptVersions))
+	for _, x := range s.ScriptVersions {
+		if !match(x.VersionID, x.CaseID) {
+			kept = append(kept, x)
+		}
+	}
+	s.ScriptVersions = kept
+}
+
 // RiskNote is the risk-ranked one-line note shape both auto-test services use
 // (planner limitations/issues, generator deviations).
 type RiskNote struct {
@@ -200,6 +253,7 @@ type State struct {
 	PendingFolders []PendingFolder          `json:"pendingFolders"`
 	PendingCases   []PendingCase            `json:"pendingCases"`
 	Scripts        []Script                 `json:"scripts"`
+	ScriptVersions []ScriptVersion          `json:"scriptVersions"`
 }
 
 type Action struct {
@@ -333,15 +387,16 @@ func pendingCaseAt(s *State, id string) (*PendingCase, int) {
 func Seed() State {
 	t := now()
 	s := State{
-		MainRevision: 1,
-		Versions:     []Version{},
-		Folders:      []Folder{},
-		Cases:        []TestCase{},
-		Histories:    []History{},
-		Records:      []Record{},
-		Tasks:        []Task{},
-		Scripts:      []Script{},
-		Issues:       []Issue{},
+		MainRevision:   1,
+		Versions:       []Version{},
+		Folders:        []Folder{},
+		Cases:          []TestCase{},
+		Histories:      []History{},
+		Records:        []Record{},
+		Tasks:          []Task{},
+		Scripts:        []Script{},
+		ScriptVersions: []ScriptVersion{},
+		Issues:         []Issue{},
 	}
 	s.Versions = []Version{{ID: "main", Name: "主线", Mainline: true, BaseMainRevision: 1, CreatedBy: "system", CreatedAt: t}}
 	s.Folders = []Folder{{ID: "root", VersionID: "main", Name: "全部用例", CreatedBy: "system", CreatedAt: t}, {ID: "auth", VersionID: "main", ParentID: "root", Name: "登录与认证", CreatedBy: "system", CreatedAt: t}}
@@ -396,6 +451,9 @@ func normalizeState(state *State) {
 	}
 	if state.Scripts == nil {
 		state.Scripts = []Script{}
+	}
+	if state.ScriptVersions == nil {
+		state.ScriptVersions = []ScriptVersion{}
 	}
 	hasPendingRoot := false
 	for _, f := range state.PendingFolders {
@@ -655,6 +713,7 @@ func deleteVersion(s *State, a Action) error {
 		}
 	}
 	s.Scripts = scripts
+	dropScriptVersions(s, func(v, _ string) bool { return v == id })
 	tasks := make([]Task, 0, len(s.Tasks))
 	for _, t := range s.Tasks {
 		if t.VersionID != id {
@@ -882,6 +941,9 @@ func saveScript(s *State, a Action) error {
 		s.Scripts = append(s.Scripts, Script{ID: ID(), VersionID: a.VersionID, CaseID: c.ID, CreatedBy: a.Author, CreatedAt: t})
 		script = &s.Scripts[len(s.Scripts)-1]
 	}
+	if script.Revision > 0 {
+		archiveScript(s, script)
+	}
 	script.Title = c.Title
 	script.FileName = fileName
 	script.Language = language
@@ -924,6 +986,7 @@ func saveHealedScript(s *State, a Action) error {
 			seen[id] = true
 		}
 	}
+	archiveScript(s, script)
 	if err := editScript(s, a); err != nil {
 		return err
 	}
@@ -988,6 +1051,7 @@ func deleteScripts(s *State, a Action) error {
 		return errors.New("脚本不存在")
 	}
 	s.Scripts = kept
+	dropScriptVersions(s, func(v, c string) bool { return v == a.VersionID && ids[c] })
 	return nil
 }
 
@@ -1482,6 +1546,7 @@ func deleteCases(s *State, a Action) error {
 		scripts = append(scripts, x)
 	}
 	s.Scripts = scripts
+	dropScriptVersions(s, func(vid, cid string) bool { return vid == v.ID && ids[cid] })
 	records := make([]Record, 0, len(s.Records))
 	for _, r := range s.Records {
 		if r.VersionID == v.ID && ids[r.CaseID] {
