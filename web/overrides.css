@@ -217,3 +217,5 @@ button.avatar{padding:0;color:#fff;cursor:pointer;border:1px solid #ffffff40}
 .tc-tabs{flex-direction:column;gap:0;padding-bottom:0}.tc-tabrow{display:flex;gap:4px}
 .tc-filter{display:flex;gap:6px;padding:8px 0}.tc-filter-btn{background:transparent;color:var(--muted);border:1px solid var(--line);border-radius:999px;padding:3px 12px;font-size:12px;cursor:pointer}
 .tc-filter-btn.active{background:var(--brand-soft);color:var(--brand);border-color:var(--brand)}
+.tc-pin{margin-left:auto;background:transparent;border:1px solid transparent;border-radius:6px;padding:2px 8px;cursor:pointer;filter:grayscale(1);opacity:.55}
+.tc-pin.active{filter:none;opacity:1;background:var(--brand-soft);border-color:var(--brand)}

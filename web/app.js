@@ -1854,17 +1854,21 @@ const tcFilter={plan:'active',gen:'active',run:'active'};
 const tcShown=(key,active)=>tcFilter[key]==='active'?active:!active;
 const tcEmptyHTML=key=>`<p class="meta">${tcFilter[key]==='active'?'没有进行中的任务。':'没有已完成的任务。'}</p>`;
 let tcCurrent='gen';
+// 锁定：未锁定时，点击抽屉外的空白处会关闭任务抽屉；锁定后只能点「×」关闭。
+let tcPinned=false;
+try{tcPinned=localStorage.getItem('casehub-tc-pinned')==='1'}catch{}
 const tcTabs=document.createElement('div');tcTabs.className='tc-tabs';tcTabs.setAttribute('role','tablist');
 function tcRenderTabs(){
   const total=Object.values(tcActiveOf).reduce((n,f)=>n+f(),0),badge=$('#tc-badge');
   badge.textContent=total;badge.classList.toggle('hidden',!total);
-  const sig=JSON.stringify([tcCurrent,tcFilter,TC_TABS.map(([key])=>[tcActiveOf[key](),tcTotalOf[key]()])]);
+  const sig=JSON.stringify([tcCurrent,tcPinned,tcFilter,TC_TABS.map(([key])=>[tcActiveOf[key](),tcTotalOf[key]()])]);
   if(tcTabs.dataset.sig===sig)return;
   tcTabs.dataset.sig=sig;
   const active=tcActiveOf[tcCurrent](),done=tcTotalOf[tcCurrent]()-active;
-  tcTabs.innerHTML=`<div class="tc-tabrow">${TC_TABS.map(([key,label])=>{const n=tcActiveOf[key]();return `<button type="button" role="tab" class="tc-tab${key===tcCurrent?' active':''}" aria-selected="${key===tcCurrent}" data-tc="${key}">${label}${n?`<small>${n}</small>`:''}</button>`}).join('')}</div>
+  tcTabs.innerHTML=`<div class="tc-tabrow">${TC_TABS.map(([key,label])=>{const n=tcActiveOf[key]();return `<button type="button" role="tab" class="tc-tab${key===tcCurrent?' active':''}" aria-selected="${key===tcCurrent}" data-tc="${key}">${label}${n?`<small>${n}</small>`:''}</button>`}).join('')}<button type="button" class="tc-pin${tcPinned?' active':''}" id="tc-pin" aria-pressed="${tcPinned}" title="${tcPinned?'已锁定：只能点 × 关闭':'未锁定：点击空白处会关闭，点此锁定'}">📌</button></div>
     <div class="tc-filter" role="group">${[['active',`进行中 ${active}`],['done',`已完成 ${done}`]].map(([value,label])=>`<button type="button" class="tc-filter-btn${tcFilter[tcCurrent]===value?' active':''}" data-tc-filter="${value}">${label}</button>`).join('')}</div>`;
   tcTabs.querySelectorAll('[data-tc]').forEach(b=>b.onclick=()=>tcSwitch(b.dataset.tc));
+  tcTabs.querySelector('#tc-pin')?.addEventListener('click',()=>{tcPinned=!tcPinned;try{localStorage.setItem('casehub-tc-pinned',tcPinned?'1':'0')}catch{}tcTabs.dataset.sig='';tcRenderTabs()});
   tcTabs.querySelectorAll('[data-tc-filter]').forEach(b=>b.onclick=()=>{tcFilter[tcCurrent]=b.dataset.tcFilter;tcRenderTabs();tcRerender(tcCurrent)});
 }
 function tcRerender(key){if(key==='gen')renderGenDrawer();else if(key==='run')renderScriptRunDrawer();else tcShowPlanner()}
@@ -1963,3 +1967,10 @@ function scriptHistoryHTML(s){
   if(!list.length)return '';
   return `<div class="card"><h3>历史版本 <small class="meta">重新生成或修复前的脚本，共 ${list.length} 个</small></h3>${list.map(v=>`<details class="script-version"><summary>r${v.Revision} · ${fmt(v.UpdatedAt)} · ${esc(v.UpdatedBy||'—')} <span class="meta">${v.Status==='blocked'?'受阻':'已生成'}</span></summary>${v.Summary?`<p class="meta">${esc(v.Summary)}</p>`:''}<p class="drawer-actions"><button type="button" class="secondary" data-script-version-copy="${esc(v.ID)}">复制代码</button></p><pre class="script-code"><code>${esc(v.Code)}</code></pre></details>`).join('')}</div>`;
 }
+
+// 未锁定：点击任务抽屉、弹窗、右键菜单和「任务中心」按钮以外的地方，关闭三个任务抽屉。
+document.addEventListener('mousedown',e=>{
+  if(tcPinned||!e.target.isConnected)return;
+  if(e.target.closest('.drawer,dialog,#context-menu,#open-task-center,#toast'))return;
+  TC_TABS.forEach(([,,sel])=>$(sel).classList.add('hidden'));
+});
