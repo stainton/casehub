@@ -198,3 +198,4 @@ button.avatar{padding:0;color:#fff;cursor:pointer;border:1px solid #ffffff40}
 .gen-parent-task{background:var(--surface2)}
 .gen-parent-task>.gen-children{margin:10px 0 0 12px;padding-left:10px;border-left:2px solid var(--line)}
 .gen-parent-task>.gen-children>.gen-task{background:var(--surface);margin-bottom:8px}
+.dark .issue-status-open{background:#78350f55;color:#fcd34d}.dark .issue-status-resolved{background:#14532d55;color:#86efac}.dark .issue-viewer .toastui-editor-contents{color:var(--text)}
