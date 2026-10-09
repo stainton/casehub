@@ -1247,12 +1247,13 @@ function updateScriptRunTask(job){
 function renderScriptRunDrawer(){
   const body=$('#run-drawer-body');if(!body)return;
   $('#run-drawer-sub').textContent=activeScriptRuns().length?`${activeScriptRuns().length} 个任务进行中`:`${scriptRunTasks.length} 个任务`;
-  body.innerHTML=scriptRunTasks.length?scriptRunTasks.map(task=>{
+  const runShown=scriptRunTasks.filter(task=>tcShown('run',!SCRIPT_RUN_TERMINAL.includes(task.status)));
+  body.innerHTML=runShown.length?runShown.map(task=>{
     const runtime=scriptRunRuntime.get(task.jobId),active=!SCRIPT_RUN_TERMINAL.includes(task.status);
     const failure=task.error?.message||task.failure||'';
     const failureDetails=failure?`<details class="card run-failure"><summary>失败详情</summary><p>${esc(task.error?.code?`${task.error.code}：${failure}`:failure)}</p>${task.output?`<pre class="ai-log">${esc(task.output)}</pre>`:''}</details>`:'';
     return `<details class="gen-task" data-run-panel="${task.jobId}"${scriptRunOpen.has(task.jobId)?' open':''}><summary><span class="gen-task-title">${esc(task.caseID)} · ${esc(task.title||'脚本执行')}</span><span class="gen-chip gen-status-${active?'running':task.status}">${esc(scriptRunStatus(task))}${task.stage&&active?` · ${esc(task.stage)}`:''}</span></summary><p class="meta">${esc(task.versionName||'')} · 提交于 ${fmt(task.createdAt)}</p><div class="ai-log" data-run-log="${task.jobId}">${(runtime?.log||[]).map(line=>`<div>${esc(line)}</div>`).join('')}</div>${failureDetails}<p class="drawer-actions">${task.passed===false?`<button type="button" class="secondary" data-run-report="${task.jobId}">查看测试记录</button>`:''}${active?`<button type="button" class="secondary" data-run-cancel="${task.jobId}">取消任务</button>`:`<button type="button" class="secondary" data-run-forget="${task.jobId}">移除记录</button>`}</p></details>`;
-  }).join(''):'<p class="meta">还没有脚本执行任务。</p>';
+  }).join(''):(scriptRunTasks.length?tcEmptyHTML('run'):'<p class="meta">还没有脚本执行任务。</p>');
   $$('#run-drawer-body [data-run-panel]').forEach(el=>el.ontoggle=()=>{el.open?scriptRunOpen.add(el.dataset.runPanel):scriptRunOpen.delete(el.dataset.runPanel)});
   $$('#run-drawer-body [data-run-cancel]').forEach(button=>button.onclick=async()=>{button.disabled=true;try{await serviceRequest(`/api/executor/jobs/${button.dataset.runCancel}`,{method:'DELETE'})}catch(error){toast(error.message,true);button.disabled=false}});
   $$('#run-drawer-body [data-run-report]').forEach(button=>button.onclick=()=>{const task=scriptRunTask(button.dataset.runReport);if(task){setAutoFocus({type:'script',versionID:task.versionID,id:task.caseID});$('#run-drawer').classList.add('hidden')}});
@@ -1639,9 +1640,10 @@ function genStatusText(task){
   return task.stage&&!GEN_TERMINAL.includes(task.status)?`${status} · ${esc(task.stage)}`:status;
 }
 function genTaskListHTML(){
-  const grouped=new Set(),parts=[];
-  for(const group of genGroups){const children=genTasks.filter(task=>task.groupID===group.id);if(!children.length)continue;children.forEach(task=>grouped.add(task.jobId));const running=children.filter(task=>!GEN_TERMINAL.includes(task.status)).length,failed=children.filter(task=>task.status==='failed'||task.saved?.blocked).length,done=children.filter(task=>task.status==='succeeded'&&task.saved&&!task.saved.blocked).length;parts.push(`<details class="gen-task gen-parent-task" data-gen-panel="${group.id}"${genOpen.has(group.id)?' open':''}><summary><span class="gen-task-title">${esc(group.label)}</span><span class="gen-chip">${children.length}/${group.caseTotal||children.length} 条用例</span><span class="gen-chip ${failed?'gen-status-failed':''}">${running?`${running} 进行中`:failed?`${failed} 条需处理`:`${done} 已完成`}</span></summary><p class="meta">批量父任务 · 子用例独立运行，展开查看每条任务的进度、错误和故障排查入口。</p><div class="gen-children">${children.map(genTaskHTML).join('')}</div></details>`)}
-  return parts.join('')+genTasks.filter(task=>!grouped.has(task.jobId)).map(genTaskHTML).join('');
+  const grouped=new Set(),parts=[],shown=task=>tcShown('gen',!GEN_TERMINAL.includes(task.status));
+  for(const group of genGroups){const children=genTasks.filter(task=>task.groupID===group.id);if(!children.length)continue;children.forEach(task=>grouped.add(task.jobId));const visible=children.filter(shown);if(!visible.length)continue;const running=children.filter(task=>!GEN_TERMINAL.includes(task.status)).length,failed=children.filter(task=>task.status==='failed'||task.saved?.blocked).length,done=children.filter(task=>task.status==='succeeded'&&task.saved&&!task.saved.blocked).length;parts.push(`<details class="gen-task gen-parent-task" data-gen-panel="${group.id}"${genOpen.has(group.id)?' open':''}><summary><span class="gen-task-title">${esc(group.label)}</span><span class="gen-chip">${children.length}/${group.caseTotal||children.length} 条用例</span><span class="gen-chip ${failed?'gen-status-failed':''}">${running?`${running} 进行中`:failed?`${failed} 条需处理`:`${done} 已完成`}</span></summary><p class="meta">批量父任务 · 子用例独立运行，展开查看每条任务的进度、错误和故障排查入口。</p><div class="gen-children">${visible.map(genTaskHTML).join('')}</div></details>`)}
+  const html=parts.join('')+genTasks.filter(task=>!grouped.has(task.jobId)&&shown(task)).map(genTaskHTML).join('');
+  return html||tcEmptyHTML('gen');
 }
 function genTaskHTML(task){
   const runtime=genRuntime.get(task.jobId);
@@ -1821,18 +1823,29 @@ async function resumeGenTasks(){
 // ---- 任务中心：三类任务（设计 / 生成修复 / 执行）共用一排标签，随抽屉一起弹出 ----
 const TC_TABS=[['plan','Planner · 设计','#ai-drawer'],['gen','Generator · 生成/修复','#gen-drawer'],['run','Executor · 执行','#run-drawer']];
 const tcPlannerDocs=()=>(state?.reqDocs||[]).filter(doc=>localStorage.getItem(aiJobKey(doc))||isAiActive(doc));
-const tcCounts=()=>{const docs=tcPlannerDocs();return {plan:[docs.filter(isAiActive).length,docs.length],gen:[genRunning().length,genTasks.length],run:[activeScriptRuns().length,scriptRunTasks.length]}};
+const tcActiveOf={plan:()=>tcPlannerDocs().filter(isAiActive).length,gen:()=>genRunning().length,run:()=>activeScriptRuns().length};
+const tcTotalOf={plan:()=>tcPlannerDocs().length,gen:()=>genTasks.length,run:()=>scriptRunTasks.length};
+const tcFilter={plan:'active',gen:'active',run:'active'};
+const tcShown=(key,active)=>tcFilter[key]==='active'?active:!active;
+const tcEmptyHTML=key=>`<p class="meta">${tcFilter[key]==='active'?'没有进行中的任务。':'没有已完成的任务。'}</p>`;
 let tcCurrent='gen';
 const tcTabs=document.createElement('div');tcTabs.className='tc-tabs';tcTabs.setAttribute('role','tablist');
 function tcRenderTabs(){
-  const counts=tcCounts();
-  tcTabs.innerHTML=TC_TABS.map(([key,label])=>{const [run,all]=counts[key];return `<button type="button" role="tab" class="tc-tab${key===tcCurrent?' active':''}" aria-selected="${key===tcCurrent}" data-tc="${key}">${label}<small>${run?`${run}/`:''}${all}</small></button>`}).join('');
-  tcTabs.querySelectorAll('[data-tc]').forEach(b=>b.onclick=()=>tcSwitch(b.dataset.tc));
-  const total=Object.values(counts).reduce((n,[run])=>n+run,0),badge=$('#tc-badge');
+  const total=Object.values(tcActiveOf).reduce((n,f)=>n+f(),0),badge=$('#tc-badge');
   badge.textContent=total;badge.classList.toggle('hidden',!total);
+  const sig=JSON.stringify([tcCurrent,tcFilter,TC_TABS.map(([key])=>[tcActiveOf[key](),tcTotalOf[key]()])]);
+  if(tcTabs.dataset.sig===sig)return;
+  tcTabs.dataset.sig=sig;
+  const active=tcActiveOf[tcCurrent](),done=tcTotalOf[tcCurrent]()-active;
+  tcTabs.innerHTML=`<div class="tc-tabrow">${TC_TABS.map(([key,label])=>{const n=tcActiveOf[key]();return `<button type="button" role="tab" class="tc-tab${key===tcCurrent?' active':''}" aria-selected="${key===tcCurrent}" data-tc="${key}">${label}${n?`<small>${n}</small>`:''}</button>`}).join('')}</div>
+    <div class="tc-filter" role="group">${[['active',`进行中 ${active}`],['done',`已完成 ${done}`]].map(([value,label])=>`<button type="button" class="tc-filter-btn${tcFilter[tcCurrent]===value?' active':''}" data-tc-filter="${value}">${label}</button>`).join('')}</div>`;
+  tcTabs.querySelectorAll('[data-tc]').forEach(b=>b.onclick=()=>tcSwitch(b.dataset.tc));
+  tcTabs.querySelectorAll('[data-tc-filter]').forEach(b=>b.onclick=()=>{tcFilter[tcCurrent]=b.dataset.tcFilter;tcRenderTabs();tcRerender(tcCurrent)});
 }
+function tcRerender(key){if(key==='gen')renderGenDrawer();else if(key==='run')renderScriptRunDrawer();else tcShowPlanner()}
 function tcAttach(key){
   tcCurrent=key;
+  tcTabs.dataset.sig='';
   const drawer=$(TC_TABS.find(t=>t[0]===key)[2]);
   drawer.prepend(tcTabs);
   tcRenderTabs();
@@ -1847,8 +1860,8 @@ function tcShowPlanner(){
   aiDoc=null;
   $('#ai-drawer-doc').textContent='';
   $('#ai-drawer').classList.remove('hidden');
-  const docs=tcPlannerDocs();
-  $('#ai-drawer-body').innerHTML=`<div class="tc-list">${docs.length?docs.map(doc=>`<button type="button" class="tc-row" data-tc-plan="${esc(doc.ID)}"><span>${esc(doc.Title)}</span><small>${isAiActive(doc)?'进行中':'待查看'}</small></button>`).join(''):'<p class="meta">暂无设计任务。在「需求管理」里打开需求文档，点「AI 设计」发起。</p>'}</div>`;
+  const all=tcPlannerDocs(),docs=all.filter(doc=>tcShown('plan',isAiActive(doc)));
+  $('#ai-drawer-body').innerHTML=`<div class="tc-list">${docs.length?docs.map(doc=>`<button type="button" class="tc-row" data-tc-plan="${esc(doc.ID)}"><span>${esc(doc.Title)}</span><small>${isAiActive(doc)?'进行中':'已完成 / 待查看'}</small></button>`).join(''):(all.length?tcEmptyHTML('plan'):'<p class="meta">暂无设计任务。在「需求管理」里打开需求文档，点「AI 设计」发起。</p>')}</div>`;
   $$('#ai-drawer-body [data-tc-plan]').forEach(b=>b.onclick=()=>{const doc=state.reqDocs.find(d=>d.ID===b.dataset.tcPlan);if(doc)openAiDrawer(doc)});
   tcAttach('plan');
 }

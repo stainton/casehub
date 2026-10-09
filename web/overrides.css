@@ -214,3 +214,6 @@ button.avatar{padding:0;color:#fff;cursor:pointer;border:1px solid #ffffff40}
 .ai-diff-add{background:#dcfce7;color:#14532d}.ai-diff-del{background:#fee2e2;color:#7f1d1d;text-decoration:line-through}
 .dark .ai-diff-add{background:#14532d55;color:#86efac}.dark .ai-diff-del{background:#7f1d1d55;color:#fca5a5}
 .ai-diff-block h4{margin:10px 0 0}.script-version{border-top:1px solid var(--line);padding:8px 0}.script-version summary{cursor:pointer}
+.tc-tabs{flex-direction:column;gap:0;padding-bottom:0}.tc-tabrow{display:flex;gap:4px}
+.tc-filter{display:flex;gap:6px;padding:8px 0}.tc-filter-btn{background:transparent;color:var(--muted);border:1px solid var(--line);border-radius:999px;padding:3px 12px;font-size:12px;cursor:pointer}
+.tc-filter-btn.active{background:var(--brand-soft);color:var(--brand);border-color:var(--brand)}
