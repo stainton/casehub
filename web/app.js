@@ -143,7 +143,7 @@ function bindCaseDetailBody(root,c,isPending,rerender){
   const headerEdit=root.querySelector('#edit-case,#edit-review-case');
   root.querySelector('[data-open-automation]')?.addEventListener('click',()=>{setPage('automation');setAutoFocus({type:'script',versionID:c.VersionID,id:c.ID})});
   root.querySelector('[data-locate-case-tree]')?.addEventListener('click',()=>locateCaseInTree(c));
-  if(headerEdit){headerEdit.disabled=edit?.mode==='case';headerEdit.onclick=event=>{if(isPending)return menu(event,[['编辑 Planner 原始内容',()=>{startCaseEdit(c,true,'case');rerender()}],['编辑阅读友好版',()=>{startCaseEdit(c,true,'friendly');rerender()}]]);startCaseEdit(c,false,'case');rerender()}}
+  if(headerEdit){headerEdit.disabled=edit?.mode==='case';headerEdit.onclick=event=>{if(isPending){event.stopPropagation();return menu(event,[['编辑 Planner 原始内容',()=>{startCaseEdit(c,true,'case');rerender()}],['编辑阅读友好版',()=>{startCaseEdit(c,true,'friendly');rerender()}]])}startCaseEdit(c,false,'case');rerender()}}
   root.querySelectorAll('[data-edit-field]').forEach(el=>el.oninput=el.onchange=()=>{if(edit)edit.draft[el.dataset.editField]=el.value});
   root.querySelector('[data-edit-cancel]')?.addEventListener('click',()=>{caseEdits[casePane(isPending)]=null;rerender()});
   const saveBtn=root.querySelector('[data-edit-save]');
