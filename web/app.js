@@ -10,6 +10,7 @@ function saveClosedFolders(){}
 let state=null, focus=null, selected=new Map(), view='cases', modalSave=null, recordCase=null, recordTask='', recordEditor=null, recordViewers=[], recordHistoryLimit=3;
 let openTasks=persistedSet('casehub-open-tasks'), closedTaskVersions=collapseSet('casehub-open-task-versions'), closedFolders=collapseSet('casehub-open-folders'), openMainlineFolders=persistedSet('casehub-open-mainline-folders-v2'), closedReqFolders=collapseSet('casehub-open-req-folders'), closedReviewFolders=collapseSet('casehub-open-review-folders'), closedVersions=collapseSet('casehub-open-versions');
 let page='cases', reqFocus=null, reqEditor=null, reqSidebarWidth=null, aiDoc=null, reqPage='docs';
+const aiFixInFlight=new Set(); // 正在 AI 修正的用例：`${versionID}:${caseID}`
 let issueFocus=null, issueDescriptionEditor=null, issueCauseEditor=null, issueViewers=[];
 let aiSource=null, aiPlannerEnabled=null;
 let caseViewMode='friendly'; // 'friendly' | 'raw' — applies to whichever case detail is currently shown
@@ -205,7 +206,7 @@ async function runSimplify(c,isPending,rerender){
   }
 }
 
-function renderFocus(){if(!focus){updateEmptyHint();$('#empty').classList.remove('hidden');$('#detail').classList.add('hidden');return}$('#empty').classList.add('hidden');let d=$('#detail');d.classList.remove('hidden');if(focus.type==='folder'){let f=state.folders.find(x=>x.VersionID===focus.versionID&&x.ID===focus.id);if(!f){focus=null;return renderFocus()}let descendants=descendantFolders(f),count=cases(f.VersionID).filter(c=>c.FolderID===f.ID||descendants.includes(c.FolderID)).length;d.innerHTML=`<div class="detail-head"><div><div class="eyebrow">文件夹 · ${esc(version(f.VersionID).name)}</div><h1>📁 ${esc(f.Name)}</h1></div></div><div class="card meta-grid"><span>用例 <b>${count}</b></span><span>子文件夹 <b>${descendants.length}</b></span>${f.Moved?'<span>状态 <b>已移动 · 未合并到主线</b></span>':''}<span>创建者 <b>${esc(f.CreatedBy)}</b></span><span>创建时间 <b>${fmt(f.CreatedAt)}</b></span></div>`;return}let c=state.cases.find(x=>x.VersionID===focus.versionID&&x.ID===focus.id);if(!c){focus=null;return renderFocus()}let branch=!version(c.VersionID).mainline,h=state.histories.filter(x=>x.CaseID===c.ID&&x.VersionID===c.VersionID).slice().reverse();d.innerHTML=`<div class="detail-head"><div><div class="eyebrow">${esc(c.ID)} · ${esc(version(c.VersionID).name)} ${c.Dirty?'· 未合并':''}</div><h1>${esc(c.Title)}</h1></div><div class="detail-actions">${branch?'<button id="ai-fix-case" class="secondary">AI 修正</button><button id="edit-case" class="secondary">编辑</button>':''}<button id="open-record">测试记录</button></div></div><div class="card case-detail"><div class="meta-grid case-meta"><span>优先级 <b>${esc(c.Priority||'未设置')}</b></span><span>当前结果 <b>${resultName(c.Result)}</b></span><span>更新者 <b>${esc(c.UpdatedBy)}</b></span><span>更新时间 <b>${fmt(c.UpdatedAt)}</b></span><span>基线版本 <b>r${c.BaseRevision||c.Revision}</b></span><button type="button" class="link-button version-toggle" id="case-version-toggle" aria-expanded="false"${h.length?'':' disabled'}>用例版本 <b>${esc(version(c.VersionID).name)}</b><small>${h.length?`${h.length} 条编辑历史 ▾`:'暂无编辑历史'}</small></button></div>${caseDetailBodyHTML(c,false)}${h.length?`<div class="history-list hidden" id="case-history-list">${h.map(x=>`<a class="history-row" href="#history=${encodeURIComponent(x.ID)}&amp;version=${encodeURIComponent(c.VersionID)}"><b>${historyAction(x.Action)}</b> · ${esc(x.Author)} <small>${fmt(x.CreatedAt)}${x.SourceVersionID?` · 来源 ${esc(version(x.SourceVersionID)?.name||x.SourceVersionID)}`:''}</small></a>`).join('')}</div>`:''}</div>`;$('#open-record').onclick=()=>openRecords(c);if(h.length)$('#case-version-toggle').onclick=()=>{let hidden=$('#case-history-list').classList.toggle('hidden');$('#case-version-toggle').setAttribute('aria-expanded',String(!hidden))};bindCaseDetailBody(d,c,false,renderFocus)}
+function renderFocus(){if(!focus){updateEmptyHint();$('#empty').classList.remove('hidden');$('#detail').classList.add('hidden');return}$('#empty').classList.add('hidden');let d=$('#detail');d.classList.remove('hidden');if(focus.type==='folder'){let f=state.folders.find(x=>x.VersionID===focus.versionID&&x.ID===focus.id);if(!f){focus=null;return renderFocus()}let descendants=descendantFolders(f),count=cases(f.VersionID).filter(c=>c.FolderID===f.ID||descendants.includes(c.FolderID)).length;d.innerHTML=`<div class="detail-head"><div><div class="eyebrow">文件夹 · ${esc(version(f.VersionID).name)}</div><h1>📁 ${esc(f.Name)}</h1></div></div><div class="card meta-grid"><span>用例 <b>${count}</b></span><span>子文件夹 <b>${descendants.length}</b></span>${f.Moved?'<span>状态 <b>已移动 · 未合并到主线</b></span>':''}<span>创建者 <b>${esc(f.CreatedBy)}</b></span><span>创建时间 <b>${fmt(f.CreatedAt)}</b></span></div>`;return}let c=state.cases.find(x=>x.VersionID===focus.versionID&&x.ID===focus.id);if(!c){focus=null;return renderFocus()}let branch=!version(c.VersionID).mainline,h=state.histories.filter(x=>x.CaseID===c.ID&&x.VersionID===c.VersionID).slice().reverse();d.innerHTML=`<div class="detail-head"><div><div class="eyebrow">${esc(c.ID)} · ${esc(version(c.VersionID).name)} ${c.Dirty?'· 未合并':''}</div><h1>${esc(c.Title)}</h1></div><div class="detail-actions">${branch?(aiFixInFlight.has(`${c.VersionID}:${c.ID}`)?'<button id="ai-fix-case" class="ai-running" disabled>AI 修正中…</button>':'<button id="ai-fix-case" class="secondary">AI 修正</button>')+'<button id="edit-case" class="secondary">编辑</button>':''}<button id="open-record">测试记录</button></div></div><div class="card case-detail"><div class="meta-grid case-meta"><span>优先级 <b>${esc(c.Priority||'未设置')}</b></span><span>当前结果 <b>${resultName(c.Result)}</b></span><span>更新者 <b>${esc(c.UpdatedBy)}</b></span><span>更新时间 <b>${fmt(c.UpdatedAt)}</b></span><span>基线版本 <b>r${c.BaseRevision||c.Revision}</b></span><button type="button" class="link-button version-toggle" id="case-version-toggle" aria-expanded="false"${h.length?'':' disabled'}>用例版本 <b>${esc(version(c.VersionID).name)}</b><small>${h.length?`${h.length} 条编辑历史 ▾`:'暂无编辑历史'}</small></button></div>${caseDetailBodyHTML(c,false)}${h.length?`<div class="history-list hidden" id="case-history-list">${h.map(x=>`<a class="history-row" href="#history=${encodeURIComponent(x.ID)}&amp;version=${encodeURIComponent(c.VersionID)}"><b>${historyAction(x.Action)}</b> · ${esc(x.Author)} <small>${fmt(x.CreatedAt)}${x.SourceVersionID?` · 来源 ${esc(version(x.SourceVersionID)?.name||x.SourceVersionID)}`:''}</small></a>`).join('')}</div>`:''}</div>`;$('#open-record').onclick=()=>openRecords(c);if(h.length)$('#case-version-toggle').onclick=()=>{let hidden=$('#case-history-list').classList.toggle('hidden');$('#case-version-toggle').setAttribute('aria-expanded',String(!hidden))};bindCaseDetailBody(d,c,false,renderFocus)}
 function descendantFolders(f){let out=[];function walk(id){state.folders.filter(x=>x.VersionID===f.VersionID&&x.ParentID===id).forEach(x=>{out.push(x.ID);walk(x.ID)})}walk(f.ID);return out}
 function locateCaseInTree(c){
   $('[data-view="cases"]')?.click();setSidebarCollapsed(false);closedVersions.delete(c.VersionID);saveClosedVersions();
@@ -1956,23 +1957,32 @@ function diffBlockHTML(label,before,after){
 function setModalSubmitLabel(text){
   const button=$('#modal-form button[type="submit"]');
   button.textContent=text;
-  $('#modal').addEventListener('close',()=>{button.textContent='保存'},{once:true});
+  $('#modal').addEventListener('close',()=>{button.textContent='保存';button.classList.remove('ai-running');button.disabled=false},{once:true});
+}
+// AI 修正进行中：按钮变成橙底的「AI 修正中…」并禁用，避免重复提交。
+function setAiFixBusy(button,busy){
+  if(!button)return;
+  button.disabled=busy;button.classList.toggle('ai-running',busy);
+  button.textContent=busy?'AI 修正中…':'生成修正';
 }
 function openCaseAiFix(c,prefill=''){
   if(version(c.VersionID)?.mainline)return toast('主线用例不能直接修改，请在测试版本中使用 AI 修正',true);
   showModal(`AI 修正 · ${c.ID}`,`<p class="meta">只会修正「执行步骤」和「预期结果」。请写清楚哪里错了、应该是什么；生成后会先展示变更，确认后才保存。</p><label>修改点<textarea name="points" required rows="6" placeholder="例如：第 3 步应点击“提交”而不是“保存”；预期结果里提示文案应为“密码错误”">${esc(prefill)}</textarea></label>`,async values=>{
     const points=String(values.points||'').trim();
     if(!points)throw Error('请填写修改点');
-    toast('AI 正在修正用例…');
+    const flightKey=`${c.VersionID}:${c.ID}`,submit=$('#modal-form button[type="submit"]');
+    if(aiFixInFlight.has(flightKey))return;
+    aiFixInFlight.add(flightKey);setAiFixBusy(submit,true);renderFocus();
     const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),120000);
     let fixed;
     try{
       fixed=(await serviceRequest('/api/general-agent/generate',{method:'POST',headers:{'Content-Type':'application/json'},signal:controller.signal,
         body:JSON.stringify({systemPrompt:CASE_FIX_SYSTEM_PROMPT,schema:CASE_FIX_SCHEMA,prompt:JSON.stringify({case:{title:c.Title||'',preconditions:c.Preconditions||'',steps:c.Steps||'',expected:c.Expected||''},changePoints:points})})})).output;
     }catch(e){toast(controller.signal.aborted?'AI 修正超时，请稍后重试':`AI 修正失败：${e.message}`,true);throw e}
-    finally{clearTimeout(timer)}
+    finally{clearTimeout(timer);aiFixInFlight.delete(flightKey);setAiFixBusy(submit,false);renderFocus()}
     // 等本弹窗的 close 事件处理完（还原按钮文案）再弹出变更确认，避免两次弹窗互相覆盖。
-    $('#modal').addEventListener('close',()=>showCaseAiFixDiff(c,points,{steps:String(fixed.steps??c.Steps??''),expected:String(fixed.expected??c.Expected??''),summary:String(fixed.summary||'')}),{once:true});
+    const showDiff=()=>showCaseAiFixDiff(c,points,{steps:String(fixed.steps??c.Steps??''),expected:String(fixed.expected??c.Expected??''),summary:String(fixed.summary||'')});
+    if($('#modal').open)$('#modal').addEventListener('close',showDiff,{once:true});else showDiff(); // 请求期间用户关掉了弹窗：直接展示变更
   });
   setModalSubmitLabel('生成修正');
 }
