@@ -1817,27 +1817,43 @@ async function resumeGenTasks(){
   }
 }
 
-// ---- 任务中心：右侧拉手，随时查看 planner / generator / executor 任务，不必先新建任务 ----
+// ---- 任务中心：三类任务（设计 / 生成修复 / 执行）共用一排标签，随抽屉一起弹出 ----
+const TC_TABS=[['plan','Planner · 设计','#ai-drawer'],['gen','Generator · 生成/修复','#gen-drawer'],['run','Executor · 执行','#run-drawer']];
 const tcPlannerDocs=()=>(state?.reqDocs||[]).filter(doc=>localStorage.getItem(aiJobKey(doc))||isAiActive(doc));
-function tcCloseDrawers(){['#ai-drawer','#gen-drawer','#run-drawer'].forEach(sel=>$(sel).classList.add('hidden'))}
-function renderTaskCenter(){
-  const panel=$('#tc-panel');
-  const plannerDocs=tcPlannerDocs(),genRun=genRunning().length,execRun=activeScriptRuns().length,planRun=plannerDocs.filter(isAiActive).length;
-  const total=genRun+execRun+planRun,badge=$('#tc-badge');
+const tcCounts=()=>{const docs=tcPlannerDocs();return {plan:[docs.filter(isAiActive).length,docs.length],gen:[genRunning().length,genTasks.length],run:[activeScriptRuns().length,scriptRunTasks.length]}};
+let tcCurrent='gen';
+const tcTabs=document.createElement('div');tcTabs.className='tc-tabs';tcTabs.setAttribute('role','tablist');
+function tcRenderTabs(){
+  const counts=tcCounts();
+  tcTabs.innerHTML=TC_TABS.map(([key,label])=>{const [run,all]=counts[key];return `<button type="button" role="tab" class="tc-tab${key===tcCurrent?' active':''}" aria-selected="${key===tcCurrent}" data-tc="${key}">${label}<small>${run?`${run}/`:''}${all}</small></button>`}).join('');
+  tcTabs.querySelectorAll('[data-tc]').forEach(b=>b.onclick=()=>tcSwitch(b.dataset.tc));
+  const total=Object.values(counts).reduce((n,[run])=>n+run,0),badge=$('#tc-badge');
   badge.textContent=total;badge.classList.toggle('hidden',!total);
-  if(panel.classList.contains('hidden'))return;
-  const count=(running,all)=>`<b>${running?`${running} 进行中 / `:''}${all}</b>`;
-  panel.innerHTML=`<span class="tc-title">Planner · 需求设计</span>${plannerDocs.length?plannerDocs.map(doc=>`<button type="button" class="tc-row tc-sub" data-tc-plan="${esc(doc.ID)}"><span>${esc(doc.Title)}</span><small>${isAiActive(doc)?'进行中':'待查看'}</small></button>`).join(''):'<p class="meta tc-sub">暂无设计任务（在需求文档里点「AI 设计」）</p>'}
-    <span class="tc-title">Generator · 脚本生成 / 修复</span><button type="button" class="tc-row" data-tc="gen"><span>生成 / 修复任务</span>${count(genRun,genTasks.length)}</button>
-    <span class="tc-title">Executor · 脚本执行</span><button type="button" class="tc-row" data-tc="run"><span>执行任务</span>${count(execRun,scriptRunTasks.length)}</button>`;
-  $$('#tc-panel [data-tc-plan]').forEach(b=>b.onclick=()=>{const doc=state.reqDocs.find(d=>d.ID===b.dataset.tcPlan);if(!doc)return;tcCloseDrawers();openAiDrawer(doc);toggleTaskCenter(false)});
-  $$('#tc-panel [data-tc]').forEach(b=>b.onclick=()=>{tcCloseDrawers();b.dataset.tc==='gen'?openGenDrawer():openScriptRunDrawer();toggleTaskCenter(false)});
 }
-function toggleTaskCenter(open){
-  const panel=$('#tc-panel');
-  panel.classList.toggle('hidden',!open);$('#tc-handle').setAttribute('aria-expanded',String(open));
-  if(open)renderTaskCenter();
+function tcAttach(key){
+  tcCurrent=key;
+  const drawer=$(TC_TABS.find(t=>t[0]===key)[2]);
+  drawer.prepend(tcTabs);
+  tcRenderTabs();
 }
-$('#tc-handle').onclick=()=>toggleTaskCenter($('#tc-panel').classList.contains('hidden'));
-document.addEventListener('mousedown',e=>{if(!e.target.closest('#task-center'))toggleTaskCenter(false)});
-setInterval(renderTaskCenter,2000);
+function tcSwitch(key){
+  TC_TABS.forEach(([,,sel])=>$(sel).classList.add('hidden'));
+  if(key==='gen')openGenDrawer();
+  else if(key==='run')openScriptRunDrawer();
+  else tcShowPlanner();
+}
+function tcShowPlanner(){
+  aiDoc=null;
+  $('#ai-drawer-doc').textContent='';
+  $('#ai-drawer').classList.remove('hidden');
+  const docs=tcPlannerDocs();
+  $('#ai-drawer-body').innerHTML=`<div class="tc-list">${docs.length?docs.map(doc=>`<button type="button" class="tc-row" data-tc-plan="${esc(doc.ID)}"><span>${esc(doc.Title)}</span><small>${isAiActive(doc)?'进行中':'待查看'}</small></button>`).join(''):'<p class="meta">暂无设计任务。在「需求管理」里打开需求文档，点「AI 设计」发起。</p>'}</div>`;
+  $$('#ai-drawer-body [data-tc-plan]').forEach(b=>b.onclick=()=>{const doc=state.reqDocs.find(d=>d.ID===b.dataset.tcPlan);if(doc)openAiDrawer(doc)});
+  tcAttach('plan');
+}
+// 任何入口打开这三个抽屉，都带上标签，方便互相切换。
+{const g=openGenDrawer;openGenDrawer=function(){g.apply(this,arguments);tcAttach('gen')};
+ const r=openScriptRunDrawer;openScriptRunDrawer=function(){r.apply(this,arguments);tcAttach('run')};
+ const a=openAiDrawer;openAiDrawer=function(){a.apply(this,arguments);tcAttach('plan')}}
+$('#open-task-center').onclick=()=>tcSwitch(tcCurrent);
+setInterval(tcRenderTabs,2000);
