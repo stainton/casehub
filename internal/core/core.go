@@ -72,6 +72,10 @@ type TestCase struct {
 	SimplifiedPreconditions, SimplifiedSteps, SimplifiedExpected             string
 	SimplifiedFromPreconditions, SimplifiedFromSteps, SimplifiedFromExpected string
 	SimplifiedAt                                                             time.Time
+	// AIRevised* mark a case rewritten by "AI 修正需求" (reviseReqDoc) until a person
+	// confirms it (ackCaseRevision), so the change is flagged in the UI instead of slipping through.
+	AIRevisedBy, AIRevisedReason string
+	AIRevisedAt                  time.Time
 	// AssetIDs are files selected when this case's automation script was generated.
 	// They travel with a later execution task so the runner can recreate its inputs.
 	AssetIDs []string
@@ -145,6 +149,9 @@ type PendingCase struct {
 	SimplifiedPreconditions, SimplifiedSteps, SimplifiedExpected             string
 	SimplifiedFromPreconditions, SimplifiedFromSteps, SimplifiedFromExpected string
 	SimplifiedAt                                                             time.Time
+	// See TestCase's identical fields.
+	AIRevisedBy, AIRevisedReason string
+	AIRevisedAt                  time.Time
 }
 
 // Script is the automation asset of one test case: the Playwright spec the
@@ -287,6 +294,17 @@ type Action struct {
 	ScriptAssetIDs                             []string
 	// reportIssues: product defects found by planner/generator jobs.
 	Reports []IssueReport
+	// reviseReqDoc: the cases the AI rewrote along with the requirement. ackCaseRevision
+	// reuses Scope/VersionID/CaseID to name one case.
+	Revisions []CaseRevision
+	Scope     string
+}
+
+// CaseRevision is one case rewritten by "AI 修正需求". Scope is "pending" (review area) or
+// "version" (a branch version's case, named by VersionID).
+type CaseRevision struct {
+	Scope, VersionID, CaseID               string
+	Preconditions, Steps, Expected, Reason string
 }
 
 // IssueReport is one product defect an auto-test job reported back.
@@ -553,6 +571,14 @@ func (s *Service) Apply(ctx context.Context, a Action) (Result, error) {
 		err = saveReqExploration(&st, a)
 	case "deleteReqFolder":
 		err = deleteReqFolder(&st, a)
+	case "reviseReqDoc":
+		var conflicts []string
+		conflicts, err = reviseReqDoc(&st, a)
+		if len(conflicts) > 0 {
+			return Result{State: st, Conflicts: conflicts}, ConflictError{Cases: conflicts}
+		}
+	case "ackCaseRevision":
+		err = ackCaseRevision(&st, a)
 	case "deleteReqDoc":
 		err = deleteReqDoc(&st, a)
 	case "createIssue":
@@ -1320,6 +1346,7 @@ func mergeCaseInto(s *State, c TestCase, revision int64, folderID string, author
 	n.Dirty = false
 	n.BaseRevision = 0
 	n.Revision = revision
+	n.AIRevisedBy, n.AIRevisedReason, n.AIRevisedAt = "", "", time.Time{} // the flag is for the branch reviewer; mainline stays clean
 	n.UpdatedAt = now()
 	if m == nil {
 		s.Cases = append(s.Cases, n)
@@ -1818,6 +1845,102 @@ func editReqDoc(s *State, a Action) error {
 	return nil
 }
 
+// reviseReqDoc applies "AI 修正需求": the requirement text and the cases rewritten along with it are
+// saved together or not at all. Each case is flagged (AIRevised*) until ackCaseRevision. Branch
+// cases go through the same stale check and history record as editCase; Force overrides a stale
+// case exactly as it does there. Pending cases lose their review verdict like editPendingCase.
+func reviseReqDoc(s *State, a Action) ([]string, error) {
+	d, _ := reqDocAt(s, a.DocID)
+	if d == nil {
+		return nil, errors.New("需求文档不存在")
+	}
+	title := strings.TrimSpace(a.Title)
+	if title == "" {
+		return nil, errors.New("需求文档标题不能为空")
+	}
+	if strings.TrimSpace(a.Content) == "" {
+		return nil, errors.New("需求内容不能为空")
+	}
+	// Validate everything before touching anything, so a bad entry cannot leave a half-applied revision.
+	var conflicts []string
+	seen := map[string]bool{}
+	for _, r := range a.Revisions {
+		key := r.Scope + "|" + r.VersionID + "|" + r.CaseID
+		if seen[key] {
+			return nil, fmt.Errorf("用例 %s 重复出现", r.CaseID)
+		}
+		seen[key] = true
+		switch r.Scope {
+		case "pending":
+			if c, _ := pendingCaseAt(s, r.CaseID); c == nil {
+				return nil, fmt.Errorf("待评审用例 %s 不存在", r.CaseID)
+			}
+		case "version":
+			if _, err := requireBranch(s, r.VersionID); err != nil {
+				return nil, err
+			}
+			c, _ := caseAt(s, r.VersionID, r.CaseID)
+			if c == nil {
+				return nil, fmt.Errorf("用例 %s 不存在", r.CaseID)
+			}
+			if stale(s, c) && !a.Force {
+				conflicts = append(conflicts, c.ID)
+			}
+		default:
+			return nil, fmt.Errorf("未知的用例范围 %q", r.Scope)
+		}
+	}
+	if len(conflicts) > 0 {
+		return conflicts, nil
+	}
+	t := now()
+	label := d.ID + " " + d.Title
+	d.Title = title
+	d.Content = a.Content
+	d.UpdatedBy = a.Author
+	d.UpdatedAt = t
+	for _, r := range a.Revisions {
+		if r.Scope == "pending" {
+			c, _ := pendingCaseAt(s, r.CaseID)
+			c.Preconditions, c.Steps, c.Expected = r.Preconditions, r.Steps, r.Expected
+			c.UpdatedBy, c.UpdatedAt = a.Author, t
+			c.Review, c.ReviewedBy, c.ReviewedAt = "", "", time.Time{}
+			c.AIRevisedBy, c.AIRevisedReason, c.AIRevisedAt = label, r.Reason, t
+			continue
+		}
+		c, _ := caseAt(s, r.VersionID, r.CaseID)
+		if stale(s, c) {
+			mainCase, _ := caseAt(s, "main", c.ID)
+			c.BaseRevision = mainCase.Revision
+		}
+		before := *c
+		c.Preconditions, c.Steps, c.Expected = r.Preconditions, r.Steps, r.Expected
+		c.UpdatedBy, c.UpdatedAt, c.Dirty = a.Author, t, true
+		c.AIRevisedBy, c.AIRevisedReason, c.AIRevisedAt = label, r.Reason, t
+		after := *c
+		s.Histories = append(s.Histories, History{ID: ID(), CaseID: c.ID, VersionID: c.VersionID, SourceVersionID: c.VersionID, Action: "edit", Author: a.Author, Before: &before, After: &after, CreatedAt: t})
+	}
+	return nil, nil
+}
+
+// ackCaseRevision clears the "AI 修正需求" flag once a person has reviewed the rewritten case.
+func ackCaseRevision(s *State, a Action) error {
+	if a.Scope == "pending" {
+		c, _ := pendingCaseAt(s, a.CaseID)
+		if c == nil {
+			return errors.New("用例不存在")
+		}
+		c.AIRevisedBy, c.AIRevisedReason, c.AIRevisedAt = "", "", time.Time{}
+		return nil
+	}
+	c, _ := caseAt(s, a.VersionID, a.CaseID)
+	if c == nil {
+		return errors.New("用例不存在")
+	}
+	c.AIRevisedBy, c.AIRevisedReason, c.AIRevisedAt = "", "", time.Time{}
+	return nil
+}
+
 func saveReqExploration(s *State, a Action) error {
 	d, _ := reqDocAt(s, a.DocID)
 	if d == nil {
@@ -2279,7 +2402,7 @@ func importPendingCases(s *State, a Action) error {
 		c := TestCase{ID: pc.ID, VersionID: v.ID, FolderID: folderID, Title: pc.Title, Preconditions: pc.Preconditions, Steps: pc.Steps, Expected: pc.Expected, Description: pc.Description, Priority: pc.Priority, CreatedBy: a.Author, UpdatedBy: a.Author, CreatedAt: t, UpdatedAt: t, Dirty: true,
 			SimplifiedPreconditions: pc.SimplifiedPreconditions, SimplifiedSteps: pc.SimplifiedSteps, SimplifiedExpected: pc.SimplifiedExpected,
 			SimplifiedFromPreconditions: pc.SimplifiedFromPreconditions, SimplifiedFromSteps: pc.SimplifiedFromSteps, SimplifiedFromExpected: pc.SimplifiedFromExpected,
-			SimplifiedAt: pc.SimplifiedAt}
+			SimplifiedAt: pc.SimplifiedAt, AIRevisedBy: pc.AIRevisedBy, AIRevisedReason: pc.AIRevisedReason, AIRevisedAt: pc.AIRevisedAt}
 		s.Cases = append(s.Cases, c)
 		after := c
 		s.Histories = append(s.Histories, History{ID: ID(), CaseID: c.ID, VersionID: v.ID, SourceVersionID: v.ID, Action: "create", Author: a.Author, After: &after, CreatedAt: t})

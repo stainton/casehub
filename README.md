@@ -148,6 +148,8 @@ Kubernetes 部署中，planner/generator 使用 `automation:4501`，脚本执行
 
 「AI 设计」抽屉的浏览器回归（评估、失败后保留表单、重试与继续）：`node tests/ai-design.cjs`，脚本自带一个假的 planner 服务（默认 127.0.0.1:4598，`CASEHUB_FAKE_PLANNER_PORT` 可改），不需要 auto-test 在场，也不调用模型；启动临时服务时把 `CASEHUB_PLANNER_URL` 指向它：`CASEHUB_STORE=memory PORT=18081 CASEHUB_PLANNER_URL=http://127.0.0.1:4598 go run .`。
 
+「AI 修正需求」浏览器回归（详情页按钮 / 右键菜单、变更确认、需求与关联用例一起保存、用例打标与确认）：`node tests/req-ai-revise.cjs`，通用 AI 服务由脚本拦截成固定结果，不调用模型；只对 `CASEHUB_STORE=memory PORT=18081 go run .` 启动的临时服务运行。
+
 自动化管理与脚本生成的浏览器回归：`node tests/automation.cjs`，脚本自带一个假的 generator 服务（默认 127.0.0.1:4599，`CASEHUB_FAKE_GENERATOR_PORT` 可改），不需要 auto-test 在场，也不调用模型；启动临时服务时把 `CASEHUB_GENERATOR_URL` 指向它：`CASEHUB_STORE=memory PORT=18081 CASEHUB_GENERATOR_URL=http://127.0.0.1:4599 go run .`。
 
 agent 设置弹窗回归：`node tests/agent-settings.cjs`。临时服务需设置 `CASEHUB_STORE=memory`，配置只写入该进程内的存储，不会动到实际 agent 的配置。

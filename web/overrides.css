@@ -219,3 +219,10 @@ button.avatar{padding:0;color:#fff;cursor:pointer;border:1px solid #ffffff40}
 .tc-filter-btn.active{background:var(--brand-soft);color:var(--brand);border-color:var(--brand)}
 .tc-pin{margin-left:auto;background:transparent;border:1px solid transparent;border-radius:6px;padding:2px 8px;cursor:pointer;filter:grayscale(1);opacity:.55}
 .tc-pin.active{filter:none;opacity:1;background:var(--brand-soft);border-color:var(--brand)}
+
+/* 「AI 修正需求」改写过的用例：树里的小标记 + 详情页顶部提醒 + 差异弹窗里的用例块。 */
+.ai-revised-tag{flex:none;margin-left:6px;padding:0 6px;border-radius:9px;background:#ede9fe;color:#6d28d9;font-size:10px;font-weight:700;line-height:16px;cursor:help}
+.ai-revised-banner{display:flex;align-items:flex-start;justify-content:space-between;gap:14px;margin-bottom:14px;padding:10px 14px;border:1px solid #f3d29b;border-left:4px solid #e8a21c;border-radius:8px;background:#fff8e8;color:#6b4300}
+.ai-revised-banner p{margin:4px 0 0}.ai-revised-banner button{flex:none;white-space:nowrap}
+.ai-revise-case{margin:10px 0;padding:8px 12px;border:1px solid var(--line);border-radius:8px}.ai-revise-case>summary{cursor:pointer}
+.dark .ai-revised-tag{background:#4c1d9555;color:#c4b5fd}.dark .ai-revised-banner{background:#78350f33;border-color:#92580a;color:#fcd34d}

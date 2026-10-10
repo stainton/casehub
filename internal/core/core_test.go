@@ -1523,3 +1523,82 @@ func TestRegeneratingScriptArchivesPreviousVersion(t *testing.T) {
 		t.Fatalf("archive must go with its script: %+v", state.ScriptVersions)
 	}
 }
+
+func TestReviseReqDocRewritesCasesFlagsThemAndIsAtomic(t *testing.T) {
+	svc := core.NewService(store.NewMemory())
+	state := apply(t, svc, core.Action{Type: "createVersion", Name: "R"})
+	r := branchID(t, state, "R")
+	state = apply(t, svc, core.Action{Type: "createPendingCase", FolderID: "pending-root", Title: "待评审", Steps: "旧步骤", Expected: "旧预期", Priority: "P1", Author: "pat"})
+	pendingID := state.PendingCases[len(state.PendingCases)-1].ID
+	apply(t, svc, core.Action{Type: "reviewPendingCase", CaseID: pendingID, Review: "passed", Author: "pat"})
+	docID := state.ReqDocs[0].ID
+
+	// One bad entry rejects the whole revision: neither the document nor the good case changes.
+	_, err := svc.Apply(context.Background(), core.Action{Type: "reviseReqDoc", DocID: docID, Title: "新标题", Content: "新需求", Author: "ann",
+		Revisions: []core.CaseRevision{
+			{Scope: "pending", CaseID: pendingID, Steps: "新步骤", Expected: "新预期", Reason: "上限变化"},
+			{Scope: "version", VersionID: r, CaseID: "NOPE", Steps: "x"},
+		}})
+	if err == nil {
+		t.Fatal("a revision naming a missing case must fail")
+	}
+	state, _ = svc.State(context.Background())
+	if state.ReqDocs[0].Content == "新需求" || state.PendingCases[len(state.PendingCases)-1].Steps == "新步骤" {
+		t.Fatal("a failed revision must not be partially applied")
+	}
+
+	// Mainline cases are read-only.
+	if _, err = svc.Apply(context.Background(), core.Action{Type: "reviseReqDoc", DocID: docID, Title: "新标题", Content: "新需求",
+		Revisions: []core.CaseRevision{{Scope: "version", VersionID: "main", CaseID: "CASE-0001", Steps: "x"}}}); err == nil {
+		t.Fatal("mainline case revision must be rejected")
+	}
+
+	state = apply(t, svc, core.Action{Type: "reviseReqDoc", DocID: docID, Title: "新标题", Content: "新需求", Author: "ann",
+		Revisions: []core.CaseRevision{
+			{Scope: "pending", CaseID: pendingID, Preconditions: "p", Steps: "新步骤", Expected: "新预期", Reason: "上限变化"},
+			{Scope: "version", VersionID: r, CaseID: "CASE-0001", Preconditions: "p", Steps: "分支新步骤", Expected: "分支新预期", Reason: "按钮改名"},
+		}})
+	if state.ReqDocs[0].Content != "新需求" || state.ReqDocs[0].UpdatedBy != "ann" {
+		t.Fatalf("requirement not saved: %+v", state.ReqDocs[0])
+	}
+	var pc *core.PendingCase
+	for i := range state.PendingCases {
+		if state.PendingCases[i].ID == pendingID {
+			pc = &state.PendingCases[i]
+		}
+	}
+	if pc.Steps != "新步骤" || pc.AIRevisedReason != "上限变化" || pc.AIRevisedBy == "" || pc.Review != "" {
+		t.Fatalf("pending case not revised/flagged/reset: %+v", pc)
+	}
+	var bc *core.TestCase
+	for i := range state.Cases {
+		if state.Cases[i].VersionID == r && state.Cases[i].ID == "CASE-0001" {
+			bc = &state.Cases[i]
+		}
+	}
+	if bc.Steps != "分支新步骤" || bc.AIRevisedReason != "按钮改名" || !bc.Dirty {
+		t.Fatalf("branch case not revised/flagged: %+v", bc)
+	}
+	edits := 0
+	for _, h := range state.Histories {
+		if h.VersionID == r && h.CaseID == "CASE-0001" && h.Action == "edit" && h.Before != nil && h.Before.Steps != "分支新步骤" {
+			edits++
+		}
+	}
+	if edits != 1 {
+		t.Fatalf("expected one edit history entry for the branch case, got %d", edits)
+	}
+
+	state = apply(t, svc, core.Action{Type: "ackCaseRevision", Scope: "version", VersionID: r, CaseID: "CASE-0001"})
+	state = apply(t, svc, core.Action{Type: "ackCaseRevision", Scope: "pending", CaseID: pendingID})
+	for _, c := range state.Cases {
+		if c.AIRevisedReason != "" {
+			t.Fatalf("flag not cleared: %+v", c)
+		}
+	}
+	for _, c := range state.PendingCases {
+		if c.AIRevisedReason != "" {
+			t.Fatalf("flag not cleared: %+v", c)
+		}
+	}
+}
