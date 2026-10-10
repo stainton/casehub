@@ -394,15 +394,26 @@ function reqTreeHTML(){
   }
   return reqRoots().map(r=>node(r,0)).join('')||'<p class="meta">暂无需求文档</p>';
 }
-// Aggregate result of the mainline cases belonging to a requirement (matched by case-ID code, see reqDocForCase).
+// 需求的测试状态：取该需求已关联用例（按用例编号里的需求缩写，见 reqDocForCase）的「最新测试结果」汇总。
+// 同一条用例可能同时存在于主线和多个分支版本，取其中最近一次提交的结果；用例被编辑后结果会清空，视为未测试。
+function caseLatestResult(id){
+  let best=null;
+  for(const c of state.cases){
+    if(c.ID!==id||!c.Result)continue;
+    const rec=state.records.filter(r=>r.VersionID===c.VersionID&&r.CaseID===id&&r.Submitted&&r.Result===c.Result).map(r=>String(r.UpdatedAt)).sort().pop();
+    const at=rec||String(c.UpdatedAt||'');
+    if(!best||at>best.at)best={result:c.Result,at};
+  }
+  return best?.result||'';
+}
 function reqTestStatus(d){
-  const main=state.versions.find(v=>v.mainline);
-  const list=main?state.cases.filter(c=>c.VersionID===main.id&&reqDocForCase(c)?.ID===d.ID):[];
+  const ids=new Set(state.cases.filter(c=>reqDocForCase(c)?.ID===d.ID).map(c=>c.ID));
   // 待评审区里属于该需求的用例（如刚由「AI 补充设计」加入）尚未执行，计为未测试，使状态随补充用例刷新。
   const head=d.Code?`TC-${d.Code}-`:null,pending=head?state.pendingCases.filter(c=>c.ID.startsWith(head)).length:0;
-  const n=list.length+pending,passed=list.filter(c=>c.Result==='passed').length,run=list.filter(c=>c.Result).length;
+  const results=[...ids].map(caseLatestResult);
+  const n=ids.size+pending,passed=results.filter(r=>r==='passed').length,run=results.filter(Boolean).length;
   const [key,label]=!run?['none','尚未测试']:passed===n?['passed','全部通过']:passed?['partial','部分通过']:['failed','全部失败'];
-  return {key,label,title:n?`${label}：共 ${n} 条用例，通过 ${passed}，未通过 ${run-passed}，未执行 ${n-run}`:'尚未测试：该需求暂无用例'};
+  return {key,label,title:n?`${label}（按各用例最新测试结果）：共 ${n} 条用例，通过 ${passed}，未通过 ${run-passed}，未执行 ${n-run}`:'尚未测试：该需求暂无用例'};
 }
 const reqStatusBadge=d=>{const t=reqTestStatus(d);return `<span class="req-status req-status-${t.key}" title="${esc(t.title)}">${t.label}</span>`};
 function reqDocRow(d,depth){return `<div class="tree-row case-row${reqFocus?.type==='doc'&&reqFocus.id===d.ID?' active':''}" style="padding-left:${8+depth*17}px" data-req-doc="${d.ID}"><span class="label">📄 ${esc(d.Title)}</span>${reqStatusBadge(d)}</div>`}
