@@ -1404,6 +1404,29 @@ func TestRequirementExplorationNotesPersistSeparatelyFromRequirementText(t *test
 	}
 }
 
+func TestProductExplorationMergesNewParagraphsPerOrigin(t *testing.T) {
+	service := core.NewService(store.NewMemory())
+	merge := func(origin, notes string) core.State {
+		return apply(t, service, core.Action{Type: "recordProductExploration", Origin: origin, ExplorationNotes: notes, Author: "agent"})
+	}
+	merge("https://app.example.test", "登录入口 /login\n\nREPLAY: goto /assets")
+	// Two runs that started from the same record both keep what they learned.
+	merge("https://app.example.test", "上传按钮 getByRole")
+	state := merge("https://app.example.test", "登录入口 /login\n\n素材弹窗 locator")
+	merge("https://staging.example.test", "另一个环境")
+	if len(state.ProductExperiences) != 1 {
+		t.Fatalf("want one record per origin, got %+v", state.ProductExperiences)
+	}
+	if got, want := state.ProductExperiences[0].Notes, "登录入口 /login\n\nREPLAY: goto /assets\n\n上传按钮 getByRole\n\n素材弹窗 locator"; got != want {
+		t.Fatalf("merged notes = %q, want %q", got, want)
+	}
+	for _, origin := range []string{"", "app.example.test", "https://app.example.test/login", "ftp://app.example.test"} {
+		if _, err := service.Apply(context.Background(), core.Action{Type: "recordProductExploration", Origin: origin, ExplorationNotes: "x"}); err == nil {
+			t.Fatalf("origin %q must be rejected", origin)
+		}
+	}
+}
+
 func TestEditScriptKeepsGenerationSnapshots(t *testing.T) {
 	service := core.NewService(store.NewMemory())
 	state := apply(t, service, core.Action{Type: "createVersion", Name: "脚本编辑", Author: "alice"})

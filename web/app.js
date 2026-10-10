@@ -19,7 +19,7 @@ const esc=s=>String(s??'').replace(/[&<>'"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&
 const fmt=s=>s?new Date(s).toLocaleString():'—';
 const version=id=>state.versions.find(v=>v.id===id), folders=id=>state.folders.filter(f=>f.VersionID===id), cases=id=>state.cases.filter(c=>c.VersionID===id);
 async function request(path,options){let r=await fetch(path,options),x=await r.json();if(!r.ok){let e=Error(x.error||'请求失败');e.status=r.status;e.conflicts=x.conflicts;throw e}return x}
-function normalizeState(s){s=s||{};for(const key of ['versions','folders','cases','histories','records','tasks','reqFolders','reqDocs','issues','pendingFolders','pendingCases','scripts','scriptVersions'])if(!Array.isArray(s[key]))s[key]=[];return s}
+function normalizeState(s){s=s||{};for(const key of ['versions','folders','cases','histories','records','tasks','reqFolders','reqDocs','issues','pendingFolders','pendingCases','scripts','scriptVersions','productExperiences'])if(!Array.isArray(s[key]))s[key]=[];return s}
 async function refresh(){state=normalizeState(await request('/api/state'));let changed=false;state.folders.filter(f=>f.VersionID==='main').forEach(f=>{const key=`main:${f.ID}`;if(!openMainlineFolders.has(key)&&!closedFolders.has(key)){closedFolders.add(key);changed=true}});if(changed)saveClosedFolders();render();}
 async function act(type,data={},retry=false){try{let out=await request('/api/action',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({Type:type,Author:'本地用户',...data})});state=normalizeState(out.state);if(out.warnings?.length)toast(out.warnings.join('；'));render();return out}catch(e){if(e.status===409&&type.startsWith('merge')){alert(`${e.message}\n冲突用例：${(e.conflicts||[]).join(', ')}\n请拉取主线，然后打开冲突用例编辑并确认人工处理。`)}else if(e.status===409&&!retry&&confirm(`${e.message}\n冲突用例：${(e.conflicts||[]).join(', ')}\n是否以当前编辑内容作为人工解决结果？`))return act(type,{...data,Force:true},true);toast(e.message,true);throw e}}
 function render(){ renderVersions();renderTasks();renderFocus();if(recordTask)$('#edit-case')?.remove();updateBulk();if(location.hash)renderHistoryRoute();renderReqTree();renderReviewTree();renderScriptTree();renderAutoFocus();renderIssueList();renderIssueFocus(); }
@@ -655,6 +655,10 @@ function aiTimeoutMinutes(){
 const AI_ESTIMATE_CLIENT_TIMEOUT_MS=135000; // 服务端评估上限 120 秒，额外留出代理/网络余量
 const aiCaseRange=n=>`${Math.max(1,n-AI_CASE_COUNT_SLACK)}–${n}`;
 function aiFormValues(form){const data=new FormData(form),x=Object.fromEntries(data);delete x.caseCount;delete x.reqCode;x.assetIds=data.getAll('assetIds');return x}
+// 产品级探索经验按被测系统 origin 只存在 CaseHub：每次设计/生成/修复都带上它，完成后把服务返回的新发现合并回来。
+// 合并在服务端去重，同一结果重复处理（刷新后再次导入）不会产生重复内容。
+function productExperienceFor(baseUrl){let origin='';try{origin=new URL(baseUrl).origin}catch{return ''}return state.productExperiences.find(x=>x.Origin===origin)?.Notes||''}
+async function saveProductExperience(result){const p=result?.productExperience;if(p?.origin&&p.notes?.trim())await act('recordProductExploration',{Origin:p.origin,ExplorationNotes:p.notes})}
 function aiRequirementPayload(doc,values,code){
   const d=liveReqDoc(doc);code=code||d.Code||'';
   return {requirements:[{id:d.ID,title:d.Title,content:d.Content||'',...(code?{code}:{})}],instructions:[values.instructions||'',reqRefContext(doc)].filter(Boolean).join('\n\n'),...(d.ExplorationNotes?.trim()?{explorationNotes:d.ExplorationNotes}: {})};
@@ -875,8 +879,8 @@ function renderPlaywrightAiForm(doc,notice,continueFrom){
       // 只更新详情页上的缩写标签：整页 renderReqFocus 会重建编辑器，丢掉未保存的需求正文修改。
       if(reqFocus?.type==='doc'&&reqFocus.id===doc.ID&&$('#req-doc-code'))$('#req-doc-code').textContent=code;
     }
-    const {requirements,instructions}=aiRequirementPayload(doc,values,code);
-    const payload={requirements,target:{baseUrl:values.baseUrl},context:{instructions,...(values.assetIds?.length?{assetIds:values.assetIds}:{})},caseCount,timeoutMs:timeoutMinutes*60000,
+    const {requirements,instructions,explorationNotes}=aiRequirementPayload(doc,values,code),productExperience=productExperienceFor(values.baseUrl);
+    const payload={requirements,target:{baseUrl:values.baseUrl},context:{instructions,...(explorationNotes?{explorationNotes}:{}),...(productExperience?{productExperience}:{}),...(values.assetIds?.length?{assetIds:values.assetIds}:{})},caseCount,timeoutMs:timeoutMinutes*60000,
       ...(continueFrom?{continueFrom}:{})};
     if(values.testAccount||values.testSecret)payload.context.testData={username:values.testAccount||'',password:values.testSecret||''};
     try{
@@ -999,6 +1003,7 @@ async function handleAiSuccess(doc,job){
   try{
     const result=await serviceRequest(`/api/planner/jobs/${job.id}/result`);
     if(result.explorationNotes?.trim())await act('saveReqExploration',{DocID:doc.ID,ExplorationNotes:result.explorationNotes});
+    await saveProductExperience(result);
     if(isAiDrawerOpen(doc))renderAiImportConfirmation(doc,job,result);
   }catch(e){
     toast(`读取 AI 设计结果失败：${e.message}`,true);
@@ -1713,6 +1718,8 @@ function genPayload(vid,ids,values){
   payload.caseTimeoutMs=Number(values.caseTimeoutMinutes)*60000;
   if(docs.size)payload.requirements=[...docs.values()];
   if((values.instructions||'').trim())payload.context.instructions=values.instructions.trim();
+  const productExperience=productExperienceFor(payload.target.baseUrl);
+  if(productExperience)payload.context.productExperience=productExperience;
   if(values.assetIds?.length)payload.context.assetIds=values.assetIds;
   if(values.testAccount||values.testSecret)payload.context.testData={username:values.testAccount||'',password:values.testSecret||''};
   return payload;
@@ -1867,6 +1874,7 @@ async function importGenResult(task){
   try{
     const result=await serviceRequest(`/api/${taskService(task)}/jobs/${task.jobId}/result`);
     for(const docID of task.requirementIDs||[]){const notes=result.explorationRecords?.[docID]??result.explorationNotes;if(notes?.trim())await act('saveReqExploration',{DocID:docID,ExplorationNotes:notes});}
+    await saveProductExperience(result);
     let failed=0;task.error=null;
     for(const sc of result.scripts||[]){
       try{

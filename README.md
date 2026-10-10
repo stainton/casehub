@@ -129,7 +129,7 @@ planner 不会绕开约束去试；同一段文字也会参与"建议覆盖用�
 时间都保存在浏览器里，刷新、关标签页后仍在，因此「继续」前可以先把超时时间调大。只有测试账号密码不写进浏览器存储，刷新后
 需要重填，表单里会提示。失败任务本身也留在浏览器里，刷新后重新打开抽屉仍能看到失败原因和这两个按钮。
 
-每份需求文档还保存独立的探索记录：AI 设计完成时 CaseHub 保存 planner 返回的记录；脚本生成完成时保存 generator 按需求返回的记录。下一次针对同一需求设计用例或生成脚本时，CaseHub 会将该记录随请求带回 planner / generator 服务（两者分开部署时，planner 的发现也经由这份记录传给 generator），减少对已知入口、控件和路径的重复探索。
+每份需求文档还保存独立的探索记录：AI 设计完成时 CaseHub 保存 planner 返回的记录；脚本生成或修复完成时保存 generator/healer 按需求返回的记录。另外按被测系统 origin 保存一份产品级探索经验（各需求共用的入口、导航和控件定位），服务每次只返回新验证的段落，由 CaseHub 去重合并。下一次设计、生成或修复时，CaseHub 把需求记录（`explorationNotes`）和对应 origin 的产品级经验（`context.productExperience`）随请求带给 auto-test；auto-test 自身不保存经验，planner 与 generator 分开部署也共用同一份。
 
 脚本生成对应 auto-test 的另一个独立服务：准备 `build/generator/setting.json` 后运行 `node server/generator/main.mjs`（默认 4502），CaseHub 通过 `CASEHUB_GENERATOR_URL` 连接。general-agent（默认 4503）提供不带 Playwright 的通用 Claude CLI 调用，CaseHub 当前用它生成阅读友好版，通过 `CASEHUB_GENERAL_AGENT_URL` 连接。三个服务相互独立，可以只启动所需服务；未配置时对应入口会提示服务未配置，其余功能不受影响。
 

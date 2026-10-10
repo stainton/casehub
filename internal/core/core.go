@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"net/url"
 	"regexp"
 	"sort"
 	"strconv"
@@ -110,7 +111,8 @@ type ReqDoc struct {
 	ID, FolderID   string
 	Title, Content string
 	// ExplorationNotes is the reusable, requirement-scoped experience returned
-	// by the combined automation service after design or script generation.
+	// by the auto-test planner/generator/healer after a run and sent back with
+	// the next request; CaseHub is its only store.
 	// It is intentionally separate from the human-authored requirement content.
 	ExplorationNotes string
 	// Code is the confirmed requirement abbreviation (e.g. LOGIN) used as the
@@ -118,6 +120,15 @@ type ReqDoc struct {
 	Code                 string
 	CreatedBy, UpdatedBy string
 	CreatedAt, UpdatedAt time.Time
+}
+
+// ProductExperience is the product-level exploration experience (routes,
+// locators, REPLAY steps) shared by every requirement tested against one
+// origin. auto-test keeps no copy: it receives Notes with each request and
+// returns only the paragraphs a run newly verified, merged in here.
+type ProductExperience struct {
+	Origin, Notes string
+	UpdatedAt     time.Time
 }
 
 type Issue struct {
@@ -261,6 +272,8 @@ type State struct {
 	PendingCases   []PendingCase            `json:"pendingCases"`
 	Scripts        []Script                 `json:"scripts"`
 	ScriptVersions []ScriptVersion          `json:"scriptVersions"`
+	// ProductExperiences holds one record per target origin.
+	ProductExperiences []ProductExperience `json:"productExperiences"`
 }
 
 type Action struct {
@@ -298,6 +311,8 @@ type Action struct {
 	// reuses Scope/VersionID/CaseID to name one case.
 	Revisions []CaseRevision
 	Scope     string
+	// recordProductExploration: the target origin the ExplorationNotes belong to.
+	Origin string
 }
 
 // CaseRevision is one case rewritten by "AI 修正需求". Scope is "pending" (review area) or
@@ -473,6 +488,9 @@ func normalizeState(state *State) {
 	if state.ScriptVersions == nil {
 		state.ScriptVersions = []ScriptVersion{}
 	}
+	if state.ProductExperiences == nil {
+		state.ProductExperiences = []ProductExperience{}
+	}
 	hasPendingRoot := false
 	for _, f := range state.PendingFolders {
 		if f.ID == "pending-root" {
@@ -569,6 +587,8 @@ func (s *Service) Apply(ctx context.Context, a Action) (Result, error) {
 		err = editReqDoc(&st, a)
 	case "saveReqExploration":
 		err = saveReqExploration(&st, a)
+	case "recordProductExploration":
+		err = recordProductExploration(&st, a)
 	case "deleteReqFolder":
 		err = deleteReqFolder(&st, a)
 	case "reviseReqDoc":
@@ -1954,6 +1974,61 @@ func saveReqExploration(s *State, a Action) error {
 	d.ExplorationNotes = a.ExplorationNotes
 	return nil
 }
+
+// Bounds of a product record, matching what auto-test accepts per request.
+const (
+	maxProductNotes      = 200000
+	maxProductParagraphs = 200
+)
+
+var paragraphBreak = regexp.MustCompile(`\n{2,}`)
+
+// recordProductExploration appends a run's newly verified paragraphs to the
+// record of its origin. Merging here, under the service lock, means two runs
+// finishing together both keep their findings; duplicates collapse to their
+// first occurrence and the oldest paragraphs drop out once the record is full.
+func recordProductExploration(s *State, a Action) error {
+	origin := strings.TrimSpace(a.Origin)
+	if !validOrigin(origin) {
+		return errors.New("被测系统地址无效")
+	}
+	if len(a.ExplorationNotes) > maxProductNotes {
+		return errors.New("探索记录过长")
+	}
+	var record *ProductExperience
+	for i := range s.ProductExperiences {
+		if s.ProductExperiences[i].Origin == origin {
+			record = &s.ProductExperiences[i]
+		}
+	}
+	if record == nil {
+		s.ProductExperiences = append(s.ProductExperiences, ProductExperience{Origin: origin})
+		record = &s.ProductExperiences[len(s.ProductExperiences)-1]
+	}
+	seen := map[string]bool{}
+	var kept []string
+	for _, p := range paragraphBreak.Split(record.Notes+"\n\n"+a.ExplorationNotes, -1) {
+		if p = strings.TrimSpace(p); p != "" && !seen[p] {
+			seen[p] = true
+			kept = append(kept, p)
+		}
+	}
+	if len(kept) > maxProductParagraphs {
+		kept = kept[len(kept)-maxProductParagraphs:]
+	}
+	for len(kept) > 1 && len(strings.Join(kept, "\n\n")) > maxProductNotes {
+		kept = kept[1:]
+	}
+	record.Notes, record.UpdatedAt = strings.Join(kept, "\n\n"), now()
+	return nil
+}
+
+// validOrigin accepts exactly scheme://host[:port], the key auto-test returns.
+func validOrigin(origin string) bool {
+	u, err := url.Parse(origin)
+	return err == nil && (u.Scheme == "http" || u.Scheme == "https") && u.Host != "" && u.Path == "" && u.RawQuery == "" && u.Fragment == "" && u.User == nil
+}
+
 func deleteReqFolder(s *State, a Action) error {
 	f, i := reqFolderAt(s, a.FolderID)
 	if f == nil {
