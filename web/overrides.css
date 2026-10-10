@@ -226,3 +226,8 @@ button.avatar{padding:0;color:#fff;cursor:pointer;border:1px solid #ffffff40}
 .ai-revised-banner p{margin:4px 0 0}.ai-revised-banner button{flex:none;white-space:nowrap}
 .ai-revise-case{margin:10px 0;padding:8px 12px;border:1px solid var(--line);border-radius:8px}.ai-revise-case>summary{cursor:pointer}
 .dark .ai-revised-tag{background:#4c1d9555;color:#c4b5fd}.dark .ai-revised-banner{background:#78350f33;border-color:#92580a;color:#fcd34d}
+
+.req-status{margin-left:auto;font-size:11px;white-space:nowrap;padding:1px 7px;border-radius:10px;flex:none}
+.req-status-passed{background:#dcfce7;color:#15803d}.req-status-partial{background:#fef3c7;color:#b45309}.req-status-failed{background:#fee2e2;color:#b91c1c}.req-status-none{background:var(--surface2);color:var(--muted);border:1px solid var(--line)}
+.dark .req-status-passed{background:#14532d;color:#86efac}.dark .req-status-partial{background:#4a3410;color:#fcd34d}.dark .req-status-failed{background:#4c1d1d;color:#fca5a5}
+.eyebrow .req-status{margin-left:0;text-transform:none}

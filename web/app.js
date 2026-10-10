@@ -394,7 +394,16 @@ function reqTreeHTML(){
   }
   return reqRoots().map(r=>node(r,0)).join('')||'<p class="meta">暂无需求文档</p>';
 }
-function reqDocRow(d,depth){return `<div class="tree-row case-row${reqFocus?.type==='doc'&&reqFocus.id===d.ID?' active':''}" style="padding-left:${8+depth*17}px" data-req-doc="${d.ID}"><span class="label">📄 ${esc(d.Title)}</span></div>`}
+// Aggregate result of the mainline cases belonging to a requirement (matched by case-ID code, see reqDocForCase).
+function reqTestStatus(d){
+  const main=state.versions.find(v=>v.mainline);
+  const list=main?state.cases.filter(c=>c.VersionID===main.id&&reqDocForCase(c)?.ID===d.ID):[];
+  const n=list.length,passed=list.filter(c=>c.Result==='passed').length,run=list.filter(c=>c.Result).length;
+  const [key,label]=!run?['none','尚未测试']:passed===n?['passed','全部通过']:passed?['partial','部分通过']:['failed','全部失败'];
+  return {key,label,title:n?`${label}：共 ${n} 条用例，通过 ${passed}，未通过 ${run-passed}，未执行 ${n-run}`:'尚未测试：该需求暂无用例'};
+}
+const reqStatusBadge=d=>{const t=reqTestStatus(d);return `<span class="req-status req-status-${t.key}" title="${esc(t.title)}">${t.label}</span>`};
+function reqDocRow(d,depth){return `<div class="tree-row case-row${reqFocus?.type==='doc'&&reqFocus.id===d.ID?' active':''}" style="padding-left:${8+depth*17}px" data-req-doc="${d.ID}"><span class="label">📄 ${esc(d.Title)}</span>${reqStatusBadge(d)}</div>`}
 // ---- Requirement cross-linking ("引用需求") ----
 // A doc references another via an ordinary markdown link with a `req:` href
 // (e.g. `[REQ-002 权限管理](req:REQ-002)`), inserted through the 🔗 引用需求
@@ -498,7 +507,7 @@ function renderReqFocus(){
   const outRefs=reqRefs(doc.Content).map(id=>state.reqDocs.find(x=>x.ID===id)).filter(Boolean);
   const inRefs=reqBacklinks(doc.ID);
   const relHTML=(outRefs.length||inRefs.length)?`<div class="card req-rel"><h4>关联需求</h4><div class="req-rel-list">${outRefs.map(r=>`<button type="button" class="req-rel-chip" data-req-doc="${esc(r.ID)}">→ ${esc(r.ID)} ${esc(r.Title)}</button>`).join('')}${inRefs.map(r=>`<button type="button" class="req-rel-chip" data-req-doc="${esc(r.ID)}">← ${esc(r.ID)} ${esc(r.Title)}</button>`).join('')}</div></div>`:'';
-  d.innerHTML=`<div class="detail-head"><div><div class="eyebrow">${esc(doc.ID)}</div><h1>${esc(doc.Title)}</h1></div><div class="detail-actions"><button type="button" id="req-link-btn" class="secondary">🔗 引用需求</button><button type="button" id="req-ai-revise" class="secondary${reqReviseInFlight.has(doc.ID)?' ai-running':''}"${reqReviseInFlight.has(doc.ID)?' disabled':''} title="按修改点改写需求，并同步修正关联的用例（与用例自身的「AI 修正」不同）">${reqReviseInFlight.has(doc.ID)?'AI 修正需求中…':'AI 修正需求'}</button><button type="button" id="req-ai-design" class="secondary${isAiActive(doc)?' ai-running':''}">${isAiActive(doc)?'AI 设计中':'AI 设计'}</button><button type="button" id="save-req-doc">保存</button></div></div><div class="card meta-grid"><span>需求缩写 <b id="req-doc-code">${esc(doc.Code||'未设置')}</b></span><span>创建者 <b>${esc(doc.CreatedBy)}</b></span><span>创建时间 <b>${fmt(doc.CreatedAt)}</b></span><span>更新者 <b>${esc(doc.UpdatedBy)}</b></span><span>更新时间 <b>${fmt(doc.UpdatedAt)}</b></span></div>${relHTML}<div class="card"><div id="req-editor"></div></div>`;
+  d.innerHTML=`<div class="detail-head"><div><div class="eyebrow">${esc(doc.ID)} · ${reqStatusBadge(doc)}</div><h1>${esc(doc.Title)}</h1></div><div class="detail-actions"><button type="button" id="req-link-btn" class="secondary">🔗 引用需求</button><button type="button" id="req-ai-revise" class="secondary${reqReviseInFlight.has(doc.ID)?' ai-running':''}"${reqReviseInFlight.has(doc.ID)?' disabled':''} title="按修改点改写需求，并同步修正关联的用例（与用例自身的「AI 修正」不同）">${reqReviseInFlight.has(doc.ID)?'AI 修正需求中…':'AI 修正需求'}</button><button type="button" id="req-ai-design" class="secondary${isAiActive(doc)?' ai-running':''}">${isAiActive(doc)?'AI 设计中':'AI 设计'}</button><button type="button" id="save-req-doc">保存</button></div></div><div class="card meta-grid"><span>需求缩写 <b id="req-doc-code">${esc(doc.Code||'未设置')}</b></span><span>创建者 <b>${esc(doc.CreatedBy)}</b></span><span>创建时间 <b>${fmt(doc.CreatedAt)}</b></span><span>更新者 <b>${esc(doc.UpdatedBy)}</b></span><span>更新时间 <b>${fmt(doc.UpdatedAt)}</b></span></div>${relHTML}<div class="card"><div id="req-editor"></div></div>`;
   reqEditor?.destroy();
   reqEditor=new toastui.Editor({el:$('#req-editor'),height:'520px',initialEditType:'wysiwyg',previewStyle:'tab',initialValue:doc.Content||'',language:'zh-CN',theme:document.documentElement.classList.contains('dark')?'dark':'light',usageStatistics:false});
   $('#save-req-doc').onclick=()=>saveReqDoc(doc).catch(()=>{});
