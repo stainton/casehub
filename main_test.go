@@ -13,6 +13,26 @@ import (
 	"casehub/internal/upstream"
 )
 
+func TestServiceURLs(t *testing.T) {
+	for _, tc := range []struct {
+		name               string
+		vars               map[string]string
+		planner, generator string
+	}{
+		{"local defaults", nil, "http://localhost:4501", "http://localhost:4502"},
+		{"separate pods", map[string]string{"CASEHUB_PLANNER_URL": "http://planner:4501", "CASEHUB_GENERATOR_URL": "http://generator:4502"}, "http://planner:4501", "http://generator:4502"},
+		{"combined automation", map[string]string{"CASEHUB_AUTOMATION_URL": "http://automation:4501"}, "http://automation:4501", "http://automation:4501"},
+		{"per-service URL wins over automation", map[string]string{"CASEHUB_AUTOMATION_URL": "http://automation:4501", "CASEHUB_GENERATOR_URL": "http://127.0.0.1:4599"}, "http://automation:4501", "http://127.0.0.1:4599"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			planner, generator := serviceURLs(func(key string) string { return tc.vars[key] })
+			if planner != tc.planner || generator != tc.generator {
+				t.Fatalf("serviceURLs() = %q, %q; want %q, %q", planner, generator, tc.planner, tc.generator)
+			}
+		})
+	}
+}
+
 func TestStorageKind(t *testing.T) {
 	for _, tc := range []struct{ name, kind, url, want string }{
 		{"default local", "", "", "file"},

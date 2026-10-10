@@ -39,7 +39,7 @@ kubectl rollout status deployment/casehub
 
 `DATABASE_URL` 留空时使用 `/app/data/casehub.json`，默认挂载 `emptyDir`，Pod 删除或重建后这份临时数据会丢失。也可通过启动参数 `-database-url` 指定数据库连接串；配置了数据库但连接失败时会报错，便于检查配置。
 
-清单已将 `CASEHUB_PLANNER_URL` 设置为 `http://planner:4501`、`CASEHUB_GENERATOR_URL` 设置为 `http://generator:4502`，可直接连接同 namespace 中的 auto-test planner 与 generator 服务。跨 namespace 时改成对应 Service 地址。
+清单已将 `CASEHUB_PLANNER_URL` 设置为 `http://planner:4501`、`CASEHUB_GENERATOR_URL` 设置为 `http://generator:4502`，可直接连接同 namespace 中独立部署的 auto-test planner 与 generator Pod（脚本修复 healer 运行在 generator 中，默认走同一地址）。跨 namespace 时改成对应 Service 地址。
 
 ### 集群外访问
 
@@ -81,7 +81,8 @@ http://<可访问的节点 IP>:30080
 | `DATABASE_URL` | — | PostgreSQL 连接串；可通过 `-database-url` 启动参数覆盖 |
 | `CASEHUB_PLANNER_URL` | `http://localhost:4501` | auto-test planner 服务地址；Kubernetes 清单使用 `http://planner:4501` |
 | `CASEHUB_GENERATOR_URL` | `http://localhost:4502` | auto-test generator 服务地址；Kubernetes 中为 `http://generator:4502` |
-| `CASEHUB_AUTOMATION_URL` | — | 合并后的 auto-test automation 服务地址；设置后 planner 与 generator 均通过此地址访问（默认 `http://localhost:4501`） |
+| `CASEHUB_HEALER_URL` | 同 `CASEHUB_GENERATOR_URL` | auto-test healer（脚本修复）地址；默认由 generator 服务提供 |
+| `CASEHUB_AUTOMATION_URL` | — | 可选的单进程 auto-test automation 服务地址；未单独设置 `CASEHUB_PLANNER_URL` / `CASEHUB_GENERATOR_URL` 时，planner、generator、healer 都通过此地址访问 |
 | `CASEHUB_GENERAL_AGENT_URL` | `http://localhost:4503` | auto-test general-agent 服务地址；Kubernetes 中为 `http://general-agent:4503` |
 
 当前默认主线带有两条示例用例，因为设计文档尚未定义首次导入主线的来源与格式。
@@ -128,7 +129,7 @@ planner 不会绕开约束去试；同一段文字也会参与"建议覆盖用�
 时间都保存在浏览器里，刷新、关标签页后仍在，因此「继续」前可以先把超时时间调大。只有测试账号密码不写进浏览器存储，刷新后
 需要重填，表单里会提示。失败任务本身也留在浏览器里，刷新后重新打开抽屉仍能看到失败原因和这两个按钮。
 
-每份需求文档还保存独立的探索记录：AI 设计完成时 CaseHub 保存 planner 返回的记录；脚本生成完成时保存 generator 按需求返回的记录。下一次针对同一需求设计用例或生成脚本时，CaseHub 会将该记录随请求带回 automation 服务，减少对已知入口、控件和路径的重复探索。
+每份需求文档还保存独立的探索记录：AI 设计完成时 CaseHub 保存 planner 返回的记录；脚本生成完成时保存 generator 按需求返回的记录。下一次针对同一需求设计用例或生成脚本时，CaseHub 会将该记录随请求带回 planner / generator 服务（两者分开部署时，planner 的发现也经由这份记录传给 generator），减少对已知入口、控件和路径的重复探索。
 
 脚本生成对应 auto-test 的另一个独立服务：准备 `build/generator/setting.json` 后运行 `node server/generator/main.mjs`（默认 4502），CaseHub 通过 `CASEHUB_GENERATOR_URL` 连接。general-agent（默认 4503）提供不带 Playwright 的通用 Claude CLI 调用，CaseHub 当前用它生成阅读友好版，通过 `CASEHUB_GENERAL_AGENT_URL` 连接。三个服务相互独立，可以只启动所需服务；未配置时对应入口会提示服务未配置，其余功能不受影响。
 
@@ -144,7 +145,7 @@ planner 不会绕开约束去试；同一段文字也会参与"建议覆盖用�
 
 运行 `go test ./...` 检查业务逻辑、静态资源和 Markdown 记录持久化。
 
-Kubernetes 部署中，planner/generator 使用 `automation:4501`，脚本执行使用独立的 `executor:4504`；先部署 auto-test 的 automation 与 executor 两个 Kustomization，再部署 CaseHub。
+Kubernetes 部署中，planner 使用 `planner:4501`，generator 与 healer 使用 `generator:4502`，脚本执行使用 `executor:4504`，三者各为独立 Pod；先在 auto-test 中执行 `kubectl apply -k deploy/kubernetes`（同时部署 general-agent），再部署 CaseHub。
 
 「AI 设计」抽屉的浏览器回归（评估、失败后保留表单、重试与继续）：`node tests/ai-design.cjs`，脚本自带一个假的 planner 服务（默认 127.0.0.1:4598，`CASEHUB_FAKE_PLANNER_PORT` 可改），不需要 auto-test 在场，也不调用模型；启动临时服务时把 `CASEHUB_PLANNER_URL` 指向它：`CASEHUB_STORE=memory PORT=18081 CASEHUB_PLANNER_URL=http://127.0.0.1:4598 go run .`。
 

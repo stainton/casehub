@@ -133,13 +133,14 @@ func main() {
 	port := env("PORT", "8080")
 	svc := core.NewService(repo)
 	lookup := assetSource(svc)
-	// Planner and generator are separate routes of one automation service. Keep
-	// their proxy names so the browser/API contract and independent settings stay
-	// stable while they share browser runtime and exploration experience.
-	automationURL := env("CASEHUB_AUTOMATION_URL", env("CASEHUB_PLANNER_URL", "http://localhost:4501"))
-	plannerProxy, plannerEnabled := upstream.New(automationURL, "planner", agentSettingsOf(svc, "planner"), lookup)
-	generatorProxy, generatorEnabled := upstream.New(automationURL, "generator", agentSettingsOf(svc, "generator"), lookup)
-	healerProxy, healerEnabled := upstream.New(automationURL, "healer", agentSettingsOf(svc, "healer"), lookup)
+	// Planner and generator are separate auto-test services (pods); the healer
+	// runs inside the generator. CASEHUB_AUTOMATION_URL points all three at the
+	// combined single-process automation service instead.
+	plannerURL, generatorURL := serviceURLs(os.Getenv)
+	healerURL := env("CASEHUB_HEALER_URL", generatorURL)
+	plannerProxy, plannerEnabled := upstream.New(plannerURL, "planner", agentSettingsOf(svc, "planner"), lookup)
+	generatorProxy, generatorEnabled := upstream.New(generatorURL, "generator", agentSettingsOf(svc, "generator"), lookup)
+	healerProxy, healerEnabled := upstream.New(healerURL, "healer", agentSettingsOf(svc, "healer"), lookup)
 	executorProxy, executorEnabled := upstream.New(env("CASEHUB_EXECUTOR_URL", "http://localhost:4504"), "executor", agentSettingsOf(svc, "planner"), nil)
 	generalAgentProxy, generalAgentEnabled := upstream.New(env("CASEHUB_GENERAL_AGENT_URL", "http://localhost:4503"), "general-agent", agentSettingsOf(svc, "general-agent"), nil)
 	log.Printf("CaseHub listening on :%s (store=%s, planner=%v, generator=%v, healer=%v, executor=%v, general-agent=%v)", port, kind, plannerEnabled, generatorEnabled, healerEnabled, executorEnabled, generalAgentEnabled)
@@ -158,6 +159,22 @@ func storageKind(kind, databaseURL string) string {
 		return "postgres"
 	}
 	return "file"
+}
+
+// serviceURLs resolves the planner and generator addresses. An explicit
+// per-service URL wins; otherwise CASEHUB_AUTOMATION_URL serves both; otherwise
+// each falls back to its own local default port.
+func serviceURLs(getenv func(string) string) (planner, generator string) {
+	pick := func(key, fallback string) string {
+		if v := getenv(key); v != "" {
+			return v
+		}
+		if v := getenv("CASEHUB_AUTOMATION_URL"); v != "" {
+			return v
+		}
+		return fallback
+	}
+	return pick("CASEHUB_PLANNER_URL", "http://localhost:4501"), pick("CASEHUB_GENERATOR_URL", "http://localhost:4502")
 }
 func env(key, fallback string) string {
 	if v := os.Getenv(key); v != "" {
