@@ -141,6 +141,21 @@ type Issue struct {
 	CreatedAt, UpdatedAt time.Time
 }
 
+// KnowledgeItem is a hand-written constraint or piece of supplementary
+// information. Product defects belong to Issue, not here.
+type KnowledgeItem struct {
+	ID, Category, Title, Content string
+	CreatedBy, UpdatedBy         string
+	CreatedAt, UpdatedAt         time.Time
+}
+
+// Knowledge categories: a rule the product or tests must respect, and
+// background information that helps a reader understand the product.
+const (
+	KnowledgeConstraint = "constraint"
+	KnowledgeNote       = "note"
+)
+
 type PendingFolder struct {
 	ID, ParentID, Name, CreatedBy string
 	// Code is the case-ID prefix the folder stands for (REQ, REQ-MODULE or
@@ -274,6 +289,7 @@ type State struct {
 	ScriptVersions []ScriptVersion          `json:"scriptVersions"`
 	// ProductExperiences holds one record per target origin.
 	ProductExperiences []ProductExperience `json:"productExperiences"`
+	KnowledgeItems     []KnowledgeItem     `json:"knowledgeItems"`
 }
 
 type Action struct {
@@ -313,6 +329,8 @@ type Action struct {
 	Scope     string
 	// recordProductExploration: the target origin the ExplorationNotes belong to.
 	Origin string
+	// createKnowledge / editKnowledge / deleteKnowledge. Title and Content are the shared fields.
+	KnowledgeID, Category string
 }
 
 // CaseRevision is one case rewritten by "AI 修正需求". Scope is "pending" (review area) or
@@ -491,6 +509,9 @@ func normalizeState(state *State) {
 	if state.ProductExperiences == nil {
 		state.ProductExperiences = []ProductExperience{}
 	}
+	if state.KnowledgeItems == nil {
+		state.KnowledgeItems = []KnowledgeItem{}
+	}
 	hasPendingRoot := false
 	for _, f := range state.PendingFolders {
 		if f.ID == "pending-root" {
@@ -601,6 +622,12 @@ func (s *Service) Apply(ctx context.Context, a Action) (Result, error) {
 		err = ackCaseRevision(&st, a)
 	case "deleteReqDoc":
 		err = deleteReqDoc(&st, a)
+	case "createKnowledge":
+		err = createKnowledge(&st, a)
+	case "editKnowledge":
+		err = editKnowledge(&st, a)
+	case "deleteKnowledge":
+		err = deleteKnowledge(&st, a)
 	case "createIssue":
 		err = createIssue(&st, a)
 	case "reportIssues":
@@ -2134,6 +2161,69 @@ func deleteIssue(s *State, a Action) error {
 		return errors.New("问题单不存在")
 	}
 	s.Issues = append(s.Issues[:i], s.Issues[i+1:]...)
+	return nil
+}
+
+func knowledgeAt(s *State, id string) (*KnowledgeItem, int) {
+	for i := range s.KnowledgeItems {
+		if s.KnowledgeItems[i].ID == id {
+			return &s.KnowledgeItems[i], i
+		}
+	}
+	return nil, -1
+}
+
+func validateKnowledge(a Action) error {
+	if a.Category != KnowledgeConstraint && a.Category != KnowledgeNote {
+		return errors.New("知识库分类无效")
+	}
+	if strings.TrimSpace(a.Title) == "" {
+		return errors.New("知识库标题不能为空")
+	}
+	if strings.TrimSpace(a.Content) == "" {
+		return errors.New("知识库内容不能为空")
+	}
+	if len(a.Content) > 200000 {
+		return errors.New("知识库内容过长")
+	}
+	return nil
+}
+
+func createKnowledge(s *State, a Action) error {
+	if err := validateKnowledge(a); err != nil {
+		return err
+	}
+	id := "KB" + now().Format("20060102150405")
+	for n := 1; ; n++ {
+		if item, _ := knowledgeAt(s, id); item == nil {
+			break
+		}
+		id = fmt.Sprintf("KB%s-%d", now().Format("20060102150405"), n)
+	}
+	t := now()
+	s.KnowledgeItems = append(s.KnowledgeItems, KnowledgeItem{ID: id, Category: a.Category, Title: strings.TrimSpace(a.Title), Content: a.Content, CreatedBy: a.Author, UpdatedBy: a.Author, CreatedAt: t, UpdatedAt: t})
+	return nil
+}
+
+func editKnowledge(s *State, a Action) error {
+	item, _ := knowledgeAt(s, a.KnowledgeID)
+	if item == nil {
+		return errors.New("知识库条目不存在")
+	}
+	if err := validateKnowledge(a); err != nil {
+		return err
+	}
+	item.Category, item.Title, item.Content = a.Category, strings.TrimSpace(a.Title), a.Content
+	item.UpdatedBy, item.UpdatedAt = a.Author, now()
+	return nil
+}
+
+func deleteKnowledge(s *State, a Action) error {
+	_, i := knowledgeAt(s, a.KnowledgeID)
+	if i < 0 {
+		return errors.New("知识库条目不存在")
+	}
+	s.KnowledgeItems = append(s.KnowledgeItems[:i], s.KnowledgeItems[i+1:]...)
 	return nil
 }
 

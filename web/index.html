@@ -20,6 +20,7 @@
     <button type="button" class="page-tab" role="tab" aria-selected="false" data-app="requirements">📄 需求管理</button>
     <button type="button" class="page-tab" role="tab" aria-selected="false" data-app="automation">🤖 自动化管理</button>
     <button type="button" class="page-tab" role="tab" aria-selected="false" data-app="issues">🐞 问题单管理</button>
+    <button type="button" class="page-tab" role="tab" aria-selected="false" data-app="knowledge">📚 知识库</button>
   </nav>
   <main id="workspace">
     <aside id="sidebar">
@@ -90,6 +91,17 @@
     <section id="issue-content">
       <div id="issue-empty" class="empty"><div class="empty-icon">🐞</div><h2>从一个问题单开始</h2><p>新建问题单并关联对应需求，集中记录问题、根因和解决状态。</p><button type="button" id="issue-empty-create">新建问题单</button></div>
       <div id="issue-detail" class="hidden"></div>
+    </section>
+  </main>
+  <main id="kb-workspace" class="hidden">
+    <aside id="kb-sidebar">
+      <div class="sidebar-head"><strong>知识库</strong><button type="button" id="create-kb">＋ 新建条目</button></div>
+      <div id="kb-list" class="versions"></div>
+    </aside>
+    <div id="kb-resize-left" class="resizer"></div>
+    <section id="kb-content">
+      <div id="kb-empty" class="empty"><div class="empty-icon">📚</div><h2>从一个条目开始</h2><p>记录人工整理的约束和补充信息，例如业务规则、测试注意事项、环境说明。产品缺陷请记录到问题单管理。</p><button type="button" id="kb-empty-create">新建条目</button></div>
+      <div id="kb-detail" class="hidden"></div>
     </section>
   </main>
   <div id="context-menu" class="context-menu hidden"></div>

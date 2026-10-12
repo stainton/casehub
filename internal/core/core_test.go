@@ -1427,6 +1427,37 @@ func TestProductExplorationMergesNewParagraphsPerOrigin(t *testing.T) {
 	}
 }
 
+func TestKnowledgeItemsCreateEditDelete(t *testing.T) {
+	service := core.NewService(store.NewMemory())
+	state := apply(t, service, core.Action{Type: "createKnowledge", Category: core.KnowledgeConstraint, Title: " 新需求需检查飞书推送 ", Content: "每个新需求都要覆盖飞书推送", Author: "alice"})
+	if len(state.KnowledgeItems) != 1 {
+		t.Fatalf("want one item, got %+v", state.KnowledgeItems)
+	}
+	item := state.KnowledgeItems[0]
+	if item.Title != "新需求需检查飞书推送" || item.CreatedBy != "alice" || item.ID == "" {
+		t.Fatalf("unexpected item %+v", item)
+	}
+	state = apply(t, service, core.Action{Type: "editKnowledge", KnowledgeID: item.ID, Category: core.KnowledgeNote, Title: item.Title, Content: "补充：推送走内部机器人", Author: "bob"})
+	if got := state.KnowledgeItems[0]; got.Category != core.KnowledgeNote || got.Content != "补充：推送走内部机器人" || got.UpdatedBy != "bob" || got.CreatedBy != "alice" {
+		t.Fatalf("edit not applied: %+v", got)
+	}
+	for name, a := range map[string]core.Action{
+		"bad category": {Type: "createKnowledge", Category: "bug", Title: "x", Content: "x"},
+		"empty title":  {Type: "createKnowledge", Category: core.KnowledgeNote, Title: " ", Content: "x"},
+		"empty body":   {Type: "createKnowledge", Category: core.KnowledgeNote, Title: "x", Content: " "},
+		"missing item": {Type: "editKnowledge", KnowledgeID: "nope", Category: core.KnowledgeNote, Title: "x", Content: "x"},
+		"delete miss":  {Type: "deleteKnowledge", KnowledgeID: "nope"},
+	} {
+		if _, err := service.Apply(context.Background(), a); err == nil {
+			t.Fatalf("%s must be rejected", name)
+		}
+	}
+	state = apply(t, service, core.Action{Type: "deleteKnowledge", KnowledgeID: item.ID})
+	if len(state.KnowledgeItems) != 0 {
+		t.Fatal("item was not deleted")
+	}
+}
+
 func TestEditScriptKeepsGenerationSnapshots(t *testing.T) {
 	service := core.NewService(store.NewMemory())
 	state := apply(t, service, core.Action{Type: "createVersion", Name: "脚本编辑", Author: "alice"})

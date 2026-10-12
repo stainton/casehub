@@ -19,10 +19,10 @@ const esc=s=>String(s??'').replace(/[&<>'"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&
 const fmt=s=>s?new Date(s).toLocaleString():'—';
 const version=id=>state.versions.find(v=>v.id===id), folders=id=>state.folders.filter(f=>f.VersionID===id), cases=id=>state.cases.filter(c=>c.VersionID===id);
 async function request(path,options){let r=await fetch(path,options),x=await r.json();if(!r.ok){let e=Error(x.error||'请求失败');e.status=r.status;e.conflicts=x.conflicts;throw e}return x}
-function normalizeState(s){s=s||{};for(const key of ['versions','folders','cases','histories','records','tasks','reqFolders','reqDocs','issues','pendingFolders','pendingCases','scripts','scriptVersions','productExperiences'])if(!Array.isArray(s[key]))s[key]=[];return s}
+function normalizeState(s){s=s||{};for(const key of ['versions','folders','cases','histories','records','tasks','reqFolders','reqDocs','issues','knowledgeItems','pendingFolders','pendingCases','scripts','scriptVersions','productExperiences'])if(!Array.isArray(s[key]))s[key]=[];return s}
 async function refresh(){state=normalizeState(await request('/api/state'));let changed=false;state.folders.filter(f=>f.VersionID==='main').forEach(f=>{const key=`main:${f.ID}`;if(!openMainlineFolders.has(key)&&!closedFolders.has(key)){closedFolders.add(key);changed=true}});if(changed)saveClosedFolders();render();}
 async function act(type,data={},retry=false){try{let out=await request('/api/action',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({Type:type,Author:'本地用户',...data})});state=normalizeState(out.state);if(out.warnings?.length)toast(out.warnings.join('；'));render();return out}catch(e){if(e.status===409&&type.startsWith('merge')){alert(`${e.message}\n冲突用例：${(e.conflicts||[]).join(', ')}\n请拉取主线，然后打开冲突用例编辑并确认人工处理。`)}else if(e.status===409&&!retry&&confirm(`${e.message}\n冲突用例：${(e.conflicts||[]).join(', ')}\n是否以当前编辑内容作为人工解决结果？`))return act(type,{...data,Force:true},true);toast(e.message,true);throw e}}
-function render(){ renderVersions();renderTasks();renderFocus();if(recordTask)$('#edit-case')?.remove();updateBulk();if(location.hash)renderHistoryRoute();renderReqTree();renderReviewTree();renderScriptTree();renderAutoFocus();renderIssueList();renderIssueFocus(); }
+function render(){ renderVersions();renderTasks();renderFocus();if(recordTask)$('#edit-case')?.remove();updateBulk();if(location.hash)renderHistoryRoute();renderReqTree();renderReviewTree();renderScriptTree();renderAutoFocus();renderIssueList();renderIssueFocus();renderKnowledgeList();renderKnowledgeFocus(); }
 function renderVersions(){let box=$('#versions');box.innerHTML=state.versions.map(v=>`<div class="version" data-version="${v.id}"><div class="version-title"><span class="chev">⌄</span><span>${esc(v.name)}</span><span class="badge">${v.mainline?'只读主线':'测试版本'}</span>${v.mainline?'':`<span class="version-actions"><button data-sync="${v.id}">拉取主线</button><button data-merge="${v.id}">合并</button><button data-delete-version="${v.id}" class="danger">删除</button></span>`}</div><div class="version-body">${tree(v.id)}</div></div>`).join('');bindTree(box);}
 function tree(vid,onlyIDs=null,taskID=''){let fs=folders(vid),cs=cases(vid),roots=fs.filter(f=>!f.ParentID||!fs.some(x=>x.ID===f.ParentID));let branch=!version(vid).mainline,showCheck=branch&&!taskID;function node(f,depth){let children=fs.filter(x=>x.ParentID===f.ID),own=cs.filter(c=>c.FolderID===f.ID);let visible=!onlyIDs||own.some(c=>onlyIDs.has(c.ID))||children.some(ch=>hasHit(ch));if(!visible)return'';return `<div class="tree-row folder-row${focus?.type==='folder'&&focus.versionID===vid&&focus.id===f.ID?' active':''}" style="padding-left:${8+depth*17}px" data-folder="${f.ID}" data-version="${vid}">${showCheck?'<input class="folder-check" type="checkbox">':''}<span class="chev">▾</span><span>📁</span><span class="label">${esc(f.Name)}</span></div><div>${own.filter(c=>!onlyIDs||onlyIDs.has(c.ID)).map(c=>caseRow(c,depth+1,branch&&!taskID,taskID)).join('')}${children.map(ch=>node(ch,depth+1)).join('')}</div>`}function hasHit(f){return cs.some(c=>c.FolderID===f.ID&&onlyIDs.has(c.ID))||fs.filter(x=>x.ParentID===f.ID).some(hasHit)}return roots.map(r=>node(r,0)).join('')||'<p class="meta">空版本</p>'}
 // 用例树（版本树、测试任务、用例评审）显示"<用例编号> <用例名称>"，完整内容也放在悬停提示里（名称过长会被截断）。
@@ -332,7 +332,7 @@ $$('[data-view]').forEach(b=>b.onclick=()=>{$$('[data-view]').forEach(x=>x.class
 $('#modal-close').onclick=$('#modal-cancel').onclick=()=>$('#modal').close();$('#modal-form').onsubmit=async e=>{e.preventDefault();try{await modalSave(Object.fromEntries(new FormData(e.target)));$('#modal').close()}catch{}};$('#drawer-close').onclick=closeRecordDrawer;$('#run-drawer-close').onclick=()=>$('#run-drawer').classList.add('hidden');$('#record-version').onchange=()=>{recordHistoryLimit=3;$('#record-history').replaceChildren();renderRecordHistory()};$('#record-form').onsubmit=async e=>{e.preventDefault();try{await saveRecord('submitRecord')}catch{}};$('#save-draft').onclick=()=>saveRecord('saveRecord').catch(()=>{});$('#close-search').onclick=()=>{$('#search-panel').classList.add('hidden');$('#workspace').style.gridTemplateColumns='var(--side) 5px minmax(0,1fr)'};$('#run-search').onclick=runSearch;
 // 所有详情区（四个工作区的内容区和右侧抽屉）各自滚动：滚过半屏后右下角出现"回到顶部"，点击滚回顶部。
 // 按钮放在容器末尾一个高度为 0 的 sticky 锚点里，始终贴着可视区底部且不占布局；渲染只替换容器里的子元素，锚点一直保留。
-for(const box of document.querySelectorAll('#content,#req-content,#auto-content,#issue-content,.drawer')){
+for(const box of document.querySelectorAll('#content,#req-content,#auto-content,#issue-content,#kb-content,.drawer')){
   const anchor=document.createElement('div'),btn=document.createElement('button');
   anchor.className='back-to-top-anchor';btn.type='button';btn.className='back-to-top hidden';btn.textContent='↑';btn.title='回到顶部';btn.setAttribute('aria-label','回到顶部');
   btn.onclick=()=>box.scrollTo({top:0,behavior:matchMedia('(prefers-reduced-motion: reduce)').matches?'auto':'smooth'});
@@ -346,6 +346,7 @@ bindResizer('#resize-left','#collapse','--side');
 bindResizer('#req-resize-left','#req-collapse','--req-side');
 bindResizer('#auto-resize-left','#auto-collapse','--auto-side');
 bindResizer('#issue-resize-left',null,'--issue-side');
+bindResizer('#kb-resize-left',null,'--kb-side');
 document.onmousemove=e=>{if(resizing){lastX=e.clientX;document.documentElement.style.setProperty(resizeVar,Math.max(0,Math.min(600,e.clientX))+'px')}};
 document.onmouseup=()=>{if(resizing&&lastX<70&&resizeCollapse)$(resizeCollapse).click();else if(resizing&&lastX<220)document.documentElement.style.setProperty(resizeVar,'220px');resizing=false;$$('.resizer').forEach(r=>r.classList.remove('dragging'))};
 document.documentElement.classList.toggle('dark',localStorage.getItem('casehub-theme')==='dark');
@@ -1280,18 +1281,66 @@ function renderIssueFocus(){
 }
 $('#create-issue').onclick=$('#issue-empty-create').onclick=startIssueCreate;
 
+// ---- 知识库 ------------------------------------------------------------------
+// 人工写的约束和补充信息，Markdown 正文；产品缺陷不放这里（问题单管理）。目前只存储，不随 AI 请求发送。
+const KB_CATEGORIES=[['constraint','约束','🔒'],['note','补充信息','📝']];
+let kbFocus=null,kbEditor=null,kbViewer=null;
+const kbByID=id=>state.knowledgeItems.find(item=>item.ID===id);
+const kbCategory=key=>KB_CATEGORIES.find(c=>c[0]===key)||KB_CATEGORIES[1];
+const closedKbGroups=new Set(); // 默认全部展开
+function disposeKbEditors(){kbEditor?.destroy();kbViewer?.destroy();kbEditor=kbViewer=null}
+function renderKnowledgeList(){
+  const list=$('#kb-list');if(!list)return;
+  const items=[...state.knowledgeItems].sort((a,b)=>String(b.UpdatedAt).localeCompare(String(a.UpdatedAt)));
+  const row=item=>`<div class="tree-row issue-row${kbFocus?.id===item.ID?' active':''}" data-kb="${esc(item.ID)}" style="padding-left:34px"><span>${kbCategory(item.Category)[2]}</span><span class="label"><b>${esc(item.Title)}</b><small>${fmt(item.UpdatedAt)}</small></span></div>`;
+  list.innerHTML=items.length?KB_CATEGORIES.map(([key,label,icon])=>{const mine=items.filter(x=>kbCategory(x.Category)[0]===key);return mine.length?`<div class="tree-row folder-row${closedKbGroups.has(key)?' closed':''}" data-kb-group="${key}"><span class="chev">▾</span><span>${icon}</span><span class="label">${label}</span><span class="badge">${mine.length}</span></div><div>${mine.map(row).join('')}</div>`:''}).join(''):'<p class="meta">暂无条目</p>';
+  list.querySelectorAll('[data-kb-group]').forEach(r=>{r.onclick=()=>{const closed=r.classList.toggle('closed');closed?closedKbGroups.add(r.dataset.kbGroup):closedKbGroups.delete(r.dataset.kbGroup)}});
+  const open=id=>{kbFocus={type:'item',id};renderKnowledgeList();renderKnowledgeFocus()};
+  list.querySelectorAll('[data-kb]').forEach(r=>{r.onclick=()=>open(r.dataset.kb);r.oncontextmenu=event=>menu(event,[['查看详情',()=>open(r.dataset.kb)],['编辑',()=>startKbEdit(kbByID(r.dataset.kb))],['删除',()=>deleteKb(kbByID(r.dataset.kb))]])});
+}
+function startKbCreate(){kbFocus={type:'create'};renderKnowledgeList();renderKnowledgeFocus()}
+function startKbEdit(item){if(!item)return;kbFocus={type:'item',id:item.ID,editing:true};renderKnowledgeList();renderKnowledgeFocus()}
+async function deleteKb(item){if(!item||!confirm(`确定删除知识库条目「${item.Title}」？`))return;await act('deleteKnowledge',{KnowledgeID:item.ID});if(kbFocus?.id===item.ID)kbFocus=null;renderKnowledgeList();renderKnowledgeFocus()}
+function kbFormHTML(item){
+  const options=KB_CATEGORIES.map(([key,label])=>`<option value="${key}"${(item?.Category||'constraint')===key?' selected':''}>${label}</option>`).join('');
+  return `<div class="detail-head"><div><div class="eyebrow">${item?'编辑条目':'新建条目'}</div><h1>${item?esc(item.Title):'新建知识库条目'}</h1></div><div class="detail-actions"><button type="button" class="secondary" id="kb-cancel">取消</button><button type="button" id="kb-save">保存</button></div></div><div class="card"><div class="issue-form-meta"><label>标题<input id="kb-title" required value="${esc(item?.Title||'')}"></label><label>分类<select id="kb-category">${options}</select></label></div><div class="issue-editor-label">内容</div><div id="kb-editor"></div></div>`;
+}
+function renderKnowledgeFocus(){
+  const empty=$('#kb-empty'),detail=$('#kb-detail');if(!empty||!detail)return;
+  disposeKbEditors();
+  if(!kbFocus){empty.classList.remove('hidden');detail.classList.add('hidden');return}
+  empty.classList.add('hidden');detail.classList.remove('hidden');
+  const item=kbFocus.type==='item'?kbByID(kbFocus.id):null;
+  if(kbFocus.type==='item'&&!item){kbFocus=null;return renderKnowledgeFocus()}
+  if(kbFocus.type==='create'||kbFocus.editing){
+    detail.innerHTML=kbFormHTML(item);
+    kbEditor=issueEditor($('#kb-editor'),item?.Content,'460px');
+    $('#kb-cancel').onclick=()=>{kbFocus=item?{type:'item',id:item.ID}:null;renderKnowledgeList();renderKnowledgeFocus()};
+    $('#kb-save').onclick=async()=>{const data={Title:$('#kb-title').value,Category:$('#kb-category').value,Content:kbEditor.getMarkdown()};try{const before=new Set(state.knowledgeItems.map(x=>x.ID));await act(item?'editKnowledge':'createKnowledge',{...data,...(item?{KnowledgeID:item.ID}:{})});kbFocus={type:'item',id:item?item.ID:state.knowledgeItems.find(x=>!before.has(x.ID))?.ID};renderKnowledgeList();renderKnowledgeFocus();toast(item?'条目已保存':'条目已创建')}catch{}};
+    return;
+  }
+  const [,label,icon]=kbCategory(item.Category);
+  detail.innerHTML=`<div class="detail-head"><div><div class="eyebrow">${icon} ${label}</div><h1>${esc(item.Title)}</h1></div><div class="detail-actions"><button type="button" class="secondary" id="kb-edit">编辑</button><button type="button" class="secondary" id="kb-delete">删除</button></div></div><div class="card meta-grid"><span>创建者 <b>${esc(item.CreatedBy)}</b></span><span>创建时间 <b>${fmt(item.CreatedAt)}</b></span><span>更新者 <b>${esc(item.UpdatedBy)}</b></span><span>更新时间 <b>${fmt(item.UpdatedAt)}</b></span></div><div class="card"><div id="kb-view" class="issue-viewer"></div></div>`;
+  $('#kb-view').classList.toggle('toastui-editor-dark',document.documentElement.classList.contains('dark'));
+  kbViewer=toastui.Editor.factory({el:$('#kb-view'),viewer:true,initialValue:item.Content||'',usageStatistics:false});
+  $('#kb-edit').onclick=()=>startKbEdit(item);$('#kb-delete').onclick=()=>deleteKb(item);
+}
+$('#create-kb').onclick=$('#kb-empty-create').onclick=startKbCreate;
+
 // ---- Page tab bar (用例管理 / 需求管理) ----
 function setPage(p){
   page=p;
   $$('.page-tab').forEach(b=>{const active=b.dataset.app===p;b.classList.toggle('active',active);b.setAttribute('aria-selected',String(active))});
-  $('#app-subtitle').textContent={requirements:'需求文档管理',automation:'自动化脚本管理',issues:'问题单管理'}[p]||'测试用例管理';
+  $('#app-subtitle').textContent={requirements:'需求文档管理',automation:'自动化脚本管理',issues:'问题单管理',knowledge:'知识库'}[p]||'测试用例管理';
   $('#workspace').classList.toggle('hidden',p!=='cases');
   $('#req-workspace').classList.toggle('hidden',p!=='requirements');
   $('#auto-workspace').classList.toggle('hidden',p!=='automation');
   $('#issue-workspace').classList.toggle('hidden',p!=='issues');
+  $('#kb-workspace').classList.toggle('hidden',p!=='knowledge');
   if(p==='requirements')updateReqEmptyHint();
   if(p==='automation')updateAutoEmptyHint();
   if(p==='issues')renderIssueFocus();
+  if(p==='knowledge')renderKnowledgeFocus();
 }
 $$('.page-tab').forEach(b=>b.onclick=()=>setPage(b.dataset.app));
 

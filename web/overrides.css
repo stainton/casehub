@@ -235,3 +235,11 @@ button.avatar{padding:0;color:#fff;cursor:pointer;border:1px solid #ffffff40}
 .back-to-top-anchor{position:sticky;bottom:0;height:0;z-index:4}
 .back-to-top{position:absolute;right:0;bottom:20px;width:40px;height:40px;padding:0;border-radius:50%;font-size:18px;line-height:40px;box-shadow:0 6px 18px #0003}
 .drawer>.back-to-top-anchor .back-to-top{right:20px}
+/* 知识库：布局与问题单管理一致。 */
+:root{--kb-side:340px}
+#kb-workspace{height:calc(100vh - 60px - var(--tabs-h));display:grid;grid-template-columns:var(--kb-side) 5px minmax(0,1fr);position:relative}
+#kb-sidebar{background:var(--surface);overflow:auto;border-right:1px solid var(--line);grid-column:1;grid-row:1}
+#kb-resize-left{grid-column:2;grid-row:1}
+#kb-content{overflow:auto;padding:28px 36px;background:var(--bg);grid-column:3;grid-row:1;min-width:0}
+#kb-empty p{max-width:460px;line-height:1.8}
+.dark #kb-view .toastui-editor-contents{color:var(--text)}
