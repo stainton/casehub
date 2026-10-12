@@ -243,3 +243,6 @@ button.avatar{padding:0;color:#fff;cursor:pointer;border:1px solid #ffffff40}
 #kb-content{overflow:auto;padding:28px 36px;background:var(--bg);grid-column:3;grid-row:1;min-width:0}
 #kb-empty p{max-width:460px;line-height:1.8}
 .dark #kb-view .toastui-editor-contents{color:var(--text)}
+/* 生成/修复任务里的用例 ID：可点击跳转到用例。 */
+.gen-case-links{display:flex;flex-wrap:wrap;align-items:center;gap:6px}
+.gen-case-link{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}

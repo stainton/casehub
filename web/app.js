@@ -1804,6 +1804,17 @@ function genTaskListHTML(){
   const html=parts.join('')+genTasks.filter(task=>!grouped.has(task.jobId)&&shown(task)).map(genTaskHTML).join('');
   return html||tcEmptyHTML('gen');
 }
+// 任务对应的用例：每个 ID 是一个按钮，点击切到用例管理并定位到该用例。
+function genCaseLinksHTML(task){
+  if(!task.caseIDs?.length)return '';
+  const chips=task.caseIDs.map(id=>{const c=state.cases.find(k=>k.VersionID===task.versionID&&k.ID===id);return `<button type="button" class="req-rel-chip gen-case-link" data-gen-case="${esc(id)}" data-gen-case-version="${esc(task.versionID)}" title="${esc(c?c.Title:'用例已不存在')}">${esc(id)}</button>`}).join('');
+  return `<p class="meta gen-case-links">用例 ${chips}</p>`;
+}
+function jumpToCase(versionID,id){
+  const c=state.cases.find(k=>k.VersionID===versionID&&k.ID===id);
+  if(!c){toast(`用例 ${id} 已不存在，可能已被删除`,true);return}
+  setPage('cases');setFocus({type:'case',versionID,id});locateCaseInTree(c);
+}
 function genTaskHTML(task){
   const runtime=genRuntime.get(task.jobId);
   const done=task.saved?`<div class="card meta-grid"><span>${taskService(task)==='healer'?'已修复':'已生成'} <b>${task.saved.generated}</b></span><span>受阻 <b>${task.saved.blocked}</b></span>${task.saved.failed?`<span>保存失败 <b>${task.saved.failed}</b></span>`:''}</div>`:'';
@@ -1815,14 +1826,17 @@ function genTaskHTML(task){
   return `<details class="gen-task" data-gen-panel="${task.jobId}"${genOpen.has(task.jobId)?' open':''}>
     <summary><span class="gen-task-title">${esc(task.label)}</span><span class="gen-chip">${genCaseCount(task)} 条</span><span class="gen-chip gen-status-${GEN_TERMINAL.includes(task.status)?task.status:'running'}" data-gen-status="${task.jobId}">${genStatusText(task)}</span></summary>
     <p class="meta">${esc(task.versionName||'')} · 提交于 ${fmt(task.createdAt)}</p>
+    ${genCaseLinksHTML(task)}
     ${done}${limitations}${error}
     <div class="ai-log" data-gen-log="${task.jobId}">${(runtime?.log||[]).map(line=>`<div>${esc(line)}</div>`).join('')}</div>
     <p class="drawer-actions">${actions}</p>
   </details>`;
 }
 function bindGenTasks(){
+  $$('#gen-drawer-body [data-gen-case]').forEach(b=>b.onclick=e=>{e.preventDefault();jumpToCase(b.dataset.genCaseVersion,b.dataset.genCase)});
   $$('#gen-drawer-body [data-gen-panel]').forEach(el=>{
-    el.ontoggle=()=>{el.open?genOpen.add(el.dataset.genPanel):genOpen.delete(el.dataset.genPanel)};
+    el.ontoggle=()=>{el.open?genOpen.add(el.dataset.genPanel):genOpen.delete(el.dataset.genPanel);if(el.open)backfillGenLog(genTask(el.dataset.genPanel))};
+    if(el.open)backfillGenLog(genTask(el.dataset.genPanel));
   });
   $$('#gen-drawer-body [data-gen-cancel]').forEach(b=>b.onclick=async()=>{
     b.disabled=true;
@@ -1856,6 +1870,25 @@ function interveneGenTask(task){
     // 批量任务里的重试直接替换原来失败的子任务，状态就在父任务里刷新，不会掉到批量任务下方。
     if(task.groupID){closeGenStream(task.jobId);genTasks=genTasks.filter(t=>t.jobId!==task.jobId);genRuntime.delete(task.jobId);genOpen.delete(task.jobId);saveGenTasks();genOpen.add(task.groupID)}
     renderGenDrawer();toast('已提交故障排查任务')});
+}
+const genEventLine=ev=>`[${fmt(ev.createdAt)}] ${ev.stage||''} ${ev.message||''}${ev.tool?` (${ev.tool} ${ev.toolStatus||''})`:''}`.trim();
+// 日志只存在浏览器内存里，刷新页面后已结束任务的日志框是空的。服务端在保留期内（默认 24 小时）还留着这些事件，
+// 对已结束的任务它会一次性回放全部事件并关闭连接，所以展开任务时取一次回填即可。每个任务只尝试一次。
+async function backfillGenLog(task){
+  if(!task||!GEN_TERMINAL.includes(task.status)||String(task.jobId).startsWith('local-'))return;
+  const runtime=genRuntime.get(task.jobId)||{log:[]};
+  if(runtime.log.length||runtime.backfilled)return;
+  runtime.backfilled=true;genRuntime.set(task.jobId,runtime);
+  try{
+    const res=await fetch(`/api/${taskService(task)}/jobs/${task.jobId}/events`);
+    if(!res.ok)return;
+    for(const block of (await res.text()).split('\n\n')){
+      const type=/^event: (\w+)/m.exec(block)?.[1],data=/^data: (.*)$/m.exec(block)?.[1];
+      if(!data)continue;
+      if(type==='progress')genLogLine(task.jobId,genEventLine(JSON.parse(data)));
+      else if(type==='reset')genLogLine(task.jobId,`……${JSON.parse(data).message||'更早的进度记录已丢失'}`);
+    }
+  }catch{} // 任务已过期（404）或服务不可达：保持空日志，不打扰
 }
 function genLogLine(jobId,msg){
   const runtime=genRuntime.get(jobId)||{log:[]};
@@ -1917,7 +1950,7 @@ function ensureGenStream(task){
   source.addEventListener('progress',e=>{
     const ev=JSON.parse(e.data);
     task.stage=ev.stage;updateGenStatusChip(task);
-    genLogLine(task.jobId,`[${fmt(ev.createdAt)}] ${ev.stage||''} ${ev.message||''}${ev.tool?` (${ev.tool} ${ev.toolStatus||''})`:''}`.trim());
+    genLogLine(task.jobId,genEventLine(ev));
     if(GEN_TERMINAL.includes(ev.status))serviceRequest(`/api/${taskService(task)}/jobs/${task.jobId}`).then(job=>routeGenJob(task,job)).catch(()=>{});
   });
   source.addEventListener('reset',e=>{
