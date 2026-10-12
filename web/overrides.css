@@ -231,3 +231,7 @@ button.avatar{padding:0;color:#fff;cursor:pointer;border:1px solid #ffffff40}
 .req-status-passed{background:#dcfce7;color:#15803d}.req-status-partial{background:#fef3c7;color:#b45309}.req-status-failed{background:#fee2e2;color:#b91c1c}.req-status-none{background:var(--surface2);color:var(--muted);border:1px solid var(--line)}
 .dark .req-status-passed{background:#14532d;color:#86efac}.dark .req-status-partial{background:#4a3410;color:#fcd34d}.dark .req-status-failed{background:#4c1d1d;color:#fca5a5}
 .eyebrow .req-status{margin-left:0;text-transform:none}
+/* 详情区"回到顶部"：sticky 锚点高度为 0，按钮浮在可视区右下角。 */
+.back-to-top-anchor{position:sticky;bottom:0;height:0;z-index:4}
+.back-to-top{position:absolute;right:0;bottom:20px;width:40px;height:40px;padding:0;border-radius:50%;font-size:18px;line-height:40px;box-shadow:0 6px 18px #0003}
+.drawer>.back-to-top-anchor .back-to-top{right:20px}
