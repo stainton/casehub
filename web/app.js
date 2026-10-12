@@ -1586,7 +1586,17 @@ function renderAutoFocus(){
 	$('#script-code-toggle')?.addEventListener('click',()=>{codeExpanded?expandedScriptCode.delete(scriptKey):expandedScriptCode.add(scriptKey);renderAutoFocus()});
 	$('#script-edit')?.addEventListener('click',()=>{scriptEdit={versionID:s.VersionID,caseID:s.CaseID,code:s.Code};renderAutoFocus()});
 	$('#script-edit-cancel')?.addEventListener('click',()=>{scriptEdit=null;renderAutoFocus()});
-	$('#script-edit-save')?.addEventListener('click',async()=>{const code=$('#script-editor').value;if(!code.trim())return toast('脚本内容不能为空',true);try{await act('editScript',{VersionID:s.VersionID,CaseID:s.CaseID,ScriptCode:code});scriptEdit=null;toast('脚本已保存')}catch{}});
+	// 输入时同步到 scriptEdit：保存过程中 act() 会整页重绘，也会因后台任务等原因重绘，编辑框总是按 scriptEdit.code 重建，
+	// 不同步就会把还没保存的输入还原成旧代码。保存成功后必须退出编辑并重绘，否则界面会停在重建出的编辑框上。
+	$('#script-editor')?.addEventListener('input',e=>{if(scriptEdit)scriptEdit.code=e.target.value});
+	$('#script-edit-save')?.addEventListener('click',async e=>{
+		const btn=e.currentTarget,code=$('#script-editor').value;
+		if(!code.trim())return toast('脚本内容不能为空',true);
+		if(scriptEdit)scriptEdit.code=code;
+		btn.disabled=true;
+		try{await act('editScript',{VersionID:s.VersionID,CaseID:s.CaseID,ScriptCode:code});scriptEdit=null;renderAutoFocus();toast('脚本已保存')}
+		catch{if(btn.isConnected)btn.disabled=false} // 失败时 act 已提示原因，继续停留在编辑状态，输入保留
+	});
   $('#script-regen-stale')?.addEventListener('click',regen);
   $('#script-copy')?.addEventListener('click',async()=>{try{await copyText(s.Code);toast('脚本已复制')}catch{toast('复制失败，请手动选择复制',true)}});
   $('#script-download')?.addEventListener('click',()=>{
