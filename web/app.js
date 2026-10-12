@@ -18,7 +18,7 @@ let caseViewFor=null; // simplifyKey of the case caseViewMode was chosen for; op
 const esc=s=>String(s??'').replace(/[&<>'"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]));
 const fmt=s=>s?new Date(s).toLocaleString():'—';
 const version=id=>state.versions.find(v=>v.id===id), folders=id=>state.folders.filter(f=>f.VersionID===id), cases=id=>state.cases.filter(c=>c.VersionID===id);
-async function request(path,options){let r=await fetch(path,options),x=await r.json();if(!r.ok){let e=Error(x.error||'请求失败');e.status=r.status;e.conflicts=x.conflicts;throw e}return x}
+async function request(path,options){let r=await fetch(path,options),x;try{x=await r.json()}catch(err){if(r.ok)throw err;const e=Error(`服务返回了无法解析的响应（HTTP ${r.status}），可能被网关拦截或服务异常`);e.status=r.status;throw e}if(!r.ok){let e=Error(x.error||'请求失败');e.status=r.status;e.conflicts=x.conflicts;throw e}return x}
 function normalizeState(s){s=s||{};for(const key of ['versions','folders','cases','histories','records','tasks','reqFolders','reqDocs','issues','knowledgeItems','pendingFolders','pendingCases','scripts','scriptVersions','productExperiences'])if(!Array.isArray(s[key]))s[key]=[];return s}
 async function refresh(){state=normalizeState(await request('/api/state'));let changed=false;state.folders.filter(f=>f.VersionID==='main').forEach(f=>{const key=`main:${f.ID}`;if(!openMainlineFolders.has(key)&&!closedFolders.has(key)){closedFolders.add(key);changed=true}});if(changed)saveClosedFolders();render();}
 async function act(type,data={},retry=false){try{let out=await request('/api/action',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({Type:type,Author:'本地用户',...data})});state=normalizeState(out.state);if(out.warnings?.length)toast(out.warnings.join('；'));render();return out}catch(e){if(e.status===409&&type.startsWith('merge')){alert(`${e.message}\n冲突用例：${(e.conflicts||[]).join(', ')}\n请拉取主线，然后打开冲突用例编辑并确认人工处理。`)}else if(e.status===409&&!retry&&confirm(`${e.message}\n冲突用例：${(e.conflicts||[]).join(', ')}\n是否以当前编辑内容作为人工解决结果？`))return act(type,{...data,Force:true},true);toast(e.message,true);throw e}}
@@ -1316,7 +1316,9 @@ function renderKnowledgeFocus(){
     detail.innerHTML=kbFormHTML(item);
     kbEditor=issueEditor($('#kb-editor'),item?.Content,'460px');
     $('#kb-cancel').onclick=()=>{kbFocus=item?{type:'item',id:item.ID}:null;renderKnowledgeList();renderKnowledgeFocus()};
-    $('#kb-save').onclick=async()=>{const data={Title:$('#kb-title').value,Category:$('#kb-category').value,Content:kbEditor.getMarkdown()};try{const before=new Set(state.knowledgeItems.map(x=>x.ID));await act(item?'editKnowledge':'createKnowledge',{...data,...(item?{KnowledgeID:item.ID}:{})});kbFocus={type:'item',id:item?item.ID:state.knowledgeItems.find(x=>!before.has(x.ID))?.ID};renderKnowledgeList();renderKnowledgeFocus();toast(item?'条目已保存':'条目已创建')}catch{}};
+    // 保存期间按钮显示"保存中…"并禁用：请求挂住时能看出是在等服务端，也避免重复提交。
+    // 接口错误 act 已经提示过；其余错误（渲染异常等）以前被吞掉，现在提示并写到控制台，避免"点了没反应"。
+    $('#kb-save').onclick=async e=>{const btn=e.currentTarget,label=btn.textContent;btn.disabled=true;btn.textContent='保存中…';try{const data={Title:$('#kb-title').value,Category:$('#kb-category').value,Content:kbEditor.getMarkdown()};const before=new Set(state.knowledgeItems.map(x=>x.ID));await act(item?'editKnowledge':'createKnowledge',{...data,...(item?{KnowledgeID:item.ID}:{})});kbFocus={type:'item',id:item?item.ID:state.knowledgeItems.find(x=>!before.has(x.ID))?.ID};renderKnowledgeList();renderKnowledgeFocus();toast(item?'条目已保存':'条目已创建')}catch(err){if(!err?.status){console.error('知识库保存失败',err);toast(`保存失败：${err?.message||err}`,true)}}finally{if(btn.isConnected){btn.disabled=false;btn.textContent=label}}};
     return;
   }
   const [,label,icon]=kbCategory(item.Category);

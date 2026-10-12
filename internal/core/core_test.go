@@ -1452,9 +1452,14 @@ func TestKnowledgeItemsCreateEditDelete(t *testing.T) {
 			t.Fatalf("%s must be rejected", name)
 		}
 	}
+	// The limit is in characters: 100k Chinese characters (300 KB) are fine, 200001 are not.
+	apply(t, service, core.Action{Type: "createKnowledge", Category: core.KnowledgeNote, Title: "长文", Content: strings.Repeat("字", 100000)})
+	if _, err := service.Apply(context.Background(), core.Action{Type: "createKnowledge", Category: core.KnowledgeNote, Title: "超长", Content: strings.Repeat("字", 200001)}); err == nil || !strings.Contains(err.Error(), "200000") {
+		t.Fatalf("over-limit content must be rejected with the limit in the message, got %v", err)
+	}
 	state = apply(t, service, core.Action{Type: "deleteKnowledge", KnowledgeID: item.ID})
-	if len(state.KnowledgeItems) != 0 {
-		t.Fatal("item was not deleted")
+	if len(state.KnowledgeItems) != 1 || state.KnowledgeItems[0].Title != "长文" {
+		t.Fatalf("only the deleted item should be gone: %+v", state.KnowledgeItems)
 	}
 }
 

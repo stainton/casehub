@@ -13,6 +13,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 )
 
 var ErrNotFound = errors.New("state not found")
@@ -154,6 +155,8 @@ type KnowledgeItem struct {
 const (
 	KnowledgeConstraint = "constraint"
 	KnowledgeNote       = "note"
+
+	maxKnowledgeChars = 200000
 )
 
 type PendingFolder struct {
@@ -2183,8 +2186,9 @@ func validateKnowledge(a Action) error {
 	if strings.TrimSpace(a.Content) == "" {
 		return errors.New("知识库内容不能为空")
 	}
-	if len(a.Content) > 200000 {
-		return errors.New("知识库内容过长")
+	// Counted in characters, not bytes: Chinese text is three bytes per character.
+	if utf8.RuneCountInString(a.Content) > maxKnowledgeChars {
+		return fmt.Errorf("知识库内容过长（上限 %d 个字符，粘贴的图片也计入）", maxKnowledgeChars)
 	}
 	return nil
 }
