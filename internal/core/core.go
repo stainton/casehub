@@ -142,20 +142,31 @@ type Issue struct {
 	CreatedAt, UpdatedAt time.Time
 }
 
-// KnowledgeItem is a hand-written constraint or piece of supplementary
-// information. Product defects belong to Issue, not here.
-type KnowledgeItem struct {
+// KnowledgeFolder / KnowledgeDoc: the knowledge base holds hand-written
+// constraints and supplementary information as markdown documents in a folder
+// tree, the same shape as requirement documents. Product defects belong to
+// Issue, not here.
+type KnowledgeFolder struct {
+	ID, ParentID, Name, CreatedBy string
+	CreatedAt                     time.Time
+}
+
+type KnowledgeDoc struct {
+	ID, FolderID, Title, Content string
+	CreatedBy, UpdatedBy         string
+	CreatedAt, UpdatedAt         time.Time
+}
+
+// LegacyKnowledgeItem is the flat entry an earlier version stored. It is only
+// read, to be carried over into folders and documents (see ensureKnowledge).
+type LegacyKnowledgeItem struct {
 	ID, Category, Title, Content string
 	CreatedBy, UpdatedBy         string
 	CreatedAt, UpdatedAt         time.Time
 }
 
-// Knowledge categories: a rule the product or tests must respect, and
-// background information that helps a reader understand the product.
 const (
-	KnowledgeConstraint = "constraint"
-	KnowledgeNote       = "note"
-
+	knowledgeRoot     = "kb-root"
 	maxKnowledgeChars = 200000
 )
 
@@ -292,7 +303,10 @@ type State struct {
 	ScriptVersions []ScriptVersion          `json:"scriptVersions"`
 	// ProductExperiences holds one record per target origin.
 	ProductExperiences []ProductExperience `json:"productExperiences"`
-	KnowledgeItems     []KnowledgeItem     `json:"knowledgeItems"`
+	KnowledgeFolders   []KnowledgeFolder   `json:"knowledgeFolders"`
+	KnowledgeDocs      []KnowledgeDoc      `json:"knowledgeDocs"`
+	// KnowledgeItems is the legacy flat list; it is migrated on load and never written back.
+	KnowledgeItems []LegacyKnowledgeItem `json:"knowledgeItems,omitempty"`
 }
 
 type Action struct {
@@ -332,8 +346,6 @@ type Action struct {
 	Scope     string
 	// recordProductExploration: the target origin the ExplorationNotes belong to.
 	Origin string
-	// createKnowledge / editKnowledge / deleteKnowledge. Title and Content are the shared fields.
-	KnowledgeID, Category string
 }
 
 // CaseRevision is one case rewritten by "AI 修正需求". Scope is "pending" (review area) or
@@ -512,9 +524,7 @@ func normalizeState(state *State) {
 	if state.ProductExperiences == nil {
 		state.ProductExperiences = []ProductExperience{}
 	}
-	if state.KnowledgeItems == nil {
-		state.KnowledgeItems = []KnowledgeItem{}
-	}
+	ensureKnowledge(state)
 	hasPendingRoot := false
 	for _, f := range state.PendingFolders {
 		if f.ID == "pending-root" {
@@ -625,12 +635,18 @@ func (s *Service) Apply(ctx context.Context, a Action) (Result, error) {
 		err = ackCaseRevision(&st, a)
 	case "deleteReqDoc":
 		err = deleteReqDoc(&st, a)
-	case "createKnowledge":
-		err = createKnowledge(&st, a)
-	case "editKnowledge":
-		err = editKnowledge(&st, a)
-	case "deleteKnowledge":
-		err = deleteKnowledge(&st, a)
+	case "createKnowledgeFolder":
+		err = createKnowledgeFolder(&st, a)
+	case "renameKnowledgeFolder":
+		err = renameKnowledgeFolder(&st, a)
+	case "deleteKnowledgeFolder":
+		err = deleteKnowledgeFolder(&st, a)
+	case "createKnowledgeDoc":
+		err = createKnowledgeDoc(&st, a)
+	case "editKnowledgeDoc":
+		err = editKnowledgeDoc(&st, a)
+	case "deleteKnowledgeDoc":
+		err = deleteKnowledgeDoc(&st, a)
 	case "createIssue":
 		err = createIssue(&st, a)
 	case "reportIssues":
@@ -2167,24 +2183,103 @@ func deleteIssue(s *State, a Action) error {
 	return nil
 }
 
-func knowledgeAt(s *State, id string) (*KnowledgeItem, int) {
-	for i := range s.KnowledgeItems {
-		if s.KnowledgeItems[i].ID == id {
-			return &s.KnowledgeItems[i], i
+func knowledgeFolderAt(s *State, id string) (*KnowledgeFolder, int) {
+	for i := range s.KnowledgeFolders {
+		if s.KnowledgeFolders[i].ID == id {
+			return &s.KnowledgeFolders[i], i
 		}
 	}
 	return nil, -1
 }
 
-func validateKnowledge(a Action) error {
-	if a.Category != KnowledgeConstraint && a.Category != KnowledgeNote {
-		return errors.New("知识库分类无效")
+func knowledgeDocAt(s *State, id string) (*KnowledgeDoc, int) {
+	for i := range s.KnowledgeDocs {
+		if s.KnowledgeDocs[i].ID == id {
+			return &s.KnowledgeDocs[i], i
+		}
 	}
+	return nil, -1
+}
+
+// ensureKnowledge guarantees the root folder and carries entries written by
+// the earlier flat version over: each becomes a document, in a folder named
+// after its category. It is idempotent (folders and documents are keyed by
+// fixed IDs), so repeating it on every load is harmless until the next save
+// drops the legacy list.
+func ensureKnowledge(s *State) {
+	if s.KnowledgeFolders == nil {
+		s.KnowledgeFolders = []KnowledgeFolder{}
+	}
+	if s.KnowledgeDocs == nil {
+		s.KnowledgeDocs = []KnowledgeDoc{}
+	}
+	if f, _ := knowledgeFolderAt(s, knowledgeRoot); f == nil {
+		s.KnowledgeFolders = append([]KnowledgeFolder{{ID: knowledgeRoot, Name: "全部知识", CreatedBy: "system", CreatedAt: now()}}, s.KnowledgeFolders...)
+	}
+	for _, item := range s.KnowledgeItems {
+		folderID, name := "kb-constraint", "约束"
+		if item.Category == "note" {
+			folderID, name = "kb-note", "补充信息"
+		}
+		if f, _ := knowledgeFolderAt(s, folderID); f == nil {
+			s.KnowledgeFolders = append(s.KnowledgeFolders, KnowledgeFolder{ID: folderID, ParentID: knowledgeRoot, Name: name, CreatedBy: "system", CreatedAt: item.CreatedAt})
+		}
+		if d, _ := knowledgeDocAt(s, item.ID); d == nil {
+			s.KnowledgeDocs = append(s.KnowledgeDocs, KnowledgeDoc{ID: item.ID, FolderID: folderID, Title: item.Title, Content: item.Content,
+				CreatedBy: item.CreatedBy, UpdatedBy: item.UpdatedBy, CreatedAt: item.CreatedAt, UpdatedAt: item.UpdatedAt})
+		}
+	}
+	s.KnowledgeItems = nil
+}
+
+func createKnowledgeFolder(s *State, a Action) error {
+	if strings.TrimSpace(a.Name) == "" {
+		return errors.New("文件夹名称不能为空")
+	}
+	if f, _ := knowledgeFolderAt(s, a.ParentID); f == nil {
+		return errors.New("父文件夹不存在")
+	}
+	s.KnowledgeFolders = append(s.KnowledgeFolders, KnowledgeFolder{ID: ID(), ParentID: a.ParentID, Name: strings.TrimSpace(a.Name), CreatedBy: a.Author, CreatedAt: now()})
+	return nil
+}
+
+func renameKnowledgeFolder(s *State, a Action) error {
+	f, _ := knowledgeFolderAt(s, a.FolderID)
+	if f == nil {
+		return errors.New("文件夹不存在")
+	}
+	if strings.TrimSpace(a.Name) == "" {
+		return errors.New("文件夹名称不能为空")
+	}
+	f.Name = strings.TrimSpace(a.Name)
+	return nil
+}
+
+func deleteKnowledgeFolder(s *State, a Action) error {
+	f, i := knowledgeFolderAt(s, a.FolderID)
+	if f == nil {
+		return errors.New("文件夹不存在")
+	}
+	if f.ID == knowledgeRoot {
+		return errors.New("不能删除根目录")
+	}
+	for _, x := range s.KnowledgeFolders {
+		if x.ParentID == f.ID {
+			return errors.New("只能删除空文件夹")
+		}
+	}
+	for _, x := range s.KnowledgeDocs {
+		if x.FolderID == f.ID {
+			return errors.New("只能删除空文件夹")
+		}
+	}
+	s.KnowledgeFolders = append(s.KnowledgeFolders[:i], s.KnowledgeFolders[i+1:]...)
+	return nil
+}
+
+func validateKnowledgeDoc(a Action) error {
 	if strings.TrimSpace(a.Title) == "" {
-		return errors.New("知识库标题不能为空")
-	}
-	if strings.TrimSpace(a.Content) == "" {
-		return errors.New("知识库内容不能为空")
+		return errors.New("知识库文档标题不能为空")
 	}
 	// Counted in characters, not bytes: Chinese text is three bytes per character.
 	if utf8.RuneCountInString(a.Content) > maxKnowledgeChars {
@@ -2193,41 +2288,37 @@ func validateKnowledge(a Action) error {
 	return nil
 }
 
-func createKnowledge(s *State, a Action) error {
-	if err := validateKnowledge(a); err != nil {
-		return err
+func createKnowledgeDoc(s *State, a Action) error {
+	if f, _ := knowledgeFolderAt(s, a.FolderID); f == nil {
+		return errors.New("文件夹不存在")
 	}
-	id := "KB" + now().Format("20060102150405")
-	for n := 1; ; n++ {
-		if item, _ := knowledgeAt(s, id); item == nil {
-			break
-		}
-		id = fmt.Sprintf("KB%s-%d", now().Format("20060102150405"), n)
+	if err := validateKnowledgeDoc(a); err != nil {
+		return err
 	}
 	t := now()
-	s.KnowledgeItems = append(s.KnowledgeItems, KnowledgeItem{ID: id, Category: a.Category, Title: strings.TrimSpace(a.Title), Content: a.Content, CreatedBy: a.Author, UpdatedBy: a.Author, CreatedAt: t, UpdatedAt: t})
+	s.KnowledgeDocs = append(s.KnowledgeDocs, KnowledgeDoc{ID: "KB-" + strings.ToUpper(ID()[:6]), FolderID: a.FolderID, Title: strings.TrimSpace(a.Title), Content: a.Content, CreatedBy: a.Author, UpdatedBy: a.Author, CreatedAt: t, UpdatedAt: t})
 	return nil
 }
 
-func editKnowledge(s *State, a Action) error {
-	item, _ := knowledgeAt(s, a.KnowledgeID)
-	if item == nil {
-		return errors.New("知识库条目不存在")
+func editKnowledgeDoc(s *State, a Action) error {
+	d, _ := knowledgeDocAt(s, a.DocID)
+	if d == nil {
+		return errors.New("知识库文档不存在")
 	}
-	if err := validateKnowledge(a); err != nil {
+	if err := validateKnowledgeDoc(a); err != nil {
 		return err
 	}
-	item.Category, item.Title, item.Content = a.Category, strings.TrimSpace(a.Title), a.Content
-	item.UpdatedBy, item.UpdatedAt = a.Author, now()
+	d.Title, d.Content = strings.TrimSpace(a.Title), a.Content
+	d.UpdatedBy, d.UpdatedAt = a.Author, now()
 	return nil
 }
 
-func deleteKnowledge(s *State, a Action) error {
-	_, i := knowledgeAt(s, a.KnowledgeID)
+func deleteKnowledgeDoc(s *State, a Action) error {
+	_, i := knowledgeDocAt(s, a.DocID)
 	if i < 0 {
-		return errors.New("知识库条目不存在")
+		return errors.New("知识库文档不存在")
 	}
-	s.KnowledgeItems = append(s.KnowledgeItems[:i], s.KnowledgeItems[i+1:]...)
+	s.KnowledgeDocs = append(s.KnowledgeDocs[:i], s.KnowledgeDocs[i+1:]...)
 	return nil
 }
 

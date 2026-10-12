@@ -1427,40 +1427,98 @@ func TestProductExplorationMergesNewParagraphsPerOrigin(t *testing.T) {
 	}
 }
 
-func TestKnowledgeItemsCreateEditDelete(t *testing.T) {
+func TestKnowledgeFoldersAndDocs(t *testing.T) {
 	service := core.NewService(store.NewMemory())
-	state := apply(t, service, core.Action{Type: "createKnowledge", Category: core.KnowledgeConstraint, Title: " 新需求需检查飞书推送 ", Content: "每个新需求都要覆盖飞书推送", Author: "alice"})
-	if len(state.KnowledgeItems) != 1 {
-		t.Fatalf("want one item, got %+v", state.KnowledgeItems)
+	state := apply(t, service, core.Action{Type: "createKnowledgeFolder", Name: " 业务规则 ", ParentID: "kb-root", Author: "alice"})
+	var folder core.KnowledgeFolder
+	for _, f := range state.KnowledgeFolders {
+		if f.Name == "业务规则" {
+			folder = f
+		}
 	}
-	item := state.KnowledgeItems[0]
-	if item.Title != "新需求需检查飞书推送" || item.CreatedBy != "alice" || item.ID == "" {
-		t.Fatalf("unexpected item %+v", item)
+	if folder.ID == "" || folder.ParentID != "kb-root" {
+		t.Fatalf("folder not created under the root: %+v", state.KnowledgeFolders)
 	}
-	state = apply(t, service, core.Action{Type: "editKnowledge", KnowledgeID: item.ID, Category: core.KnowledgeNote, Title: item.Title, Content: "补充：推送走内部机器人", Author: "bob"})
-	if got := state.KnowledgeItems[0]; got.Category != core.KnowledgeNote || got.Content != "补充：推送走内部机器人" || got.UpdatedBy != "bob" || got.CreatedBy != "alice" {
+	state = apply(t, service, core.Action{Type: "createKnowledgeDoc", FolderID: folder.ID, Title: " 新需求需检查飞书推送 ", Content: "每个新需求都要覆盖飞书推送", Author: "alice"})
+	if len(state.KnowledgeDocs) != 1 || state.KnowledgeDocs[0].Title != "新需求需检查飞书推送" || !strings.HasPrefix(state.KnowledgeDocs[0].ID, "KB-") {
+		t.Fatalf("unexpected docs %+v", state.KnowledgeDocs)
+	}
+	doc := state.KnowledgeDocs[0]
+	state = apply(t, service, core.Action{Type: "editKnowledgeDoc", DocID: doc.ID, Title: doc.Title, Content: "补充：推送走内部机器人", Author: "bob"})
+	if got := state.KnowledgeDocs[0]; got.Content != "补充：推送走内部机器人" || got.UpdatedBy != "bob" || got.CreatedBy != "alice" {
 		t.Fatalf("edit not applied: %+v", got)
 	}
+	// An empty body is fine (a document is created empty, then edited), a 100k-character Chinese body too.
+	apply(t, service, core.Action{Type: "createKnowledgeDoc", FolderID: folder.ID, Title: "空文档"})
+	apply(t, service, core.Action{Type: "createKnowledgeDoc", FolderID: folder.ID, Title: "长文", Content: strings.Repeat("字", 100000)})
 	for name, a := range map[string]core.Action{
-		"bad category": {Type: "createKnowledge", Category: "bug", Title: "x", Content: "x"},
-		"empty title":  {Type: "createKnowledge", Category: core.KnowledgeNote, Title: " ", Content: "x"},
-		"empty body":   {Type: "createKnowledge", Category: core.KnowledgeNote, Title: "x", Content: " "},
-		"missing item": {Type: "editKnowledge", KnowledgeID: "nope", Category: core.KnowledgeNote, Title: "x", Content: "x"},
-		"delete miss":  {Type: "deleteKnowledge", KnowledgeID: "nope"},
+		"empty folder name":     {Type: "createKnowledgeFolder", Name: " ", ParentID: "kb-root"},
+		"missing parent":        {Type: "createKnowledgeFolder", Name: "x", ParentID: "nope"},
+		"rename missing":        {Type: "renameKnowledgeFolder", FolderID: "nope", Name: "x"},
+		"empty doc title":       {Type: "createKnowledgeDoc", FolderID: folder.ID, Title: " "},
+		"missing doc folder":    {Type: "createKnowledgeDoc", FolderID: "nope", Title: "x"},
+		"over-limit content":    {Type: "editKnowledgeDoc", DocID: doc.ID, Title: "x", Content: strings.Repeat("字", 200001)},
+		"edit missing":          {Type: "editKnowledgeDoc", DocID: "nope", Title: "x"},
+		"delete missing doc":    {Type: "deleteKnowledgeDoc", DocID: "nope"},
+		"delete root":           {Type: "deleteKnowledgeFolder", FolderID: "kb-root"},
+		"delete non-empty":      {Type: "deleteKnowledgeFolder", FolderID: folder.ID},
+		"delete missing folder": {Type: "deleteKnowledgeFolder", FolderID: "nope"},
 	} {
 		if _, err := service.Apply(context.Background(), a); err == nil {
 			t.Fatalf("%s must be rejected", name)
 		}
 	}
-	// The limit is in characters: 100k Chinese characters (300 KB) are fine, 200001 are not.
-	apply(t, service, core.Action{Type: "createKnowledge", Category: core.KnowledgeNote, Title: "长文", Content: strings.Repeat("字", 100000)})
-	if _, err := service.Apply(context.Background(), core.Action{Type: "createKnowledge", Category: core.KnowledgeNote, Title: "超长", Content: strings.Repeat("字", 200001)}); err == nil || !strings.Contains(err.Error(), "200000") {
-		t.Fatalf("over-limit content must be rejected with the limit in the message, got %v", err)
+	state = apply(t, service, core.Action{Type: "renameKnowledgeFolder", FolderID: folder.ID, Name: "约束"})
+	for _, d := range state.KnowledgeDocs {
+		apply(t, service, core.Action{Type: "deleteKnowledgeDoc", DocID: d.ID})
 	}
-	state = apply(t, service, core.Action{Type: "deleteKnowledge", KnowledgeID: item.ID})
-	if len(state.KnowledgeItems) != 1 || state.KnowledgeItems[0].Title != "长文" {
-		t.Fatalf("only the deleted item should be gone: %+v", state.KnowledgeItems)
+	state = apply(t, service, core.Action{Type: "deleteKnowledgeFolder", FolderID: folder.ID})
+	if len(state.KnowledgeDocs) != 0 || len(state.KnowledgeFolders) != 1 || state.KnowledgeFolders[0].ID != "kb-root" {
+		t.Fatalf("only the root should remain: %+v %+v", state.KnowledgeFolders, state.KnowledgeDocs)
 	}
+}
+
+func TestLegacyKnowledgeItemsBecomeDocs(t *testing.T) {
+	repo := store.NewMemory()
+	old := core.Seed()
+	old.KnowledgeItems = []core.LegacyKnowledgeItem{
+		{ID: "KB20261012083643", Category: "constraint", Title: "飞书推送", Content: "必须检查", CreatedBy: "alice", UpdatedBy: "alice"},
+		{ID: "KB20261012083644", Category: "note", Title: "环境说明", Content: "每晚重置", CreatedBy: "bob", UpdatedBy: "bob"},
+	}
+	if err := repo.Save(context.Background(), old); err != nil {
+		t.Fatal(err)
+	}
+	service := core.NewService(repo)
+	check := func(state core.State) {
+		t.Helper()
+		if len(state.KnowledgeItems) != 0 || len(state.KnowledgeDocs) != 2 {
+			t.Fatalf("legacy entries were not carried over: %+v", state)
+		}
+		folders := map[string]string{}
+		for _, f := range state.KnowledgeFolders {
+			folders[f.ID] = f.Name
+		}
+		if folders["kb-root"] == "" || folders["kb-constraint"] != "约束" || folders["kb-note"] != "补充信息" {
+			t.Fatalf("unexpected folders %+v", folders)
+		}
+		for _, d := range state.KnowledgeDocs {
+			want := map[string]string{"KB20261012083643": "kb-constraint", "KB20261012083644": "kb-note"}[d.ID]
+			if d.FolderID != want || d.Content == "" {
+				t.Fatalf("doc %+v is in the wrong folder", d)
+			}
+		}
+	}
+	state, err := service.State(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	check(state)
+	// Reading again, then writing, must not duplicate anything.
+	state, _ = service.State(context.Background())
+	check(state)
+	check(apply(t, service, core.Action{Type: "createIssue", RequirementID: "REQ-0001", Title: "触发一次保存", Description: "x"}))
+	state, _ = service.State(context.Background())
+	check(state)
 }
 
 func TestEditScriptKeepsGenerationSnapshots(t *testing.T) {

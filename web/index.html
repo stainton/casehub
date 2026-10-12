@@ -95,12 +95,14 @@
   </main>
   <main id="kb-workspace" class="hidden">
     <aside id="kb-sidebar">
-      <div class="sidebar-head"><strong>知识库</strong><button type="button" id="create-kb">＋ 新建条目</button></div>
+      <div class="sidebar-head"><strong>知识库</strong></div>
       <div id="kb-list" class="versions"></div>
+      <button class="create-version" id="create-kb-folder">＋ 新建文件夹</button>
+      <button class="create-version" id="create-kb-doc">＋ 新增文档</button>
     </aside>
     <div id="kb-resize-left" class="resizer"></div>
     <section id="kb-content">
-      <div id="kb-empty" class="empty"><div class="empty-icon">📚</div><h2>从一个条目开始</h2><p>记录人工整理的约束和补充信息，例如业务规则、测试注意事项、环境说明。产品缺陷请记录到问题单管理。</p><button type="button" id="kb-empty-create">新建条目</button></div>
+      <div id="kb-empty" class="empty"><div class="empty-icon">📚</div><h2>从一个文档开始</h2><p>选择左侧的文件夹或文档，即可在这里查看和编辑。知识库用来记录人工整理的约束和补充信息，例如业务规则、测试注意事项、环境说明；产品缺陷请记录到问题单管理。</p></div>
       <div id="kb-detail" class="hidden"></div>
     </section>
   </main>

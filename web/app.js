@@ -19,7 +19,7 @@ const esc=s=>String(s??'').replace(/[&<>'"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&
 const fmt=s=>s?new Date(s).toLocaleString():'—';
 const version=id=>state.versions.find(v=>v.id===id), folders=id=>state.folders.filter(f=>f.VersionID===id), cases=id=>state.cases.filter(c=>c.VersionID===id);
 async function request(path,options){let r=await fetch(path,options),x;try{x=await r.json()}catch(err){if(r.ok)throw err;const e=Error(`服务返回了无法解析的响应（HTTP ${r.status}），可能被网关拦截或服务异常`);e.status=r.status;throw e}if(!r.ok){let e=Error(x.error||'请求失败');e.status=r.status;e.conflicts=x.conflicts;throw e}return x}
-function normalizeState(s){s=s||{};for(const key of ['versions','folders','cases','histories','records','tasks','reqFolders','reqDocs','issues','knowledgeItems','pendingFolders','pendingCases','scripts','scriptVersions','productExperiences'])if(!Array.isArray(s[key]))s[key]=[];return s}
+function normalizeState(s){s=s||{};for(const key of ['versions','folders','cases','histories','records','tasks','reqFolders','reqDocs','issues','knowledgeFolders','knowledgeDocs','pendingFolders','pendingCases','scripts','scriptVersions','productExperiences'])if(!Array.isArray(s[key]))s[key]=[];return s}
 async function refresh(){state=normalizeState(await request('/api/state'));let changed=false;state.folders.filter(f=>f.VersionID==='main').forEach(f=>{const key=`main:${f.ID}`;if(!openMainlineFolders.has(key)&&!closedFolders.has(key)){closedFolders.add(key);changed=true}});if(changed)saveClosedFolders();render();}
 async function act(type,data={},retry=false){try{let out=await request('/api/action',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({Type:type,Author:'本地用户',...data})});state=normalizeState(out.state);if(out.warnings?.length)toast(out.warnings.join('；'));render();return out}catch(e){if(e.status===409&&type.startsWith('merge')){alert(`${e.message}\n冲突用例：${(e.conflicts||[]).join(', ')}\n请拉取主线，然后打开冲突用例编辑并确认人工处理。`)}else if(e.status===409&&!retry&&confirm(`${e.message}\n冲突用例：${(e.conflicts||[]).join(', ')}\n是否以当前编辑内容作为人工解决结果？`))return act(type,{...data,Force:true},true);toast(e.message,true);throw e}}
 function render(){ renderVersions();renderTasks();renderFocus();if(recordTask)$('#edit-case')?.remove();updateBulk();if(location.hash)renderHistoryRoute();renderReqTree();renderReviewTree();renderScriptTree();renderAutoFocus();renderIssueList();renderIssueFocus();renderKnowledgeList();renderKnowledgeFocus(); }
@@ -1282,52 +1282,81 @@ function renderIssueFocus(){
 $('#create-issue').onclick=$('#issue-empty-create').onclick=startIssueCreate;
 
 // ---- 知识库 ------------------------------------------------------------------
-// 人工写的约束和补充信息，Markdown 正文；产品缺陷不放这里（问题单管理）。目前只存储，不随 AI 请求发送。
-const KB_CATEGORIES=[['constraint','约束','🔒'],['note','补充信息','📝']];
-let kbFocus=null,kbEditor=null,kbViewer=null;
-const kbByID=id=>state.knowledgeItems.find(item=>item.ID===id);
-const kbCategory=key=>KB_CATEGORIES.find(c=>c[0]===key)||KB_CATEGORIES[1];
-const closedKbGroups=new Set(); // 默认全部展开
-function disposeKbEditors(){kbEditor?.destroy();kbViewer?.destroy();kbEditor=kbViewer=null}
+// 和需求文档同构：文件夹树 + Markdown 文档，同样落在 CaseHub 数据库的 state 里。存放人工整理的约束和补充信息；
+// 产品缺陷不放这里（问题单管理）。目前只用于存储，内容不会随 AI 请求发送。
+let kbFocus=null,kbEditor=null,kbShown=null;
+const closedKbFolders=collapseSet('casehub-open-kb-folders');
+const kbFolder=id=>state.knowledgeFolders.find(f=>f.ID===id);
+const kbChildren=id=>state.knowledgeFolders.filter(f=>f.ParentID===id);
+const kbDocsIn=id=>state.knowledgeDocs.filter(d=>d.FolderID===id);
+const kbDoc=id=>state.knowledgeDocs.find(d=>d.ID===id);
+const kbRoots=()=>state.knowledgeFolders.filter(f=>!f.ParentID||!state.knowledgeFolders.some(x=>x.ID===f.ParentID));
+function kbDescendants(f){const out=[];(function walk(id){kbChildren(id).forEach(x=>{out.push(x.ID);walk(x.ID)})})(f.ID);return out}
+function kbTreeHTML(){
+  const docRow=(d,depth)=>`<div class="tree-row case-row${kbFocus?.type==='doc'&&kbFocus.id===d.ID?' active':''}" style="padding-left:${8+depth*17}px" data-kb-doc="${esc(d.ID)}"><span class="label">📄 ${esc(d.Title)}</span></div>`;
+  const node=(f,depth)=>`<div class="tree-row folder-row${kbFocus?.type==='folder'&&kbFocus.id===f.ID?' active':''}" style="padding-left:${8+depth*17}px" data-kb-folder="${esc(f.ID)}"><span class="chev">▾</span><span>📁</span><span class="label">${esc(f.Name)}</span></div><div>${kbDocsIn(f.ID).map(d=>docRow(d,depth+1)).join('')}${kbChildren(f.ID).map(c=>node(c,depth+1)).join('')}</div>`;
+  return kbRoots().map(r=>node(r,0)).join('')||'<p class="meta">暂无知识库文档</p>';
+}
 function renderKnowledgeList(){
-  const list=$('#kb-list');if(!list)return;
-  const items=[...state.knowledgeItems].sort((a,b)=>String(b.UpdatedAt).localeCompare(String(a.UpdatedAt)));
-  const row=item=>`<div class="tree-row issue-row${kbFocus?.id===item.ID?' active':''}" data-kb="${esc(item.ID)}" style="padding-left:34px"><span>${kbCategory(item.Category)[2]}</span><span class="label"><b>${esc(item.Title)}</b><small>${fmt(item.UpdatedAt)}</small></span></div>`;
-  list.innerHTML=items.length?KB_CATEGORIES.map(([key,label,icon])=>{const mine=items.filter(x=>kbCategory(x.Category)[0]===key);return mine.length?`<div class="tree-row folder-row${closedKbGroups.has(key)?' closed':''}" data-kb-group="${key}"><span class="chev">▾</span><span>${icon}</span><span class="label">${label}</span><span class="badge">${mine.length}</span></div><div>${mine.map(row).join('')}</div>`:''}).join(''):'<p class="meta">暂无条目</p>';
-  list.querySelectorAll('[data-kb-group]').forEach(r=>{r.onclick=()=>{const closed=r.classList.toggle('closed');closed?closedKbGroups.add(r.dataset.kbGroup):closedKbGroups.delete(r.dataset.kbGroup)}});
-  const open=id=>{kbFocus={type:'item',id};renderKnowledgeList();renderKnowledgeFocus()};
-  list.querySelectorAll('[data-kb]').forEach(r=>{r.onclick=()=>open(r.dataset.kb);r.oncontextmenu=event=>menu(event,[['查看详情',()=>open(r.dataset.kb)],['编辑',()=>startKbEdit(kbByID(r.dataset.kb))],['删除',()=>deleteKb(kbByID(r.dataset.kb))]])});
+  const box=$('#kb-list');if(!box)return;
+  box.innerHTML=kbTreeHTML();
+  box.querySelectorAll('[data-kb-folder]').forEach(e=>{const key=e.dataset.kbFolder;if(closedKbFolders.has(key))e.classList.add('closed');e.querySelector('.chev').onclick=x=>{x.stopPropagation();const closed=e.classList.toggle('closed');closed?closedKbFolders.add(key):closedKbFolders.delete(key)};e.onclick=()=>setKbFocus({type:'folder',id:key});e.oncontextmenu=x=>menu(x,kbFolderMenu(key))});
+  box.querySelectorAll('[data-kb-doc]').forEach(e=>{e.onclick=()=>setKbFocus({type:'doc',id:e.dataset.kbDoc});e.oncontextmenu=x=>menu(x,kbDocMenu(e.dataset.kbDoc))});
 }
-function startKbCreate(){kbFocus={type:'create'};renderKnowledgeList();renderKnowledgeFocus()}
-function startKbEdit(item){if(!item)return;kbFocus={type:'item',id:item.ID,editing:true};renderKnowledgeList();renderKnowledgeFocus()}
-async function deleteKb(item){if(!item||!confirm(`确定删除知识库条目「${item.Title}」？`))return;await act('deleteKnowledge',{KnowledgeID:item.ID});if(kbFocus?.id===item.ID)kbFocus=null;renderKnowledgeList();renderKnowledgeFocus()}
-function kbFormHTML(item){
-  const options=KB_CATEGORIES.map(([key,label])=>`<option value="${key}"${(item?.Category||'constraint')===key?' selected':''}>${label}</option>`).join('');
-  return `<div class="detail-head"><div><div class="eyebrow">${item?'编辑条目':'新建条目'}</div><h1>${item?esc(item.Title):'新建知识库条目'}</h1></div><div class="detail-actions"><button type="button" class="secondary" id="kb-cancel">取消</button><button type="button" id="kb-save">保存</button></div></div><div class="card"><div class="issue-form-meta"><label>标题<input id="kb-title" required value="${esc(item?.Title||'')}"></label><label>分类<select id="kb-category">${options}</select></label></div><div class="issue-editor-label">内容</div><div id="kb-editor"></div></div>`;
+function setKbFocus(x){
+  const start=x.type==='doc'?kbDoc(x.id)?.FolderID:x.id;
+  openAncestors(closedKbFolders,state.knowledgeFolders,start,id=>id);
+  kbFocus=x;kbShown=null;renderKnowledgeList();renderKnowledgeFocus();
 }
+function disposeKbEditor(){kbEditor?.destroy();kbEditor=null}
 function renderKnowledgeFocus(){
   const empty=$('#kb-empty'),detail=$('#kb-detail');if(!empty||!detail)return;
-  disposeKbEditors();
-  if(!kbFocus){empty.classList.remove('hidden');detail.classList.add('hidden');return}
+  if(!kbFocus){disposeKbEditor();kbShown=null;empty.classList.remove('hidden');detail.classList.add('hidden');return}
   empty.classList.add('hidden');detail.classList.remove('hidden');
-  const item=kbFocus.type==='item'?kbByID(kbFocus.id):null;
-  if(kbFocus.type==='item'&&!item){kbFocus=null;return renderKnowledgeFocus()}
-  if(kbFocus.type==='create'||kbFocus.editing){
-    detail.innerHTML=kbFormHTML(item);
-    kbEditor=issueEditor($('#kb-editor'),item?.Content,'460px');
-    $('#kb-cancel').onclick=()=>{kbFocus=item?{type:'item',id:item.ID}:null;renderKnowledgeList();renderKnowledgeFocus()};
-    // 保存期间按钮显示"保存中…"并禁用：请求挂住时能看出是在等服务端，也避免重复提交。
-    // 接口错误 act 已经提示过；其余错误（渲染异常等）以前被吞掉，现在提示并写到控制台，避免"点了没反应"。
-    $('#kb-save').onclick=async e=>{const btn=e.currentTarget,label=btn.textContent;btn.disabled=true;btn.textContent='保存中…';try{const data={Title:$('#kb-title').value,Category:$('#kb-category').value,Content:kbEditor.getMarkdown()};const before=new Set(state.knowledgeItems.map(x=>x.ID));await act(item?'editKnowledge':'createKnowledge',{...data,...(item?{KnowledgeID:item.ID}:{})});kbFocus={type:'item',id:item?item.ID:state.knowledgeItems.find(x=>!before.has(x.ID))?.ID};renderKnowledgeList();renderKnowledgeFocus();toast(item?'条目已保存':'条目已创建')}catch(err){if(!err?.status){console.error('知识库保存失败',err);toast(`保存失败：${err?.message||err}`,true)}}finally{if(btn.isConnected){btn.disabled=false;btn.textContent=label}}};
+  if(kbFocus.type==='folder'){
+    const f=kbFolder(kbFocus.id);
+    if(!f){kbFocus=null;return renderKnowledgeFocus()}
+    disposeKbEditor();kbShown=null;
+    const sub=kbDescendants(f),count=state.knowledgeDocs.filter(x=>x.FolderID===f.ID||sub.includes(x.FolderID)).length;
+    detail.innerHTML=`<div class="detail-head"><div><div class="eyebrow">知识库文件夹</div><h1>📁 ${esc(f.Name)}</h1></div><div class="detail-actions"><button type="button" class="secondary" id="kb-new-folder">新建文件夹</button><button type="button" id="kb-new-doc">新增文档</button></div></div><div class="card meta-grid"><span>文档 <b>${count}</b></span><span>子文件夹 <b>${sub.length}</b></span><span>创建者 <b>${esc(f.CreatedBy)}</b></span><span>创建时间 <b>${fmt(f.CreatedAt)}</b></span></div>`;
+    $('#kb-new-folder').onclick=()=>kbFolderModal(f.ID);$('#kb-new-doc').onclick=()=>kbDocModal(f.ID);
     return;
   }
-  const [,label,icon]=kbCategory(item.Category);
-  detail.innerHTML=`<div class="detail-head"><div><div class="eyebrow">${icon} ${label}</div><h1>${esc(item.Title)}</h1></div><div class="detail-actions"><button type="button" class="secondary" id="kb-edit">编辑</button><button type="button" class="secondary" id="kb-delete">删除</button></div></div><div class="card meta-grid"><span>创建者 <b>${esc(item.CreatedBy)}</b></span><span>创建时间 <b>${fmt(item.CreatedAt)}</b></span><span>更新者 <b>${esc(item.UpdatedBy)}</b></span><span>更新时间 <b>${fmt(item.UpdatedAt)}</b></span></div><div class="card"><div id="kb-view" class="issue-viewer"></div></div>`;
-  $('#kb-view').classList.toggle('toastui-editor-dark',document.documentElement.classList.contains('dark'));
-  kbViewer=toastui.Editor.factory({el:$('#kb-view'),viewer:true,initialValue:item.Content||'',usageStatistics:false});
-  $('#kb-edit').onclick=()=>startKbEdit(item);$('#kb-delete').onclick=()=>deleteKb(item);
+  const doc=kbDoc(kbFocus.id);
+  if(!doc){kbFocus=null;return renderKnowledgeFocus()}
+  // 其他操作（后台任务写回结果等）会触发整页重绘；同一份文档没有变化时不重建编辑器，避免丢掉还没保存的输入。
+  const sig=`${doc.ID}|${doc.UpdatedAt}|${doc.Title}`;
+  if(kbEditor&&kbShown===sig&&$('#kb-editor')?.isConnected)return;
+  disposeKbEditor();kbShown=sig;
+  detail.innerHTML=`<div class="detail-head"><div><div class="eyebrow">${esc(doc.ID)}</div><h1>${esc(doc.Title)}</h1></div><div class="detail-actions"><button type="button" class="secondary" id="kb-rename">重命名</button><button type="button" class="secondary" id="kb-delete">删除</button><button type="button" id="kb-save">保存</button></div></div><div class="card meta-grid"><span>创建者 <b>${esc(doc.CreatedBy)}</b></span><span>创建时间 <b>${fmt(doc.CreatedAt)}</b></span><span>更新者 <b>${esc(doc.UpdatedBy)}</b></span><span>更新时间 <b>${fmt(doc.UpdatedAt)}</b></span></div><div class="card"><div id="kb-editor"></div></div>`;
+  kbEditor=new toastui.Editor({el:$('#kb-editor'),height:'520px',initialEditType:'wysiwyg',previewStyle:'tab',initialValue:doc.Content||'',language:'zh-CN',theme:document.documentElement.classList.contains('dark')?'dark':'light',usageStatistics:false});
+  $('#kb-rename').onclick=()=>kbRenameDocModal(doc);
+  $('#kb-delete').onclick=()=>deleteKbDoc(doc);
+  $('#kb-save').onclick=e=>saveKbDoc(doc,e.currentTarget);
 }
-$('#create-kb').onclick=$('#kb-empty-create').onclick=startKbCreate;
+// 保存期间按钮显示"保存中…"并禁用：请求挂住时能看出是在等服务端，也避免重复提交。
+// 接口错误 act 已经提示过；其余错误（渲染异常等）以前会被吞掉，现在提示并写到控制台，避免"点了没反应"。
+async function saveKbDoc(doc,btn){
+  const label=btn.textContent;btn.disabled=true;btn.textContent='保存中…';
+  try{await act('editKnowledgeDoc',{DocID:doc.ID,Title:doc.Title,Content:kbEditor.getMarkdown()});toast('知识库文档已保存')}
+  catch(err){if(!err?.status){console.error('知识库保存失败',err);toast(`保存失败：${err?.message||err}`,true)}}
+  finally{if(btn.isConnected){btn.disabled=false;btn.textContent=label}}
+}
+async function deleteKbDoc(doc){if(!doc||!confirm(`确定删除知识库文档「${doc.Title}」？`))return;try{await act('deleteKnowledgeDoc',{DocID:doc.ID});if(kbFocus?.id===doc.ID)kbFocus=null;renderKnowledgeList();renderKnowledgeFocus()}catch{}}
+function currentKbFolderTarget(){
+  if(kbFocus?.type==='folder')return kbFocus.id;
+  if(kbFocus?.type==='doc'){const d=kbDoc(kbFocus.id);if(d)return d.FolderID}
+  return kbRoots()[0]?.ID||'';
+}
+function kbFolderMenu(id){const items=[['查看详情',()=>setKbFocus({type:'folder',id})],['新建文件夹',()=>kbFolderModal(id)],['新增文档',()=>kbDocModal(id)],['重命名文件夹',()=>kbRenameFolderModal(id)]];if(id!=='kb-root')items.push(['删除空文件夹',()=>{if(confirm('确定删除这个空文件夹？'))act('deleteKnowledgeFolder',{FolderID:id}).then(()=>{if(kbFocus?.id===id)kbFocus=null;renderKnowledgeFocus()}).catch(()=>{})}]);return items}
+function kbDocMenu(id){const doc=kbDoc(id);return [['查看详情',()=>setKbFocus({type:'doc',id})],['重命名',()=>kbRenameDocModal(doc)],['删除',()=>deleteKbDoc(doc)]]}
+function kbFolderModal(parent){showModal('新建文件夹',`<label>文件夹名称<input name="Name" required></label>`,x=>act('createKnowledgeFolder',{...x,ParentID:parent}))}
+function kbRenameFolderModal(id){const f=kbFolder(id);showModal('重命名文件夹',`<label>文件夹名称<input name="Name" required value="${esc(f.Name)}"></label>`,x=>act('renameKnowledgeFolder',{...x,FolderID:id}))}
+function kbDocModal(folderId){showModal('新增知识库文档',`<label>标题<input name="Title" required></label>`,async x=>{const before=new Set(state.knowledgeDocs.map(d=>d.ID));await act('createKnowledgeDoc',{...x,FolderID:folderId,Content:''});const made=state.knowledgeDocs.find(d=>!before.has(d.ID));if(made)setKbFocus({type:'doc',id:made.ID})})}
+// 重命名时带上编辑器里还没保存的内容，避免改名把它冲掉。
+function kbRenameDocModal(doc){showModal('重命名知识库文档',`<label>标题<input name="Title" required value="${esc(doc.Title)}"></label>`,x=>act('editKnowledgeDoc',{...x,DocID:doc.ID,Content:kbEditor&&kbFocus?.id===doc.ID?kbEditor.getMarkdown():doc.Content}))}
+$('#create-kb-folder').onclick=()=>kbFolderModal(currentKbFolderTarget());
+$('#create-kb-doc').onclick=()=>kbDocModal(currentKbFolderTarget());
 
 // ---- Page tab bar (用例管理 / 需求管理) ----
 function setPage(p){
