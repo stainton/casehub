@@ -1564,6 +1564,55 @@ func TestIssueWorkflowKeepsRequirementLink(t *testing.T) {
 	}
 }
 
+func TestHealedScriptFollowsTheCaseTextItWasRepairedAgainst(t *testing.T) {
+	svc := core.NewService(store.NewMemory())
+	st := apply(t, svc, core.Action{Type: "createVersion", Name: "heal-snapshot"})
+	vid := branchID(t, st, "heal-snapshot")
+	st = apply(t, svc, core.Action{Type: "saveScript", VersionID: vid, CaseID: "CASE-0001", ScriptCode: "original", ScriptSummary: "original"})
+	generated := scriptFor(t, st, vid, "CASE-0001")
+	edit := func(steps string) core.State {
+		return apply(t, svc, core.Action{Type: "editCase", VersionID: vid, CaseID: "CASE-0001", Title: "新标题", Preconditions: "用户账号已启用", Steps: steps, Expected: "进入系统首页", Priority: "P0"})
+	}
+	// The case changes after the script was generated, so the script is generated from older text.
+	st = edit("1. 打开登录页\n2. 改过的步骤")
+	var current core.TestCase
+	for _, c := range st.Cases {
+		if c.VersionID == vid && c.ID == "CASE-0001" {
+			current = c
+		}
+	}
+	if scriptFor(t, st, vid, "CASE-0001").FromSteps == current.Steps {
+		t.Fatal("setup: the script should be stale before the repair")
+	}
+	repair := func(base core.Script, job string, from *core.TestCase) core.State {
+		a := core.Action{Type: "saveHealedScript", VersionID: vid, CaseID: "CASE-0001", ScriptBaseID: base.ID, ScriptBaseRevision: base.Revision, ScriptBaseUpdatedAt: base.UpdatedAt,
+			ScriptStatus: "generated", ScriptCode: "repaired " + job, ScriptJobID: job, ScriptSummary: "修复"}
+		if from != nil {
+			a.ScriptFromPreconditions, a.ScriptFromSteps, a.ScriptFromExpected = &from.Preconditions, &from.Steps, &from.Expected
+		}
+		return apply(t, svc, a)
+	}
+	// Without the text the repair was verified against, the snapshot is left alone (older clients).
+	st = repair(scriptFor(t, st, vid, "CASE-0001"), "job-1", nil)
+	if got := scriptFor(t, st, vid, "CASE-0001"); got.FromSteps != generated.FromSteps || got.Code != "repaired job-1" {
+		t.Fatalf("no snapshot sent, but the script's was changed: %+v", got)
+	}
+	// With it, the script now corresponds to the repaired-against text, and reads with the case's current title.
+	st = repair(scriptFor(t, st, vid, "CASE-0001"), "job-2", &current)
+	got := scriptFor(t, st, vid, "CASE-0001")
+	if got.FromPreconditions != current.Preconditions || got.FromSteps != current.Steps || got.FromExpected != current.Expected || got.Title != "新标题" || got.Code != "repaired job-2" {
+		t.Fatalf("snapshot not refreshed by the repair: %+v", got)
+	}
+	// A case edited while the repair ran is still reported as changed: the snapshot is what the healer saw.
+	sent := current
+	st = edit("1. 打开登录页\n2. 修复期间又改了")
+	st = repair(scriptFor(t, st, vid, "CASE-0001"), "job-3", &sent)
+	got = scriptFor(t, st, vid, "CASE-0001")
+	if got.FromSteps != sent.Steps || got.FromSteps == "1. 打开登录页\n2. 修复期间又改了" {
+		t.Fatalf("the snapshot must be the text the healer was sent, got %q", got.FromSteps)
+	}
+}
+
 func TestSaveHealedScriptProtectsOriginalAndConcurrentEdits(t *testing.T) {
 	svc := core.NewService(store.NewMemory())
 	st := apply(t, svc, core.Action{Type: "createVersion", Name: "heal"})

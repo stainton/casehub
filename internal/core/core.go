@@ -338,6 +338,9 @@ type Action struct {
 	ScriptDeviations                           []RiskNote
 	ScriptMissingInputs                        []string
 	ScriptAssetIDs                             []string
+	// saveHealedScript: the case text the repair was verified against (what the healer was sent). Together they
+	// refresh the script's From* snapshot; omitted, the snapshot is left as it was.
+	ScriptFromPreconditions, ScriptFromSteps, ScriptFromExpected *string
 	// reportIssues: product defects found by planner/generator jobs.
 	Reports []IssueReport
 	// reviseReqDoc: the cases the AI rewrote along with the requirement. ackCaseRevision
@@ -1090,6 +1093,16 @@ func saveHealedScript(s *State, a Action) error {
 	}
 	script.Summary = strings.TrimSpace(a.ScriptSummary)
 	script.JobID = a.ScriptJobID
+	// A repair is verified against the case text the healer received, so the script now corresponds to that text:
+	// move the snapshot (and the title it reads with) forward, otherwise a script repaired after its case changed
+	// would stay flagged as generated from the old case. The snapshot is the text sent, not the case as it is
+	// now, so a case edited while the repair ran is still reported as changed.
+	if a.ScriptFromPreconditions != nil && a.ScriptFromSteps != nil && a.ScriptFromExpected != nil {
+		script.FromPreconditions, script.FromSteps, script.FromExpected = *a.ScriptFromPreconditions, *a.ScriptFromSteps, *a.ScriptFromExpected
+		if c, _ := caseAt(s, a.VersionID, a.CaseID); c != nil {
+			script.Title = c.Title
+		}
+	}
 	return nil
 }
 
