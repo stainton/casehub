@@ -12,7 +12,8 @@ let openTasks=persistedSet('casehub-open-tasks'), closedTaskVersions=collapseSet
 let page='cases', reqFocus=null, reqEditor=null, reqSidebarWidth=null, aiDoc=null, reqPage='docs';
 const aiFixInFlight=new Set(); // 正在 AI 修正的用例：`${versionID}:${caseID}`
 let issueFocus=null, issueDescriptionEditor=null, issueCauseEditor=null, issueViewers=[];
-let aiSource=null, aiPlannerEnabled=null;
+const aiSources=new Map(); // 正在订阅进度的 planner 任务：jobId -> EventSource（批量设计时同时有多个）
+let aiPlannerEnabled=null;
 let caseViewMode='friendly'; // 'friendly' | 'raw' — applies to whichever case detail is currently shown
 let caseViewFor=null; // simplifyKey of the case caseViewMode was chosen for; opening another case re-picks the default
 const esc=s=>String(s??'').replace(/[&<>'"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]));
@@ -400,7 +401,7 @@ function reqDescendantFolders(f){let out=[];function walk(id){reqChildren(id).fo
 function reqTreeHTML(){
   function node(f,depth){
     let children=reqChildren(f.ID),own=reqDocsIn(f.ID);
-    return `<div class="tree-row folder-row${reqFocus?.type==='folder'&&reqFocus.id===f.ID?' active':''}" style="padding-left:${8+depth*17}px" data-req-folder="${f.ID}"><span class="chev">▾</span><span>📁</span><span class="label">${esc(f.Name)}</span></div><div>${own.map(d=>reqDocRow(d,depth+1)).join('')}${children.map(ch=>node(ch,depth+1)).join('')}</div>`;
+    return `<div class="tree-row folder-row${reqFocus?.type==='folder'&&reqFocus.id===f.ID?' active':''}" style="padding-left:${8+depth*17}px" data-req-folder="${f.ID}"><input class="req-folder-check" type="checkbox" aria-label="选择文件夹下全部需求"><span class="chev">▾</span><span>📁</span><span class="label">${esc(f.Name)}</span></div><div>${own.map(d=>reqDocRow(d,depth+1)).join('')}${children.map(ch=>node(ch,depth+1)).join('')}</div>`;
   }
   return reqRoots().map(r=>node(r,0)).join('')||'<p class="meta">暂无需求文档</p>';
 }
@@ -426,7 +427,7 @@ function reqTestStatus(d){
   return {key,label,title:n?`${label}（按各用例最新测试结果）：共 ${n} 条用例，通过 ${passed}，未通过 ${run-passed}，未执行 ${n-run}`:'尚未测试：该需求暂无用例'};
 }
 const reqStatusBadge=d=>{const t=reqTestStatus(d);return `<span class="req-status req-status-${t.key}" title="${esc(t.title)}">${t.label}</span>`};
-function reqDocRow(d,depth){return `<div class="tree-row case-row${reqFocus?.type==='doc'&&reqFocus.id===d.ID?' active':''}" style="padding-left:${8+depth*17}px" data-req-doc="${d.ID}"><span class="label">📄 ${esc(d.Title)}</span>${reqStatusBadge(d)}</div>`}
+function reqDocRow(d,depth){return `<div class="tree-row case-row${reqFocus?.type==='doc'&&reqFocus.id===d.ID?' active':''}" style="padding-left:${8+depth*17}px" data-req-doc="${d.ID}"><input class="req-doc-check" type="checkbox"${reqSelected.has(d.ID)?' checked':''} aria-label="选择 ${esc(d.Title)}"><span class="label">📄 ${esc(d.Title)}</span>${reqStatusBadge(d)}</div>`}
 // ---- Requirement cross-linking ("引用需求") ----
 // A doc references another via an ordinary markdown link with a `req:` href
 // (e.g. `[REQ-002 权限管理](req:REQ-002)`), inserted through the 🔗 引用需求
@@ -481,10 +482,22 @@ function insertReqLink(target){
   reqEditor.exec('addLink',{linkUrl:`req:${target.ID}`,linkText:label});
   toast(`已插入「${label}」的引用，记得保存`);
 }
-function renderReqTree(){const box=$('#req-tree');box.innerHTML=reqTreeHTML();bindReqTree(box)}
+// 需求树的多选（批量 AI 设计）：勾选需求文档，或勾选文件夹（=其下全部需求文档，含子文件夹）。
+const reqSelected=new Set();
+function reqDocsUnder(folderID){const out=[...reqDocsIn(folderID)];reqChildren(folderID).forEach(ch=>out.push(...reqDocsUnder(ch.ID)));return out}
+function updateReqBulk(){
+  for(const id of [...reqSelected])if(!state.reqDocs.some(d=>d.ID===id))reqSelected.delete(id); // 已被删除的不再算已选
+  const n=reqSelected.size,bar=$('#req-bulk');
+  bar.classList.toggle('hidden',!n);$('#req-selected-count').textContent=`已选 ${n} 份需求`;
+  $$('#req-tree .req-doc-check').forEach(cb=>cb.checked=reqSelected.has(cb.closest('[data-req-doc]').dataset.reqDoc));
+  $$('#req-tree [data-req-folder]').forEach(e=>{const ids=reqDocsUnder(e.dataset.reqFolder).map(d=>d.ID),sel=ids.filter(id=>reqSelected.has(id)).length,fc=e.querySelector('.req-folder-check');fc.checked=ids.length>0&&sel===ids.length;fc.indeterminate=sel>0&&sel<ids.length;fc.disabled=!ids.length});
+}
+$('#req-bulk [data-req-bulk="clear"]').onclick=()=>{reqSelected.clear();updateReqBulk()};
+$('#req-bulk [data-req-bulk="design"]').onclick=()=>bulkAiDesignModal([...reqSelected].map(id=>state.reqDocs.find(d=>d.ID===id)).filter(Boolean));
+function renderReqTree(){const box=$('#req-tree');box.innerHTML=reqTreeHTML();bindReqTree(box);updateReqBulk()}
 function bindReqTree(root){
-  root.querySelectorAll('[data-req-folder]').forEach(e=>{let key=e.dataset.reqFolder;if(closedReqFolders.has(key))e.classList.add('closed');e.querySelector('.chev').onclick=x=>{x.stopPropagation();let closed=e.classList.toggle('closed');closed?closedReqFolders.add(key):closedReqFolders.delete(key)};e.onclick=()=>setReqFocus({type:'folder',id:e.dataset.reqFolder});e.oncontextmenu=x=>menu(x,reqFolderMenu(e.dataset.reqFolder))});
-  root.querySelectorAll('[data-req-doc]').forEach(e=>{e.onclick=()=>setReqFocus({type:'doc',id:e.dataset.reqDoc});e.oncontextmenu=x=>menu(x,reqDocMenu(e.dataset.reqDoc))});
+  root.querySelectorAll('[data-req-folder]').forEach(e=>{let key=e.dataset.reqFolder;if(closedReqFolders.has(key))e.classList.add('closed');e.querySelector('.chev').onclick=x=>{x.stopPropagation();let closed=e.classList.toggle('closed');closed?closedReqFolders.add(key):closedReqFolders.delete(key)};const fc=e.querySelector('.req-folder-check');fc.onclick=x=>{x.stopPropagation();reqDocsUnder(e.dataset.reqFolder).forEach(d=>fc.checked?reqSelected.add(d.ID):reqSelected.delete(d.ID));updateReqBulk()};e.onclick=()=>setReqFocus({type:'folder',id:e.dataset.reqFolder});e.oncontextmenu=x=>menu(x,reqFolderMenu(e.dataset.reqFolder))});
+  root.querySelectorAll('[data-req-doc]').forEach(e=>{const cb=e.querySelector('.req-doc-check');if(cb)cb.onclick=x=>{x.stopPropagation();cb.checked?reqSelected.add(e.dataset.reqDoc):reqSelected.delete(e.dataset.reqDoc);updateReqBulk()};e.onclick=()=>setReqFocus({type:'doc',id:e.dataset.reqDoc});e.oncontextmenu=x=>menu(x,reqDocMenu(e.dataset.reqDoc))});
 }
 function revealReq(x){
   if(x.type==='doc'){const d=state.reqDocs.find(k=>k.ID===x.id);if(d)openAncestors(closedReqFolders,state.reqFolders,d.FolderID,id=>id)}
@@ -560,8 +573,8 @@ function renameReqFolderModal(id){const f=reqFolder(id);showModal('重命名文�
 function reqDocModal(folderId){showModal('新增需求文档',`<label>标题<input name="Title" required></label>`,x=>act('createReqDoc',{...x,FolderID:folderId,Content:''}))}
 function renameReqDocModal(doc){showModal('重命名需求文档',`<label>标题<input name="Title" required value="${esc(doc.Title)}"></label>`,x=>act('editReqDoc',{...x,DocID:doc.ID,Content:doc.Content}))}
 // ---- AI 设计抽屉：对接 auto-test planner HTTP 服务 ----
-// 假定同一时刻只有一个 AI 设计任务在跑（多任务并发不在此处理），
-// 因此用全局变量记录"当前活跃任务属于哪个需求"即可驱动按钮态与抽屉重新打开。
+// 每份需求最多一个 AI 设计任务，但不同需求的任务可以同时在跑（需求批量 AI 设计），
+// 所以用集合记录"哪些需求有活跃任务"来驱动按钮态与抽屉重新打开。
 const aiJobKey=doc=>`casehub-ai-job-${doc.ID}`;
 // 设计完成后的结果摘要（导入条数 + 遗留问题）持久保存，关闭抽屉/刷新页面后仍展示，
 // 直到用户点击"重新设计"才清除。
@@ -575,10 +588,10 @@ function saveAiForm(doc,values,count,code){
   try{localStorage.setItem(aiFormKey(doc),JSON.stringify({values:{...values,testSecret:''},count,code}))}catch{}
 }
 function loadAiForm(doc){try{return JSON.parse(localStorage.getItem(aiFormKey(doc)))}catch{return null}}
-let aiActiveDocId=null, aiSourceJobId=null, aiHandlingJobId=null;
-function isAiActive(doc){return aiActiveDocId===doc.ID}
-function setAiActive(doc){aiActiveDocId=doc.ID;syncAiButton()}
-function clearAiActive(doc){if(aiActiveDocId===doc.ID)aiActiveDocId=null;syncAiButton()}
+const aiActiveDocIds=new Set(), aiHandlingJobIds=new Set();
+function isAiActive(doc){return aiActiveDocIds.has(doc.ID)}
+function setAiActive(doc){aiActiveDocIds.add(doc.ID);syncAiButton()}
+function clearAiActive(doc){aiActiveDocIds.delete(doc.ID);syncAiButton()}
 function syncAiButton(){
   const btn=$('#req-ai-design');
   if(!btn||reqFocus?.type!=='doc')return;
@@ -587,7 +600,7 @@ function syncAiButton(){
   btn.textContent=isAiActive(doc)?'AI 设计中':'AI 设计';
   btn.classList.toggle('ai-running',isAiActive(doc));
 }
-function closeAiStream(){aiSource?.close();aiSource=null;aiSourceJobId=null}
+function closeAiStream(jobId){aiSources.get(jobId)?.close();aiSources.delete(jobId)}
 // 两个 auto-test 服务（planner / generator）共用：它们的错误体格式相同，CaseHub 的代理在
 // 服务未配置或不可达时也返回同样的形状。
 async function serviceRequest(path,options){
@@ -882,29 +895,94 @@ function renderPlaywrightAiForm(doc,notice,continueFrom){
     if(!REQ_CODE_RE.test(code)){toast('需求缩写需为 2–12 位大写英文字母或数字，以字母开头，不含 -',true);return}
     const timeoutMinutes=Number(form.elements.timeoutMinutes.value);
     if(!Number.isInteger(timeoutMinutes)||timeoutMinutes<AI_MIN_TIMEOUT_MIN||timeoutMinutes>AI_MAX_TIMEOUT_MIN){toast(`任务超时时间需为 ${AI_MIN_TIMEOUT_MIN}–${AI_MAX_TIMEOUT_MIN} 分钟的整数`,true);return}
-    try{localStorage.setItem(AI_TIMEOUT_KEY,String(timeoutMinutes))}catch{} // 下次设计沿用这次的时限
     const btn=form.querySelector('button[type="submit"]');btn.disabled=true;
-    if(code!==(liveReqDoc(doc).Code||'')){
-      try{await act('setReqDocCode',{DocID:doc.ID,Code:code})}catch{btn.disabled=false;return} // act 已提示原因（如缩写重复）
-      // 只更新详情页上的缩写标签：整页 renderReqFocus 会重建编辑器，丢掉未保存的需求正文修改。
-      if(reqFocus?.type==='doc'&&reqFocus.id===doc.ID&&$('#req-doc-code'))$('#req-doc-code').textContent=code;
-    }
-    const {requirements,instructions,explorationNotes}=aiRequirementPayload(doc,values,code),productExperience=productExperienceFor(values.baseUrl);
-    const payload={requirements,target:{baseUrl:values.baseUrl},context:{instructions,...(explorationNotes?{explorationNotes}:{}),...(productExperience?{productExperience}:{}),...(values.assetIds?.length?{assetIds:values.assetIds}:{})},caseCount,timeoutMs:timeoutMinutes*60000,
-      ...(continueFrom?{continueFrom}:{})};
-    if(values.testAccount||values.testSecret)payload.context.testData={username:values.testAccount||'',password:values.testSecret||''};
     try{
-      const job=await serviceRequest('/api/planner/jobs',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
-      // 提交过的表单留着（新对象，作废仍在跑的评估），失败后重试/继续可以直接用。
-      aiEstimates.set(doc.ID,{status:'done',count:caseCount,code,rationale:est?.rationale||'',values});
-      saveAiForm(doc,values,caseCount,code);
-      localStorage.setItem(aiJobKey(doc),job.id);
-      routeAiJob(doc,job);
+      await startAiJob(doc,values,caseCount,code,timeoutMinutes,{continueFrom,rationale:est?.rationale});
     }catch(err){
       toast(err.message,true);btn.disabled=false;
       // 会话已清理、或这次中断已经被继续过：回到普通表单，别让人反复点一个已经失效的"继续"。
       if(continueFrom&&err.status===409){localStorage.removeItem(aiJobKey(doc));renderAiForm(doc,'上次的任务已经无法继续，请重新开始设计。')}
     }
+  };
+}
+// 提交一份需求的 planner 任务并接入进度订阅；单份设计（抽屉表单）和批量设计共用。失败时抛出，由调用方提示。
+async function startAiJob(doc,values,caseCount,code,timeoutMinutes,{continueFrom,rationale=''}={}){
+  try{localStorage.setItem(AI_TIMEOUT_KEY,String(timeoutMinutes))}catch{} // 下次设计沿用这次的时限
+  if(code!==(liveReqDoc(doc).Code||'')){
+    await act('setReqDocCode',{DocID:doc.ID,Code:code}); // act 已提示原因（如缩写重复）
+    // 只更新详情页上的缩写标签：整页 renderReqFocus 会重建编辑器，丢掉未保存的需求正文修改。
+    if(reqFocus?.type==='doc'&&reqFocus.id===doc.ID&&$('#req-doc-code'))$('#req-doc-code').textContent=code;
+  }
+  const {requirements,instructions,explorationNotes}=aiRequirementPayload(doc,values,code),productExperience=productExperienceFor(values.baseUrl);
+  const payload={requirements,target:{baseUrl:values.baseUrl},context:{instructions,...(explorationNotes?{explorationNotes}:{}),...(productExperience?{productExperience}:{}),...(values.assetIds?.length?{assetIds:values.assetIds}:{})},caseCount,timeoutMs:timeoutMinutes*60000,
+    ...(continueFrom?{continueFrom}:{})};
+  if(values.testAccount||values.testSecret)payload.context.testData={username:values.testAccount||'',password:values.testSecret||''};
+  const job=await serviceRequest('/api/planner/jobs',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+  // 提交过的表单留着（新对象，作废仍在跑的评估），失败后重试/继续可以直接用。
+  aiEstimates.set(doc.ID,{status:'done',count:caseCount,code,rationale,values});
+  saveAiForm(doc,values,caseCount,code);
+  localStorage.setItem(aiJobKey(doc),job.id);
+  routeAiJob(doc,job);
+  return job;
+}
+// ---- 需求批量 AI 设计：勾选多份需求，共用一份被测系统/账号/资产/时限，每份需求各提交一个 planner 任务 ----
+// 每份需求仍是独立任务：各自的进度、失败重试、结果确认和导入都在任务中心「设计」标签里按需求处理。
+async function bulkAiDesignModal(docs){
+  if(!docs.length)return;
+  try{aiPlannerEnabled??=(await serviceRequest('/api/planner/status')).enabled}catch{aiPlannerEnabled=false}
+  if(!aiPlannerEnabled)return toast('AI 设计服务未配置，暂时无法使用',true);
+  try{await loadAssets()}catch{assetsCache=[]}
+  try{await loadAgentDefaults('playwright')}catch(e){return toast(`读取 agent 默认配置失败：${e.message}`,true)}
+  const busy=docs.filter(isAiActive),todo=docs.filter(d=>!isAiActive(d));
+  if(!todo.length)return toast('所选需求都有正在进行的 AI 设计任务',true);
+  const v={...agentDefaults(aiDesignAgents.find(a=>a.id==='playwright')),...(aiFormState(todo[0])?.values||{})};
+  const rows=todo.map(d=>{const live=liveReqDoc(d),saved=loadAiForm(d);return `<tr data-doc="${esc(d.ID)}"><td>${esc(d.Title)}${localStorage.getItem(aiJobKey(d))?' <small class="meta" title="该需求上一次的设计任务/结果还没处理，开始后会被新任务替代">⚠ 替代上次结果</small>':''}</td><td><input name="code:${esc(d.ID)}" maxlength="12" pattern="[A-Z][A-Z0-9]{1,11}" autocomplete="off" spellcheck="false" placeholder="如 LOGIN" value="${esc(live.Code||saved?.code||'')}"></td><td><input name="count:${esc(d.ID)}" type="number" min="1" max="${AI_MAX_CASE_COUNT}" step="1" value="${saved?.count||AI_DEFAULT_CASE_COUNT}"></td><td><small class="meta bulk-ai-note"></small></td></tr>`}).join('');
+  showModal(`批量 AI 设计（${todo.length} 份需求）`,`${busy.length?`<p class="meta">${busy.length} 份需求已有进行中的设计任务，已跳过：${busy.map(d=>esc(d.Title)).join('、')}</p>`:''}<p class="meta">下面的被测系统、账号和资产对所有所选需求通用，每份需求各提交一个独立的设计任务（可在任务中心「设计」里分别查看进度和确认结果）。</p><label>被测系统 URL<input name="baseUrl" required placeholder="https://test.example.com/login" autocomplete="off" value="${esc(v.baseUrl||'')}"></label><label>补充说明（可选）<textarea name="instructions" placeholder="覆盖范围、登录方式或探索约束">${esc(v.instructions||'')}</textarea></label><label>测试账号 · 用户名（可选）<input name="testAccount" autocomplete="off" value="${esc(v.testAccount||'')}"></label><label>测试账号 · 密码（可选）<input name="testSecret" type="text" class="fake-password" autocomplete="off" spellcheck="false" value=""></label><fieldset class="ai-assets"><legend>随任务带上的资产（可选）</legend>${assetsCache.length?assetsCache.map(a=>`<label class="ai-asset"><input type="checkbox" name="assetIds" value="${esc(a.id)}"${(v.assetIds||[]).includes(a.id)?' checked':''}> ${esc(assetTypeLabel(a.type))} · ${esc(a.name)} <small>${assetSize(a.size)}</small></label>`).join(''):'<small class="meta">还没有资产，可在头像菜单的「资产」里上传。</small>'}</fieldset><label>任务超时时间（分钟，每个任务）<input name="timeoutMinutes" type="number" min="${AI_MIN_TIMEOUT_MIN}" max="${AI_MAX_TIMEOUT_MIN}" step="1" required value="${esc(v.timeoutMinutes??aiTimeoutMinutes())}"></label><table class="bulk-ai-table"><thead><tr><th>需求</th><th>需求缩写</th><th>建议用例数</th><th></th></tr></thead><tbody>${rows}</tbody></table><p><button type="button" class="secondary" id="bulk-ai-estimate">AI 评估用例数与缩写</button> <small class="meta">缩写必填；不评估也可以手动填写，数量默认 ${AI_DEFAULT_CASE_COUNT}。</small></p>`,async()=>{
+    const form=$('#modal-form'),data=new FormData(form),values={baseUrl:String(data.get('baseUrl')).trim(),instructions:String(data.get('instructions')||''),testAccount:String(data.get('testAccount')||''),testSecret:String(data.get('testSecret')||''),assetIds:data.getAll('assetIds')};
+    if(form.dataset.estimating)throw toast('正在评估，请等评估结束再开始',true);
+    const timeoutMinutes=Number(data.get('timeoutMinutes'));
+    if(!Number.isInteger(timeoutMinutes)||timeoutMinutes<AI_MIN_TIMEOUT_MIN||timeoutMinutes>AI_MAX_TIMEOUT_MIN)throw toast(`任务超时时间需为 ${AI_MIN_TIMEOUT_MIN}–${AI_MAX_TIMEOUT_MIN} 分钟的整数`,true);
+    const plan=todo.map(d=>({doc:d,code:String(data.get(`code:${d.ID}`)||'').trim().toUpperCase(),count:Number(data.get(`count:${d.ID}`))}));
+    for(const p of plan){
+      if(!REQ_CODE_RE.test(p.code))throw toast(`「${p.doc.Title}」的需求缩写需为 2–12 位大写英文字母或数字，以字母开头，不含 -`,true);
+      if(!Number.isInteger(p.count)||p.count<1||p.count>AI_MAX_CASE_COUNT)throw toast(`「${p.doc.Title}」的建议用例数需为 1–${AI_MAX_CASE_COUNT} 的整数`,true);
+    }
+    const codes=new Map();
+    for(const p of plan){const other=codes.get(p.code);if(other)throw toast(`「${other.Title}」与「${p.doc.Title}」的需求缩写重复：${p.code}`,true);codes.set(p.code,p.doc)}
+    // 缩写要全局唯一：与未选中的需求冲突时，提交前就说清楚，别在中途失败。
+    for(const p of plan){const clash=state.reqDocs.find(d=>d.ID!==p.doc.ID&&d.Code===p.code&&!plan.some(q=>q.doc.ID===d.ID));if(clash)throw toast(`需求缩写 ${p.code} 已被「${clash.Title}」使用`,true)}
+    const done=[],failed=[];
+    for(const p of plan){
+      try{await startAiJob(p.doc,values,p.count,p.code,timeoutMinutes);done.push(p.doc.ID)}
+      catch(e){failed.push(`${p.doc.Title}：${e.message}`)}
+    }
+    done.forEach(id=>reqSelected.delete(id));updateReqBulk();
+    if(done.length)toast(`已提交 ${done.length} 个 AI 设计任务${failed.length?`，${failed.length} 个失败`:''}`,!done.length);
+    if(failed.length)toast(`提交失败：${failed.join('；')}`,true);
+    if(done.length)tcSwitch('plan');
+  });
+  $('#bulk-ai-estimate').onclick=async e=>{
+    const btn=e.currentTarget,form=$('#modal-form'),values={instructions:String(new FormData(form).get('instructions')||'')};
+    btn.disabled=true;form.dataset.estimating='1';
+    const queue=[...todo];
+    const work=async()=>{
+      for(let d;(d=queue.shift());){
+        const row=form.querySelector(`tr[data-doc="${CSS.escape(d.ID)}"]`);if(!row)continue;
+        const note=row.querySelector('.bulk-ai-note');note.textContent='评估中…';
+        const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),AI_ESTIMATE_CLIENT_TIMEOUT_MS);
+        try{
+          const {requirements,instructions}=aiRequirementPayload(d,values);
+          const r=await serviceRequest('/api/planner/estimate',{method:'POST',headers:{'Content-Type':'application/json'},signal:controller.signal,body:JSON.stringify({requirements,context:{instructions}})});
+          const code=r.requirementCodes?.find(x=>x.requirement===d.ID)?.code||liveReqDoc(d).Code||'';
+          if(code&&!liveReqDoc(d).Code)row.querySelector(`[name="code:${CSS.escape(d.ID)}"]`).value=code;
+          row.querySelector(`[name="count:${CSS.escape(d.ID)}"]`).value=r.suggestedCaseCount;
+          note.textContent='已评估';note.title=r.rationale||'';
+        }catch(err){note.textContent=controller.signal.aborted?'评估超时':`评估失败：${err.message}`}
+        finally{clearTimeout(timer)}
+      }
+    };
+    await Promise.all([work(),work(),work()]);
+    delete form.dataset.estimating;btn.disabled=false;
   };
 }
 async function runAiEstimate(doc,values){
@@ -937,7 +1015,7 @@ function aiStageLabel(job){
 // 都会在这里更新"AI 设计中"按钮态、维持 SSE 订阅，并在完成后等待用户确认导入。
 function routeAiJob(doc,job){
   const terminal=['succeeded','failed','cancelled'].includes(job.status);
-  if(terminal&&aiSourceJobId===job.id)closeAiStream();
+  if(terminal)closeAiStream(job.id);
   if(!terminal){
     setAiActive(doc);
     if(isAiDrawerOpen(doc))renderAiRunning(doc,job);
@@ -969,10 +1047,9 @@ function aiLogLine(msg){
   if(atBottom)log.scrollTop=log.scrollHeight;
 }
 function ensureAiStream(doc,jobId){
-  if(aiSource&&aiSourceJobId===jobId)return; // already subscribed, keep it (drawer may be closed)
-  closeAiStream();
+  if(aiSources.has(jobId))return; // already subscribed, keep it (drawer may be closed)
   const source=new EventSource(`/api/planner/jobs/${jobId}/events`);
-  aiSource=source;aiSourceJobId=jobId;
+  aiSources.set(jobId,source);
   source.addEventListener('snapshot',e=>{
     const job=JSON.parse(e.data);
     if(isAiDrawerOpen(doc)){
@@ -1007,8 +1084,8 @@ function renderAiTerminal(doc,job){
 }
 // 设计完成后先在抽屉中等待确认；只有用户明确确认，才创建"用例评审"目录并导入草稿用例。
 async function handleAiSuccess(doc,job){
-  if(aiHandlingJobId===job.id)return;
-  aiHandlingJobId=job.id;
+  if(aiHandlingJobIds.has(job.id))return;
+  aiHandlingJobIds.add(job.id);
   if(isAiDrawerOpen(doc))$('#ai-drawer-body').innerHTML='<p class="meta">设计已完成，正在准备确认内容…</p>';
   try{
     const result=await serviceRequest(`/api/planner/jobs/${job.id}/result`);
@@ -1019,10 +1096,10 @@ async function handleAiSuccess(doc,job){
     toast(`读取 AI 设计结果失败：${e.message}`,true);
     if(isAiDrawerOpen(doc)){
       $('#ai-drawer-body').innerHTML=`<p class="meta">读取设计结果失败：${esc(e.message)}</p><p class="drawer-actions"><button type="button" id="ai-retry-import">重试</button></p>`;
-      $('#ai-retry-import').onclick=()=>{aiHandlingJobId=null;handleAiSuccess(doc,job).catch(()=>{})};
+      $('#ai-retry-import').onclick=()=>{aiHandlingJobIds.delete(job.id);handleAiSuccess(doc,job).catch(()=>{})};
     }
   }finally{
-    if(aiHandlingJobId===job.id)aiHandlingJobId=null;
+    aiHandlingJobIds.delete(job.id);
   }
 }
 // planner 给出的未验证/受限范围是 {risk, summary}、探索中发现的问题是 {risk, scenario, symptom}，

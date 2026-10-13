@@ -246,3 +246,5 @@ button.avatar{padding:0;color:#fff;cursor:pointer;border:1px solid #ffffff40}
 /* 生成/修复任务里的用例 ID：可点击跳转到用例。 */
 .gen-case-links{display:flex;flex-wrap:wrap;align-items:center;gap:6px}
 .gen-case-link{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+
+#req-bulk{margin:0 0 8px}.bulk-ai-table{width:100%;border-collapse:collapse;margin:10px 0}.bulk-ai-table th,.bulk-ai-table td{text-align:left;padding:4px 6px;vertical-align:middle}.bulk-ai-table input{width:100%;margin:0}.bulk-ai-table td:nth-child(2){width:120px}.bulk-ai-table td:nth-child(3){width:90px}
