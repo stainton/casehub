@@ -136,8 +136,10 @@ type Issue struct {
 	ID, RequirementID, Title, Description, RootCause string
 	// Source is the dedupe key of an issue reported by an auto-test job
 	// (planner/generator), empty for hand-written ones.
-	Source               string
-	Resolved             bool
+	Source string
+	// Resolved and NotIssue are mutually exclusive: NotIssue means the report was
+	// reviewed and is not a defect, so auto-test reports never reopen it.
+	Resolved, NotIssue   bool
 	CreatedBy, UpdatedBy string
 	CreatedAt, UpdatedAt time.Time
 }
@@ -316,7 +318,7 @@ type Action struct {
 	Priority, Result, Note, Author                      string
 	CaseIDs                                             []string
 	Submitted, Force                                    bool
-	Resolved                                            bool
+	Resolved, NotIssue                                  bool
 	DocID, Content, Code                                string
 	IssueID, RequirementID, RootCause                   string
 	ExplorationNotes                                    string
@@ -2131,13 +2133,14 @@ func createIssue(s *State, a Action) error {
 		return errors.New("问题描述不能为空")
 	}
 	t := now()
-	s.Issues = append(s.Issues, Issue{ID: nextIssueID(s), RequirementID: a.RequirementID, Title: strings.TrimSpace(a.Title), Description: a.Description, RootCause: a.RootCause, Resolved: a.Resolved, CreatedBy: a.Author, UpdatedBy: a.Author, CreatedAt: t, UpdatedAt: t})
+	s.Issues = append(s.Issues, Issue{ID: nextIssueID(s), RequirementID: a.RequirementID, Title: strings.TrimSpace(a.Title), Description: a.Description, RootCause: a.RootCause, Resolved: a.Resolved && !a.NotIssue, NotIssue: a.NotIssue, CreatedBy: a.Author, UpdatedBy: a.Author, CreatedAt: t, UpdatedAt: t})
 	return nil
 }
 
 // reportIssues files product defects reported by planner/generator jobs. It is
 // idempotent per Source: an open issue with the same Source is left alone, a
-// resolved one is reopened because the defect reproduced again.
+// resolved one is reopened because the defect reproduced again, and one marked
+// 非问题 stays as the reviewer decided.
 func reportIssues(s *State, a Action) error {
 	for _, r := range a.Reports {
 		src, title := strings.TrimSpace(r.Source), strings.TrimSpace(r.Title)
@@ -2153,7 +2156,7 @@ func reportIssues(s *State, a Action) error {
 				continue
 			}
 			dup = true
-			if s.Issues[i].Resolved {
+			if s.Issues[i].Resolved && !s.Issues[i].NotIssue {
 				s.Issues[i].Resolved, s.Issues[i].UpdatedBy, s.Issues[i].UpdatedAt = false, a.Author, now()
 				s.Issues[i].Description += "\n\n> 自动测试再次复现，已重新打开。"
 			}
@@ -2183,7 +2186,7 @@ func editIssue(s *State, a Action) error {
 		return errors.New("问题描述不能为空")
 	}
 	issue.RequirementID, issue.Title, issue.Description, issue.RootCause = a.RequirementID, strings.TrimSpace(a.Title), a.Description, a.RootCause
-	issue.Resolved, issue.UpdatedBy, issue.UpdatedAt = a.Resolved, a.Author, now()
+	issue.Resolved, issue.NotIssue, issue.UpdatedBy, issue.UpdatedAt = a.Resolved && !a.NotIssue, a.NotIssue, a.Author, now()
 	return nil
 }
 

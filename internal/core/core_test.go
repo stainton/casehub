@@ -1646,6 +1646,26 @@ func TestSaveHealedScriptProtectsOriginalAndConcurrentEdits(t *testing.T) {
 	}
 }
 
+func TestNotIssueIsExclusiveWithResolvedAndNeverReopened(t *testing.T) {
+	svc := core.NewService(store.NewMemory())
+	report := core.Action{Type: "reportIssues", Author: "generator", Reports: []core.IssueReport{
+		{RequirementID: "REQ-0001", Title: "[高] TC-1 登录失败无提示", Description: "缺陷", Source: "generator:TC-1:x"}}}
+	state := apply(t, svc, report)
+	id := state.Issues[0].ID
+	state = apply(t, svc, core.Action{Type: "editIssue", IssueID: id, RequirementID: "REQ-0001", Title: "t", Description: "d", Resolved: true, NotIssue: true})
+	if got := state.Issues[0]; !got.NotIssue || got.Resolved {
+		t.Fatalf("非问题 must exclude resolved: %+v", got)
+	}
+	state = apply(t, svc, report)
+	if got := state.Issues[0]; len(state.Issues) != 1 || !got.NotIssue || got.Resolved {
+		t.Fatalf("a 非问题 issue must stay closed when reported again: %+v", state.Issues)
+	}
+	state = apply(t, svc, core.Action{Type: "editIssue", IssueID: id, RequirementID: "REQ-0001", Title: "t", Description: "d"})
+	if got := state.Issues[0]; got.NotIssue || got.Resolved {
+		t.Fatalf("clearing the handling must reopen: %+v", got)
+	}
+}
+
 func TestReportIssuesIsIdempotentAndReopens(t *testing.T) {
 	svc := core.NewService(store.NewMemory())
 	report := core.Action{Type: "reportIssues", Author: "generator", Reports: []core.IssueReport{
