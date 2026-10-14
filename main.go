@@ -100,6 +100,7 @@ func routes(a *api, services ...service) http.Handler {
 	if a.dispatcher != nil {
 		m.Handle("GET /api/tasks", a.dispatcher.Tasks())
 		m.Handle("GET /metrics", a.dispatcher.Metrics())
+		m.Handle("GET /api/queue", a.dispatcher.Queue())
 	}
 	fs := http.FileServerFS(assets)
 	m.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {

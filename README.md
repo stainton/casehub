@@ -39,7 +39,9 @@ kubectl rollout status deployment/casehub
 
 `DATABASE_URL` 留空时使用 `/app/data/casehub.json`，默认挂载 `emptyDir`，Pod 删除或重建后这份临时数据会丢失。也可通过启动参数 `-database-url` 指定数据库连接串；配置了数据库但连接失败时会报错，便于检查配置。
 
-清单已将 `CASEHUB_PLANNER_URL` 设置为 `http://planner:4501`、`CASEHUB_GENERATOR_URL` 设置为 `http://generator:4502`，可直接连接同 namespace 中独立部署的 auto-test planner 与 generator Pod（脚本修复 healer 运行在 generator 中，默认走同一地址）。跨 namespace 时改成对应 Service 地址。
+`DATABASE_URL` 留空时任务记录（`/app/data/tasks/`）同样在 emptyDir 里，重建 Pod 即丢失；生产环境请使用 PostgreSQL。
+
+清单已将 `CASEHUB_PLANNER_URL` 设置为 `dns+http://planner-nodes:4501`，`CASEHUB_GENERATOR_URL` 与 `CASEHUB_HEALER_URL` 设置为 `dns+http://generator-nodes:4502`（healer 运行在 generator 中），`CASEHUB_EXECUTOR_URL` 设置为 `dns+http://executor-nodes:4504`：这些是 auto-test 清单里的 headless Service，解析出同 namespace 中每个就绪的节点 Pod。跨 namespace 时改成 `dns+http://planner-nodes.<namespace>.svc.cluster.local:4501` 等。
 
 ### 集群外访问
 
@@ -80,8 +82,8 @@ http://<可访问的节点 IP>:30080
 | `CASEHUB_STORE` | 自动选择 | 显式指定 `file`、`memory` 或 `postgres` 时优先；否则有 DB 连接串用 `postgres`，无连接串用 `file` |
 | `CASEHUB_DATA` | `data/casehub.json` | 文件存储路径 |
 | `DATABASE_URL` | — | PostgreSQL 连接串；可通过 `-database-url` 启动参数覆盖 |
-| `CASEHUB_PLANNER_URL` | `http://localhost:4501` | auto-test planner 服务地址；Kubernetes 清单使用 `http://planner:4501` |
-| `CASEHUB_GENERATOR_URL` | `http://localhost:4502` | auto-test generator 服务地址；Kubernetes 中为 `http://generator:4502` |
+| `CASEHUB_PLANNER_URL` | `http://localhost:4501` | auto-test planner 节点地址；Kubernetes 清单使用 `dns+http://planner-nodes:4501` |
+| `CASEHUB_GENERATOR_URL` | `http://localhost:4502` | auto-test generator 节点地址；Kubernetes 中为 `dns+http://generator-nodes:4502` |
 | `CASEHUB_HEALER_URL` | 同 `CASEHUB_GENERATOR_URL` | auto-test healer（脚本修复）地址；默认由 generator 服务提供 |
 | `CASEHUB_AUTOMATION_URL` | — | 可选的单进程 auto-test automation 服务地址；未单独设置 `CASEHUB_PLANNER_URL` / `CASEHUB_GENERATOR_URL` 时，planner、generator、healer 都通过此地址访问 |
 | `CASEHUB_GENERAL_AGENT_URL` | `http://localhost:4503` | auto-test general-agent 服务地址；Kubernetes 中为 `http://general-agent:4503` |
@@ -90,7 +92,7 @@ http://<可访问的节点 IP>:30080
 | `CASEHUB_TASK_RETENTION` | `168h` | 已结束任务（含进度、结果、会话包、诊断包）保留时长 |
 | `CASEHUB_NODE_LOST_AFTER` | `2m` | 执行节点连续联系不上这么久，即视为其上的任务已丢失 |
 
-以上各 `*_URL` 都可以写成三种形式之一：单个地址；逗号分隔的多个节点（`http://a:4501,http://b:4501`，进程部署多开节点时用）；或 `dns+http://planner-headless:4501`（Kubernetes headless Service，每次派发前解析出当前所有就绪 Pod）。
+以上各 `*_URL` 都可以写成三种形式之一：单个地址；逗号分隔的多个节点（`http://a:4501,http://b:4501`，进程部署多开节点时用）；或 `dns+http://planner-nodes:4501`（Kubernetes headless Service，每次派发前解析出当前所有就绪 Pod）。
 
 ### 任务分发
 
@@ -99,7 +101,8 @@ planner、generator、healer、executor 的任务（`/api/<服务>/jobs`）由 C
 - 任务记录、进度事件、结果、会话包和诊断包保存在 CaseHub 的存储里（文件存储为数据文件旁的 `tasks/` 目录，PostgreSQL 为 `casehub_tasks` 等表），CaseHub 或节点重启、换浏览器后都能找回；前端通过 `GET /api/tasks?kind=…&active=1` 找回未处理完的任务，不再在 localStorage 里保存任务 ID。
 - 提交的请求内容（含测试账号、密码、storageState）只保存在 CaseHub 进程内存中，从不落盘：CaseHub 在任务还排队时重启，该任务以 `CASEHUB_RESTARTED` 失败，需要重新提交；已经在节点上运行的任务重启后继续跟随。
 - 节点停机（缩容、重新部署）交还的任务、或节点丢失时尚未开始的任务自动重新排队；generator、healer、executor 运行中被中断的任务最多重试到第 3 次。planner 运行中被中断的任务不自动重跑，而是保留会话包，由人选择"继续"——可以在任意 planner 节点继续。旧版本的节点（不支持 `/capacity`、会话包下载）仍可使用，其会话只能回到原节点继续。
-- `GET /metrics` 以 Prometheus 文本格式给出每类任务的排队数、运行数和节点数，供自动扩缩容读取；不扩缩时无需理会。
+- `GET /metrics`（Prometheus 文本）和 `GET /api/queue`（JSON，`{"planner":{"queued":…,"running":…,"demand":…,"nodes":…}}`）给出每类任务的排队数、运行数和节点数，供自动扩缩容读取（auto-test 的 `deploy/kubernetes/components/autoscaling` 用 KEDA 读 `/api/queue`）；不扩缩时无需理会。
+- CaseHub 是任务的唯一写入方，只运行一个副本；要多开的是 auto-test 节点。
 
 当前默认主线带有两条示例用例，因为设计文档尚未定义首次导入主线的来源与格式。
 
@@ -161,7 +164,7 @@ planner 不会绕开约束去试；同一段文字也会参与"建议覆盖用�
 
 运行 `go test ./...` 检查业务逻辑、静态资源和 Markdown 记录持久化。
 
-Kubernetes 部署中，planner 使用 `planner:4501`，generator 与 healer 使用 `generator:4502`，脚本执行使用 `executor:4504`，三者各为独立 Pod；先在 auto-test 中执行 `kubectl apply -k deploy/kubernetes`（同时部署 general-agent），再部署 CaseHub。
+Kubernetes 部署中，planner、generator（同时提供 healer）、executor 各是一组无状态 Pod，CaseHub 通过 headless Service `planner-nodes:4501`、`generator-nodes:4502`、`executor-nodes:4504` 找到每个就绪 Pod 并把任务交给空闲的那个；副本数可以固定，也可以引入 auto-test 的 autoscaling 组件按排队数自动扩缩；先在 auto-test 中执行 `kubectl apply -k deploy/kubernetes`（同时部署 general-agent），再部署 CaseHub。
 
 「AI 设计」抽屉的浏览器回归（评估、失败后保留表单、重试与继续）：`node tests/ai-design.cjs`，脚本自带一个假的 planner 服务（默认 127.0.0.1:4598，`CASEHUB_FAKE_PLANNER_PORT` 可改），不需要 auto-test 在场，也不调用模型；启动临时服务时把 `CASEHUB_PLANNER_URL` 指向它：`CASEHUB_STORE=memory PORT=18081 CASEHUB_PLANNER_URL=http://127.0.0.1:4598 go run .`。
 

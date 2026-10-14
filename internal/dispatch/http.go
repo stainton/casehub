@@ -287,6 +287,20 @@ func (d *Dispatcher) current(t tasks.Task) tasks.Task {
 	return l.task
 }
 
+// Queue serves the same numbers as JSON, {"planner":{"queued":0,"running":1,"demand":1,"nodes":2},…}, for
+// autoscalers that read JSON (KEDA's metrics-api scaler). demand = queued + running: the nodes this kind needs
+// right now at one task per node.
+func (d *Dispatcher) Queue() http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		load := d.Load()
+		out := map[string]map[string]int{}
+		for _, kind := range d.Kinds() {
+			out[kind] = map[string]int{"queued": load[kind][0], "running": load[kind][1], "demand": load[kind][0] + load[kind][1], "nodes": d.Nodes(kind)}
+		}
+		writeJSON(w, http.StatusOK, out)
+	})
+}
+
 // Metrics serves the queue in Prometheus text format: what an autoscaler (KEDA, HPA external metrics) reads
 // to size each node pool. Nothing reads it in a plain process deployment, and nothing depends on it.
 func (d *Dispatcher) Metrics() http.Handler {

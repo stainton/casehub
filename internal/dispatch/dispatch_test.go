@@ -331,6 +331,7 @@ func TestTheHTTPContractMatchesANodes(t *testing.T) {
 	mux.Handle("/api/planner/jobs/", d.Jobs("planner"))
 	mux.Handle("GET /api/tasks", d.Tasks())
 	mux.Handle("GET /metrics", d.Metrics())
+	mux.Handle("GET /api/queue", d.Queue())
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
 	post := func(body string, contentType string) *http.Response {
@@ -398,6 +399,9 @@ func TestTheHTTPContractMatchesANodes(t *testing.T) {
 	}
 	if code, _ := get("/api/generator/jobs/" + id); code != 404 {
 		t.Fatal("unregistered kinds do not answer")
+	}
+	if _, body := get("/api/queue"); body != `{"planner":{"demand":0,"nodes":1,"queued":0,"running":0}}`+"\n" {
+		t.Fatalf("queue: %s", body)
 	}
 	if _, body := get("/metrics"); !strings.Contains(body, `casehub_tasks{kind="planner",state="queued"} 0`) || !strings.Contains(body, `casehub_nodes{kind="planner"} 1`) {
 		t.Fatalf("metrics:\n%s", body)

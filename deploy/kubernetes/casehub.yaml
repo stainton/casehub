@@ -3,6 +3,7 @@ kind: Deployment
 metadata:
   name: casehub
 spec:
+  # CaseHub dispatches tasks to the auto-test nodes and is the one writer of their records: run exactly one.
   replicas: 1
   strategy:
     type: Recreate
@@ -31,13 +32,18 @@ spec:
               # Set a PostgreSQL URL here, or leave empty for local file storage.
               value: ""
             # auto-test planner, generator (also serves the healer) and executor
-            # run as separate pods; see auto-test deploy/kubernetes.
+            # run as separate pools of stateless pods; see auto-test deploy/kubernetes.
+            # dns+ resolves the headless Service to every ready pod, and CaseHub hands
+            # each task to an idle one. A plain http://planner:4501 still works for a
+            # single pod.
             - name: CASEHUB_PLANNER_URL
-              value: http://planner:4501
+              value: dns+http://planner-nodes:4501
             - name: CASEHUB_GENERATOR_URL
-              value: http://generator:4502
+              value: dns+http://generator-nodes:4502
+            - name: CASEHUB_HEALER_URL
+              value: dns+http://generator-nodes:4502
             - name: CASEHUB_EXECUTOR_URL
-              value: http://executor:4504
+              value: dns+http://executor-nodes:4504
             - name: CASEHUB_GENERAL_AGENT_URL
               value: http://general-agent:4503
           volumeMounts:
