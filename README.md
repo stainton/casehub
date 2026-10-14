@@ -28,6 +28,8 @@ docker compose up --build
 
 ## Kubernetes 部署
 
+> 与 auto-test 节点一起部署（存储选择、节点地址、重启与升级的影响）见 [DEPLOYMENT.md](DEPLOYMENT.md)。
+
 部署文件为 [`deploy/kubernetes/casehub.yaml`](deploy/kubernetes/casehub.yaml)。将镜像地址替换为实际镜像后执行：
 
 ```sh
@@ -103,6 +105,8 @@ planner、generator、healer、executor 的任务（`/api/<服务>/jobs`）由 C
 - 节点停机（缩容、重新部署）交还的任务、或节点丢失时尚未开始的任务自动重新排队；generator、healer、executor 运行中被中断的任务最多重试到第 3 次。planner 运行中被中断的任务不自动重跑，而是保留会话包，由人选择"继续"——可以在任意 planner 节点继续。旧版本的节点（不支持 `/capacity`、会话包下载）仍可使用，其会话只能回到原节点继续。
 - `GET /metrics`（Prometheus 文本）和 `GET /api/queue`（JSON，`{"planner":{"queued":…,"running":…,"demand":…,"nodes":…}}`）给出每类任务的排队数、运行数和节点数，供自动扩缩容读取（auto-test 的 `deploy/kubernetes/components/autoscaling` 用 KEDA 读 `/api/queue`）；不扩缩时无需理会。
 - CaseHub 是任务的唯一写入方，只运行一个副本；要多开的是 auto-test 节点。
+
+部署、扩容与升级的完整说明见 [DEPLOYMENT.md](DEPLOYMENT.md)。
 
 当前默认主线带有两条示例用例，因为设计文档尚未定义首次导入主线的来源与格式。
 
