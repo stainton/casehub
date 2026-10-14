@@ -85,6 +85,21 @@ http://<可访问的节点 IP>:30080
 | `CASEHUB_HEALER_URL` | 同 `CASEHUB_GENERATOR_URL` | auto-test healer（脚本修复）地址；默认由 generator 服务提供 |
 | `CASEHUB_AUTOMATION_URL` | — | 可选的单进程 auto-test automation 服务地址；未单独设置 `CASEHUB_PLANNER_URL` / `CASEHUB_GENERATOR_URL` 时，planner、generator、healer 都通过此地址访问 |
 | `CASEHUB_GENERAL_AGENT_URL` | `http://localhost:4503` | auto-test general-agent 服务地址；Kubernetes 中为 `http://general-agent:4503` |
+| `CASEHUB_EXECUTOR_URL` | `http://localhost:4504` | auto-test executor 服务地址 |
+| `CASEHUB_TASK_QUEUE_TIMEOUT` | `30m` | 任务排队这么久仍没有执行节点接收，则以 `NO_NODE_AVAILABLE` 失败 |
+| `CASEHUB_TASK_RETENTION` | `168h` | 已结束任务（含进度、结果、会话包、诊断包）保留时长 |
+| `CASEHUB_NODE_LOST_AFTER` | `2m` | 执行节点连续联系不上这么久，即视为其上的任务已丢失 |
+
+以上各 `*_URL` 都可以写成三种形式之一：单个地址；逗号分隔的多个节点（`http://a:4501,http://b:4501`，进程部署多开节点时用）；或 `dns+http://planner-headless:4501`（Kubernetes headless Service，每次派发前解析出当前所有就绪 Pod）。
+
+### 任务分发
+
+planner、generator、healer、executor 的任务（`/api/<服务>/jobs`）由 CaseHub 持有并分发，接口形状与 auto-test 节点自己的 `/v1/<服务>/jobs` 一致。节点是无状态执行节点：CaseHub 先查各节点的 `/capacity`，把任务交给空闲的那个（`?queue=false`，忙则 429 换下一个；同一被测系统和测试账号优先交给已登录过的节点），推送所需资产，跟随节点的进度并存下来，任务结束后取回结果、planner 中断时的会话包和失败现场的诊断包，再在节点上释放该任务。所有节点都忙或都不在时任务在 CaseHub 排队，由节点空出或上线后接着派发。
+
+- 任务记录、进度事件、结果、会话包和诊断包保存在 CaseHub 的存储里（文件存储为数据文件旁的 `tasks/` 目录，PostgreSQL 为 `casehub_tasks` 等表），CaseHub 或节点重启、换浏览器后都能找回；前端通过 `GET /api/tasks?kind=…&active=1` 找回未处理完的任务，不再在 localStorage 里保存任务 ID。
+- 提交的请求内容（含测试账号、密码、storageState）只保存在 CaseHub 进程内存中，从不落盘：CaseHub 在任务还排队时重启，该任务以 `CASEHUB_RESTARTED` 失败，需要重新提交；已经在节点上运行的任务重启后继续跟随。
+- 节点停机（缩容、重新部署）交还的任务、或节点丢失时尚未开始的任务自动重新排队；generator、healer、executor 运行中被中断的任务最多重试到第 3 次。planner 运行中被中断的任务不自动重跑，而是保留会话包，由人选择"继续"——可以在任意 planner 节点继续。旧版本的节点（不支持 `/capacity`、会话包下载）仍可使用，其会话只能回到原节点继续。
+- `GET /metrics` 以 Prometheus 文本格式给出每类任务的排队数、运行数和节点数，供自动扩缩容读取；不扩缩时无需理会。
 
 当前默认主线带有两条示例用例，因为设计文档尚未定义首次导入主线的来源与格式。
 

@@ -9,17 +9,24 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"path/filepath"
 	"time"
 
 	"casehub/internal/core"
+	"casehub/internal/dispatch"
 	"casehub/internal/store"
+	"casehub/internal/tasks"
 	"casehub/internal/upstream"
 )
 
 //go:embed web/*
 var assets embed.FS
 
-type api struct{ service *core.Service }
+type api struct {
+	service *core.Service
+	// dispatcher owns the planner/generator/healer/executor tasks; nil in tests that only exercise the state API.
+	dispatcher *dispatch.Dispatcher
+}
 
 func jsonOut(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
@@ -82,6 +89,17 @@ func routes(a *api, services ...service) http.Handler {
 			jsonOut(w, 200, map[string]bool{"enabled": enabled})
 		})
 		m.Handle("/api/"+s.name+"/", s.proxy)
+		// Tasks are dispatched to an idle node rather than proxied to a fixed one; everything else under the
+		// service (synchronous calls, asset pushes) is still proxied, to any node of its pool.
+		if a.dispatcher != nil && a.dispatcher.Enabled(s.name) {
+			jobs := a.dispatcher.Jobs(s.name)
+			m.Handle("/api/"+s.name+"/jobs", jobs)
+			m.Handle("/api/"+s.name+"/jobs/", jobs)
+		}
+	}
+	if a.dispatcher != nil {
+		m.Handle("GET /api/tasks", a.dispatcher.Tasks())
+		m.Handle("GET /metrics", a.dispatcher.Metrics())
 	}
 	fs := http.FileServerFS(assets)
 	m.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
@@ -112,10 +130,12 @@ func main() {
 	defer cancel()
 	kind := storageKind(os.Getenv("CASEHUB_STORE"), *databaseURL)
 	var repo core.Repository
+	var taskStore tasks.Store
 	var closeDB func()
 	switch kind {
 	case "memory":
 		repo = store.NewMemory()
+		taskStore = tasks.NewMemory()
 	case "postgres":
 		p, e := store.NewPostgres(ctx, *databaseURL)
 		if e != nil {
@@ -123,9 +143,19 @@ func main() {
 		}
 		repo = p
 		closeDB = func() { _ = p.Close() }
+		if taskStore, e = tasks.NewPostgres(ctx, p.DB()); e != nil {
+			log.Fatal(e)
+		}
 	default:
 		kind = "file"
-		repo = store.NewFile(env("CASEHUB_DATA", "data/casehub.json"))
+		dataFile := env("CASEHUB_DATA", "data/casehub.json")
+		repo = store.NewFile(dataFile)
+		// One JSON file per task beside the state file (data/tasks/), so a task update never rewrites the state.
+		local, e := tasks.NewFile(filepath.Join(filepath.Dir(dataFile), "tasks"))
+		if e != nil {
+			log.Fatal(e)
+		}
+		taskStore = local
 	}
 	if closeDB != nil {
 		defer closeDB()
@@ -136,20 +166,67 @@ func main() {
 	// Planner and generator are separate auto-test services (pods); the healer
 	// runs inside the generator. CASEHUB_AUTOMATION_URL points all three at the
 	// combined single-process automation service instead.
+	// Each address may be one node, a comma-separated list, or dns+http://name:port for every pod behind a
+	// headless Service (see dispatch.Pool).
 	plannerURL, generatorURL := serviceURLs(os.Getenv)
 	healerURL := env("CASEHUB_HEALER_URL", generatorURL)
-	plannerProxy, plannerEnabled := upstream.New(plannerURL, "planner", agentSettingsOf(svc, "planner"), lookup)
-	generatorProxy, generatorEnabled := upstream.New(generatorURL, "generator", agentSettingsOf(svc, "generator"), lookup)
-	healerProxy, healerEnabled := upstream.New(healerURL, "healer", agentSettingsOf(svc, "healer"), lookup)
-	executorProxy, executorEnabled := upstream.New(env("CASEHUB_EXECUTOR_URL", "http://localhost:4504"), "executor", agentSettingsOf(svc, "planner"), nil)
-	generalAgentProxy, generalAgentEnabled := upstream.New(env("CASEHUB_GENERAL_AGENT_URL", "http://localhost:4503"), "general-agent", agentSettingsOf(svc, "general-agent"), nil)
-	log.Printf("CaseHub listening on :%s (store=%s, planner=%v, generator=%v, healer=%v, executor=%v, general-agent=%v)", port, kind, plannerEnabled, generatorEnabled, healerEnabled, executorEnabled, generalAgentEnabled)
-	log.Fatal(http.ListenAndServe(":"+port, routes(&api{service: svc},
+	pool := func(name, spec string) *dispatch.Pool {
+		p, err := dispatch.ParsePool(spec)
+		if err != nil {
+			log.Fatalf("%s: %v", name, err)
+		}
+		return p
+	}
+	plannerPool, generatorPool, healerPool := pool("planner", plannerURL), pool("generator", generatorURL), pool("healer", healerURL)
+	executorPool := pool("executor", env("CASEHUB_EXECUTOR_URL", "http://localhost:4504"))
+	generalAgentPool := pool("general-agent", env("CASEHUB_GENERAL_AGENT_URL", "http://localhost:4503"))
+	proxy := func(p *dispatch.Pool, name string, settings upstream.Settings, assets *upstream.Assets) (http.Handler, bool) {
+		if p == nil {
+			return upstream.NewPooled(nil, name, settings, assets)
+		}
+		return upstream.NewPooled(p.Nodes, name, settings, assets)
+	}
+	plannerProxy, plannerEnabled := proxy(plannerPool, "planner", agentSettingsOf(svc, "planner"), lookup)
+	generatorProxy, generatorEnabled := proxy(generatorPool, "generator", agentSettingsOf(svc, "generator"), lookup)
+	healerProxy, healerEnabled := proxy(healerPool, "healer", agentSettingsOf(svc, "healer"), lookup)
+	executorProxy, executorEnabled := proxy(executorPool, "executor", agentSettingsOf(svc, "planner"), nil)
+	generalAgentProxy, generalAgentEnabled := proxy(generalAgentPool, "general-agent", agentSettingsOf(svc, "general-agent"), nil)
+	dispatcher := dispatch.New(taskStore, []*dispatch.Kind{
+		{Name: "planner", Pool: plannerPool, Settings: agentSettingsOf(svc, "planner"), Assets: lookup, Continuable: true},
+		{Name: "generator", Pool: generatorPool, Settings: agentSettingsOf(svc, "generator"), Assets: lookup},
+		{Name: "healer", Pool: healerPool, Settings: agentSettingsOf(svc, "healer"), Assets: lookup},
+		{Name: "executor", Pool: executorPool, Settings: agentSettingsOf(svc, "planner")},
+	}, dispatchConfig())
+	if err := dispatcher.Start(context.Background()); err != nil {
+		log.Fatal(err)
+	}
+	log.Printf("CaseHub listening on :%s (store=%s, planner=%v, generator=%v, healer=%v, executor=%v, general-agent=%v; nodes: %s)", port, kind, plannerEnabled, generatorEnabled, healerEnabled, executorEnabled, generalAgentEnabled, dispatcher)
+	log.Fatal(http.ListenAndServe(":"+port, routes(&api{service: svc, dispatcher: dispatcher},
 		service{name: "planner", proxy: plannerProxy, enabled: plannerEnabled},
 		service{name: "generator", proxy: generatorProxy, enabled: generatorEnabled},
 		service{name: "healer", proxy: healerProxy, enabled: healerEnabled},
 		service{name: "executor", proxy: executorProxy, enabled: executorEnabled},
 		service{name: "general-agent", proxy: generalAgentProxy, enabled: generalAgentEnabled})))
+}
+
+// dispatchConfig reads the task queue's limits; each is a Go duration such as 30m or 168h.
+func dispatchConfig() dispatch.Config {
+	duration := func(key string, fallback time.Duration) time.Duration {
+		v := os.Getenv(key)
+		if v == "" {
+			return fallback
+		}
+		d, err := time.ParseDuration(v)
+		if err != nil || d <= 0 {
+			log.Fatalf("%s must be a positive duration such as 30m: %q", key, v)
+		}
+		return d
+	}
+	return dispatch.Config{
+		QueueTimeout:  duration("CASEHUB_TASK_QUEUE_TIMEOUT", 30*time.Minute),
+		Retention:     duration("CASEHUB_TASK_RETENTION", 7*24*time.Hour),
+		NodeLostAfter: duration("CASEHUB_NODE_LOST_AFTER", 2*time.Minute),
+	}
 }
 func storageKind(kind, databaseURL string) string {
 	if kind != "" {

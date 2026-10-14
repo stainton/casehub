@@ -352,7 +352,7 @@ document.onmousemove=e=>{if(resizing){lastX=e.clientX;document.documentElement.s
 document.onmouseup=()=>{if(resizing&&lastX<70&&resizeCollapse)$(resizeCollapse).click();else if(resizing&&lastX<220)document.documentElement.style.setProperty(resizeVar,'220px');resizing=false;$$('.resizer').forEach(r=>r.classList.remove('dragging'))};
 document.documentElement.classList.toggle('dark',localStorage.getItem('casehub-theme')==='dark');
 window.addEventListener('hashchange',renderHistoryRoute);
-refresh().then(resumeGenTasks).catch(e=>toast(e.message,true));
+refresh().then(restoreServerTasks).then(resumeGenTasks).catch(e=>toast(e.message,true));
 
 function resetRecordEditor(initialValue='') {
   if(recordEditor){recordEditor.setMarkdown(initialValue);return}
@@ -552,7 +552,7 @@ function renderReqFocus(){
   $('#req-ai-supplement').onclick=()=>openReqAiSupplement(doc);
   $('#req-link-btn').onclick=e=>openReqLinkPicker(e,doc);
   d.querySelectorAll('.req-rel-chip').forEach(b=>b.onclick=()=>setReqFocus({type:'doc',id:b.dataset.reqDoc}));
-  if(localStorage.getItem(aiJobKey(doc))&&!isAiActive(doc))checkAiJob(doc).catch(()=>{});
+  if(aiJobOf(doc)&&!isAiActive(doc))checkAiJob(doc).catch(()=>{});
 }
 async function saveReqDoc(doc){
   await act('editReqDoc',{DocID:doc.ID,Title:doc.Title,Content:reqEditor.getMarkdown()});
@@ -575,7 +575,14 @@ function renameReqDocModal(doc){showModal('重命名需求文档',`<label>标题
 // ---- AI 设计抽屉：对接 auto-test planner HTTP 服务 ----
 // 每份需求最多一个 AI 设计任务，但不同需求的任务可以同时在跑（需求批量 AI 设计），
 // 所以用集合记录"哪些需求有活跃任务"来驱动按钮态与抽屉重新打开。
-const aiJobKey=doc=>`casehub-ai-job-${doc.ID}`;
+// 每份需求最近一次还没处理完的 planner 任务：任务归 CaseHub 所有（重启、换浏览器都还在），这里只是它的内存索引，
+// 启动时由 restoreServerTasks 从 /api/tasks 填回。处理完（导入、重试、重新开始、取消）即在服务端标记为已处理。
+const aiJobs=new Map();
+const aiJobOf=doc=>aiJobs.get(doc.ID)||null;
+function clearAiJob(doc){
+  const id=aiJobs.get(doc.ID);aiJobs.delete(doc.ID);
+  if(id)markTaskHandled('planner',id);
+}
 // 设计完成后的结果摘要（导入条数 + 遗留问题）持久保存，关闭抽屉/刷新页面后仍展示，
 // 直到用户点击"重新设计"才清除。
 const aiResultKey=doc=>`casehub-ai-result-${doc.ID}`;
@@ -603,6 +610,27 @@ function syncAiButton(){
 function closeAiStream(jobId){aiSources.get(jobId)?.close();aiSources.delete(jobId)}
 // 两个 auto-test 服务（planner / generator）共用：它们的错误体格式相同，CaseHub 的代理在
 // 服务未配置或不可达时也返回同样的形状。
+// ---- CaseHub 的任务记录（/api/tasks）：任务 ID 不再存本地，启动时从服务端找回未处理完的任务 ----
+function patchTask(kind,id,body){serviceRequest(`/api/${kind}/jobs/${id}`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}).catch(()=>{})}
+const markTaskHandled=(kind,id)=>patchTask(kind,id,{handled:true});
+async function restoreServerTasks(){
+  for(let i=localStorage.length-1;i>=0;i--){const key=localStorage.key(i);if(key?.startsWith('casehub-ai-job-'))localStorage.removeItem(key)} // 旧版本的本地任务 ID
+  let list;
+  try{list=(await serviceRequest('/api/tasks?active=1&kind=planner,generator,healer')).tasks||[]}catch{return}
+  for(const t of list){ // 新的在前
+    if(t.kind==='planner'){const docId=t.subject?.startsWith('req:')?t.subject.slice(4):'';if(docId&&!aiJobs.has(docId))aiJobs.set(docId,t.id);continue}
+    const {group,...meta}=t.meta||{};
+    if(!meta.versionID||!Array.isArray(meta.caseIDs)||genTasks.some(task=>task.jobId===t.id))continue; // 还没同步过记账的任务无从展示
+    if(group?.id&&!genGroup(group.id))genGroups.push(group);
+    genTasks.push({...meta,kind:t.kind,jobId:t.id,status:t.status,stage:t.stage,error:t.error,createdAt:meta.createdAt||t.createdAt});
+    genSynced.set(t.id,{kind:t.kind,meta:JSON.stringify(t.meta)});
+  }
+  genTasks.sort((a,b)=>String(b.createdAt||'').localeCompare(String(a.createdAt||'')));
+  genGroups.sort((a,b)=>String(b.createdAt||'').localeCompare(String(a.createdAt||'')));
+  // 和以前本地只保留最近 30 条一样：更早的已结束任务视为已处理。
+  const stale=genTasks.filter(task=>!isLocalGen(task)).slice(30).filter(task=>GEN_TERMINAL.includes(task.status));
+  if(stale.length){genTasks=genTasks.filter(task=>!stale.includes(task));saveGenTasks()}
+}
 async function serviceRequest(path,options){
   const r=await fetch(path,options),ct=r.headers.get('content-type')||'';
   const x=ct.includes('application/json')?await r.json():null;
@@ -632,7 +660,7 @@ async function renderAiDrawer(doc){
   await checkAiJob(doc);
 }
 async function checkAiJob(doc){
-  const jobId=localStorage.getItem(aiJobKey(doc));
+  const jobId=aiJobOf(doc);
   if(!jobId){
     clearAiActive(doc);
     if(isAiDrawerOpen(doc)){const summary=loadAiResult(doc);summary?renderAiResult(doc,summary):renderAiForm(doc)}
@@ -642,7 +670,8 @@ async function checkAiJob(doc){
     const job=await serviceRequest(`/api/planner/jobs/${jobId}`);
     routeAiJob(doc,job);
   }catch(e){
-    localStorage.removeItem(aiJobKey(doc));
+    // 只有任务确实不存在时才放弃它；网络等临时错误下保留，下次打开再查。
+    if(e.status===404)clearAiJob(doc);else aiJobs.delete(doc.ID);
     clearAiActive(doc);
     if(isAiDrawerOpen(doc))renderAiForm(doc,'读取任务状态失败，请重新开始。');
   }
@@ -901,7 +930,7 @@ function renderPlaywrightAiForm(doc,notice,continueFrom){
     }catch(err){
       toast(err.message,true);btn.disabled=false;
       // 会话已清理、或这次中断已经被继续过：回到普通表单，别让人反复点一个已经失效的"继续"。
-      if(continueFrom&&err.status===409){localStorage.removeItem(aiJobKey(doc));renderAiForm(doc,'上次的任务已经无法继续，请重新开始设计。')}
+      if(continueFrom&&err.status===409){clearAiJob(doc);renderAiForm(doc,'上次的任务已经无法继续，请重新开始设计。')}
     }
   };
 }
@@ -915,13 +944,13 @@ async function startAiJob(doc,values,caseCount,code,timeoutMinutes,{continueFrom
   }
   const {requirements,instructions,explorationNotes}=aiRequirementPayload(doc,values,code),productExperience=productExperienceFor(values.baseUrl);
   const payload={requirements,target:{baseUrl:values.baseUrl},context:{instructions,...(explorationNotes?{explorationNotes}:{}),...(productExperience?{productExperience}:{}),...(values.assetIds?.length?{assetIds:values.assetIds}:{})},caseCount,timeoutMs:timeoutMinutes*60000,
-    ...(continueFrom?{continueFrom}:{})};
+    ...(continueFrom?{continueFrom}:{}),casehubTask:{subject:`req:${doc.ID}`}};
   if(values.testAccount||values.testSecret)payload.context.testData={username:values.testAccount||'',password:values.testSecret||''};
   const job=await serviceRequest('/api/planner/jobs',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
   // 提交过的表单留着（新对象，作废仍在跑的评估），失败后重试/继续可以直接用。
   aiEstimates.set(doc.ID,{status:'done',count:caseCount,code,rationale,values});
   saveAiForm(doc,values,caseCount,code);
-  localStorage.setItem(aiJobKey(doc),job.id);
+  aiJobs.set(doc.ID,job.id);
   routeAiJob(doc,job);
   return job;
 }
@@ -936,7 +965,7 @@ async function bulkAiDesignModal(docs){
   const busy=docs.filter(isAiActive),todo=docs.filter(d=>!isAiActive(d));
   if(!todo.length)return toast('所选需求都有正在进行的 AI 设计任务',true);
   const v={...agentDefaults(aiDesignAgents.find(a=>a.id==='playwright')),...(aiFormState(todo[0])?.values||{})};
-  const rows=todo.map(d=>{const live=liveReqDoc(d),saved=loadAiForm(d);return `<tr data-doc="${esc(d.ID)}"><td>${esc(d.Title)}${localStorage.getItem(aiJobKey(d))?' <small class="meta" title="该需求上一次的设计任务/结果还没处理，开始后会被新任务替代">⚠ 替代上次结果</small>':''}</td><td><input name="code:${esc(d.ID)}" maxlength="12" pattern="[A-Z][A-Z0-9]{1,11}" autocomplete="off" spellcheck="false" placeholder="如 LOGIN" value="${esc(live.Code||saved?.code||'')}"></td><td><input name="count:${esc(d.ID)}" type="number" min="1" max="${AI_MAX_CASE_COUNT}" step="1" value="${saved?.count||AI_DEFAULT_CASE_COUNT}"></td><td><small class="meta bulk-ai-note"></small></td></tr>`}).join('');
+  const rows=todo.map(d=>{const live=liveReqDoc(d),saved=loadAiForm(d);return `<tr data-doc="${esc(d.ID)}"><td>${esc(d.Title)}${aiJobOf(d)?' <small class="meta" title="该需求上一次的设计任务/结果还没处理，开始后会被新任务替代">⚠ 替代上次结果</small>':''}</td><td><input name="code:${esc(d.ID)}" maxlength="12" pattern="[A-Z][A-Z0-9]{1,11}" autocomplete="off" spellcheck="false" placeholder="如 LOGIN" value="${esc(live.Code||saved?.code||'')}"></td><td><input name="count:${esc(d.ID)}" type="number" min="1" max="${AI_MAX_CASE_COUNT}" step="1" value="${saved?.count||AI_DEFAULT_CASE_COUNT}"></td><td><small class="meta bulk-ai-note"></small></td></tr>`}).join('');
   showModal(`批量 AI 设计（${todo.length} 份需求）`,`${busy.length?`<p class="meta">${busy.length} 份需求已有进行中的设计任务，已跳过：${busy.map(d=>esc(d.Title)).join('、')}</p>`:''}<p class="meta">下面的被测系统、账号和资产对所有所选需求通用，每份需求各提交一个独立的设计任务（可在任务中心「设计」里分别查看进度和确认结果）。</p><label>被测系统 URL<input name="baseUrl" required placeholder="https://test.example.com/login" autocomplete="off" value="${esc(v.baseUrl||'')}"></label><label>补充说明（可选）<textarea name="instructions" placeholder="覆盖范围、登录方式或探索约束">${esc(v.instructions||'')}</textarea></label><label>测试账号 · 用户名（可选）<input name="testAccount" autocomplete="off" value="${esc(v.testAccount||'')}"></label><label>测试账号 · 密码（可选）<input name="testSecret" type="text" class="fake-password" autocomplete="off" spellcheck="false" value=""></label><fieldset class="ai-assets"><legend>随任务带上的资产（可选）</legend>${assetsCache.length?assetsCache.map(a=>`<label class="ai-asset"><input type="checkbox" name="assetIds" value="${esc(a.id)}"${(v.assetIds||[]).includes(a.id)?' checked':''}> ${esc(assetTypeLabel(a.type))} · ${esc(a.name)} <small>${assetSize(a.size)}</small></label>`).join(''):'<small class="meta">还没有资产，可在头像菜单的「资产」里上传。</small>'}</fieldset><label>任务超时时间（分钟，每个任务）<input name="timeoutMinutes" type="number" min="${AI_MIN_TIMEOUT_MIN}" max="${AI_MAX_TIMEOUT_MIN}" step="1" required value="${esc(v.timeoutMinutes??aiTimeoutMinutes())}"></label><table class="bulk-ai-table"><thead><tr><th>需求</th><th>需求缩写</th><th>建议用例数</th><th></th></tr></thead><tbody>${rows}</tbody></table><p><button type="button" class="secondary" id="bulk-ai-estimate">AI 评估用例数与缩写</button> <small class="meta">缩写必填；不评估也可以手动填写，数量默认 ${AI_DEFAULT_CASE_COUNT}。</small></p>`,async()=>{
     const form=$('#modal-form'),data=new FormData(form),values={baseUrl:String(data.get('baseUrl')).trim(),instructions:String(data.get('instructions')||''),testAccount:String(data.get('testAccount')||''),testSecret:String(data.get('testSecret')||''),assetIds:data.getAll('assetIds')};
     if(form.dataset.estimating)throw toast('正在评估，请等评估结束再开始',true);
@@ -1005,7 +1034,7 @@ async function runAiEstimate(doc,values){
   }finally{clearTimeout(abortTimer);clearInterval(ticker)}
   if(aiEstimates.get(doc.ID)!==est)return; // superseded (e.g. a job was started elsewhere)
   aiEstimates.set(doc.ID,{status:'done',...next,values:est.values});
-  if(isAiDrawerOpen(doc)&&!isAiActive(doc)&&!localStorage.getItem(aiJobKey(doc)))renderAiForm(doc);
+  if(isAiDrawerOpen(doc)&&!isAiActive(doc)&&!aiJobOf(doc))renderAiForm(doc);
 }
 function aiStageLabel(job){
   const status={queued:'排队中',running:'进行中',succeeded:'已完成',failed:'失败',cancelled:'已取消'}[job.status]||job.status;
@@ -1026,7 +1055,7 @@ function routeAiJob(doc,job){
   if(job.status==='succeeded')return handleAiSuccess(doc,job);
   // 失败的任务留在 localStorage 里：刷新或重开抽屉后仍能看到失败原因，并选择重试还是继续
   // （continuable 的会话在服务端还留着）。取消的任务没什么可继续的，直接清掉。
-  if(job.status!=='failed')localStorage.removeItem(aiJobKey(doc));
+  if(job.status!=='failed')clearAiJob(doc);
   if(isAiDrawerOpen(doc))renderAiTerminal(doc,job);
 }
 function renderAiRunning(doc,job){
@@ -1079,7 +1108,7 @@ function renderAiTerminal(doc,job){
   const cancelled=job.status==='cancelled';
   const hint=job.continuable?'<p class="meta">中断前的探索还留在服务端：「继续」接着往下做（可以先调大超时时间），「重试」用同样的表单从头开始。</p>':'';
   $('#ai-drawer-body').innerHTML=`<div class="card meta-grid"><span>状态 <b>${aiStageLabel(job)}</b></span></div>${job.error?`<p class="meta">${esc(job.error.code)}：${esc(job.error.message)}</p>`:cancelled?'<p class="meta">任务已取消。</p>':''}${hint}<p class="drawer-actions"><button type="button"${job.continuable?' class="secondary"':''} id="ai-retry">重试</button>${job.continuable?'<button type="button" id="ai-continue">继续</button>':''}</p>`;
-  $('#ai-retry').onclick=()=>{localStorage.removeItem(aiJobKey(doc));renderAiForm(doc)};
+  $('#ai-retry').onclick=()=>{clearAiJob(doc);renderAiForm(doc)};
   if(job.continuable)$('#ai-continue').onclick=()=>renderAiForm(doc,'',job.id);
 }
 // 设计完成后先在抽屉中等待确认；只有用户明确确认，才创建"用例评审"目录并导入草稿用例。
@@ -1117,7 +1146,7 @@ function renderAiImportConfirmation(doc,job,result){
   const limitations=result.limitations?.length?`<div class="card"><h3>未验证/受限范围 <small class="meta">按风险从高到低</small></h3>${aiRiskListHTML(result.limitations,l=>esc(l.summary))}</div>`:'';
   const casesHTML=planned.length?`<div class="card"><h3>待确认用例 <small class="meta">${planned.length} 条</small></h3><ol class="ai-result-cases">${planned.map(c=>`<li><b>${esc(c.name)}</b>${c.priority?` <small class="meta">${esc(c.priority)}</small>`:''}</li>`).join('')}</ol></div>`:'<p class="meta">设计结果中没有可导入的用例。</p>';
   $('#ai-drawer-body').innerHTML=`<div class="card meta-grid"><span>状态 <b>设计已完成</b></span><span>待确认用例 <b>${planned.length}</b></span></div>${casesHTML}${issues}${limitations}<p class="meta">确认后才会创建目录并放入“用例评审”。</p><p class="drawer-actions"><button type="button" class="secondary" id="ai-restart">重新设计</button><button type="button" id="ai-confirm-import"${planned.length?'':' disabled'}>确认放入用例评审</button></p>`;
-  $('#ai-restart').onclick=()=>{localStorage.removeItem(aiJobKey(doc));renderAiForm(doc)};
+  $('#ai-restart').onclick=()=>{clearAiJob(doc);renderAiForm(doc)};
   $('#ai-confirm-import').onclick=async e=>{
     const button=e.currentTarget;button.disabled=true;
     try{
@@ -1125,7 +1154,7 @@ function renderAiImportConfirmation(doc,job,result){
       await reportDefects((result.issues||[]).map(i=>({RequirementID:doc.ID,Title:`[${RISK_LABEL[i.risk]||'未评级'}] ${i.scenario}`,Description:`**场景**：${i.scenario}\n\n**现象**：${i.symptom}\n\n来源：用例设计探索（风险 ${RISK_LABEL[i.risk]||'未评级'}）`,Source:`planner:${doc.ID}:${i.scenario}`})));
       const summary={count:planned.length,limitations:result.limitations||[],issues:result.issues||[]};
       localStorage.setItem(aiResultKey(doc),JSON.stringify(summary));
-      localStorage.removeItem(aiJobKey(doc));
+      clearAiJob(doc);
       toast(`已导入 ${planned.length} 条用例到“用例评审”`);
       renderAiResult(doc,summary);
     }catch(error){button.disabled=false;toast(`导入到“用例评审”失败：${error.message}`,true)}
@@ -1717,8 +1746,9 @@ $('#auto-expand').onclick=$('#auto-empty-expand').onclick=()=>setAutoSidebarColl
 // ---- 脚本生成抽屉（对接 auto-test generator HTTP 服务）------------------------
 // 与"AI 设计"抽屉的单任务模型不同：脚本生成天然是批量的（一个目录几十条用例），
 // 所以抽屉里是一个任务列表，每个任务一个可展开选项卡，可以同时跑多个、关掉抽屉后
-// 继续在后台跑，重新打开按 ID 恢复查看。任务清单存在 localStorage，脚本本身存在
-// 服务端 state 里（saveScript）。
+// 继续在后台跑，重新打开按 ID 恢复查看。任务归 CaseHub 所有：每个任务在这里的记账（用例、分组、保存情况）
+// 作为任务的 meta 存在服务端（saveGenTasks 同步），换浏览器或清掉本地数据也能找回；脚本本身存在服务端 state 里（saveScript）。
+// 只有提交就失败、从未成为任务的条目（local-…）留在 localStorage。
 // crypto.randomUUID 只在安全上下文（HTTPS / localhost）可用；用 http://IP 访问时为 undefined，
 // 批量生成创建任务组时会直接抛错，所以这里降级到 getRandomValues / Math.random。
 function uuid(){
@@ -1741,8 +1771,25 @@ const taskService=task=>task?.kind==='healer'?'healer':'generator';
 const hasHealing=(vid,id)=>genRunning().some(t=>taskService(t)==='healer'&&t.versionID===vid&&t.caseIDs.includes(id));
 const genRuntime=new Map(); // jobId -> {source, log:[], stage, status}
 const genOpen=new Set();    // 展开的选项卡（'draft' 或 jobId）
-function loadGenTasks(){try{const x=JSON.parse(localStorage.getItem(GEN_TASKS_KEY));return Array.isArray(x)?x:[]}catch{return []}}
-function saveGenTasks(){try{localStorage.setItem(GEN_TASKS_KEY,JSON.stringify(genTasks.slice(0,30)));localStorage.setItem(GEN_GROUPS_KEY,JSON.stringify(genGroups.slice(0,20)))}catch{}}
+const isLocalGen=task=>String(task.jobId).startsWith('local-');
+// 旧版本把服务端任务 ID 也存在本地；那些是执行节点上的任务 ID，CaseHub 接管任务后已无从查询，只保留本地失败条目。
+function loadGenTasks(){try{const x=JSON.parse(localStorage.getItem(GEN_TASKS_KEY));return Array.isArray(x)?x.filter(isLocalGen):[]}catch{return []}}
+const genSynced=new Map(); // jobId -> {kind, meta:最近一次同步到服务端的 meta JSON}
+function genMeta(task){const {status,stage,error,jobId,...meta}=task,group=meta.groupID&&genGroup(meta.groupID);return group?{...meta,group}:meta}
+function saveGenTasks(){
+  try{const local=genTasks.filter(isLocalGen).slice(0,30);localStorage.setItem(GEN_TASKS_KEY,JSON.stringify(local));localStorage.setItem(GEN_GROUPS_KEY,JSON.stringify(genGroups.filter(group=>local.some(task=>task.groupID===group.id)).slice(0,20)))}catch{}
+  const present=new Set();
+  for(const task of genTasks){
+    if(isLocalGen(task))continue;
+    present.add(task.jobId);
+    const meta=JSON.stringify(genMeta(task)),kind=taskService(task);
+    if(genSynced.get(task.jobId)?.meta===meta)continue;
+    genSynced.set(task.jobId,{kind,meta});
+    patchTask(kind,task.jobId,{meta:JSON.parse(meta)});
+  }
+  // 从列表里移除的任务（删除、转入分组后清理）在服务端标记为已处理，不再出现在任务列表里。
+  for(const [id,{kind}] of genSynced)if(!present.has(id)){genSynced.delete(id);markTaskHandled(kind,id)}
+}
 function loadGenGroups(){try{const x=JSON.parse(localStorage.getItem(GEN_GROUPS_KEY));return Array.isArray(x)?x:[]}catch{return []}}
 const genGroup=id=>genGroups.find(group=>group.id===id);
 function loadGenTarget(){try{return JSON.parse(localStorage.getItem(GEN_TARGET_KEY))||{}}catch{return {}}}
@@ -2142,7 +2189,7 @@ async function resumeGenTasks(){
 
 // ---- 任务中心：三类任务（设计 / 生成修复 / 执行）共用一排标签，随抽屉一起弹出 ----
 const TC_TABS=[['plan','Planner · 设计','#ai-drawer'],['gen','Generator · 生成/修复','#gen-drawer'],['run','Executor · 执行','#run-drawer']];
-const tcPlannerDocs=()=>(state?.reqDocs||[]).filter(doc=>localStorage.getItem(aiJobKey(doc))||isAiActive(doc));
+const tcPlannerDocs=()=>(state?.reqDocs||[]).filter(doc=>aiJobOf(doc)||isAiActive(doc));
 const tcActiveOf={plan:()=>tcPlannerDocs().filter(isAiActive).length,gen:()=>genRunning().length,run:()=>activeScriptRuns().length};
 const tcTotalOf={plan:()=>tcPlannerDocs().length,gen:()=>genTasks.length,run:()=>scriptRunTasks.length};
 const tcFilter={plan:'active',gen:'active',run:'active'};

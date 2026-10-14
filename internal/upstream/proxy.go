@@ -163,20 +163,30 @@ func applyAgentSettings(ctx context.Context, payload map[string]json.RawMessage,
 // the same Error shape the services themselves use, so the frontend has one error
 // format to handle regardless of which side rejected the request.
 func New(baseURL, service string, settings Settings, assets *Assets) (http.Handler, bool) {
-	code := strings.ReplaceAll(strings.ToUpper(service), "-", "_")
-	disabled := func(w http.ResponseWriter, _ *http.Request) {
-		errorJSON(w, http.StatusServiceUnavailable, code+"_DISABLED", disabledMessage(service))
-	}
 	if strings.TrimSpace(baseURL) == "" {
-		return http.HandlerFunc(disabled), false
+		return NewPooled(nil, service, settings, assets)
 	}
-	target, err := url.Parse(baseURL)
-	if err != nil {
-		return http.HandlerFunc(disabled), false
+	if target, err := url.Parse(baseURL); err != nil || target.Host == "" {
+		return NewPooled(nil, service, settings, assets)
 	}
+	return NewPooled(func(context.Context) []string { return []string{strings.TrimRight(baseURL, "/")} }, service, settings, assets)
+}
+
+// NewPooled is New for a pool of nodes (see dispatch.Pool): each request goes to the first node nodes returns,
+// which rotates between calls. A nil nodes function disables the feature. Tasks themselves (…/jobs) are not
+// proxied but dispatched (internal/dispatch); this serves what is left: synchronous calls and asset pushes.
+func NewPooled(nodes func(context.Context) []string, service string, settings Settings, assets *Assets) (http.Handler, bool) {
+	code := ErrorCode(service)
+	if nodes == nil {
+		return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			errorJSON(w, http.StatusServiceUnavailable, code+"_DISABLED", disabledMessage(service))
+		}), false
+	}
+	type nodeKey struct{}
 	apiPrefix, servicePrefix := "/api/"+service, "/v1/"+service
 	rp := &httputil.ReverseProxy{
 		Director: func(req *http.Request) {
+			target, _ := url.Parse(req.Context().Value(nodeKey{}).(string))
 			req.URL.Scheme = target.Scheme
 			req.URL.Host = target.Host
 			req.Host = target.Host
@@ -187,71 +197,24 @@ func New(baseURL, service string, settings Settings, assets *Assets) (http.Handl
 			errorJSON(w, http.StatusBadGateway, code+"_UNREACHABLE", unreachableMessage(service)+err.Error())
 		},
 	}
-	// push makes sure the agent holds one asset before a task names it: HEAD asks whether its cache already
-	// has that hash (the same file is never sent twice), PUT streams the bytes otherwise.
 	client := &http.Client{}
-	push := func(ctx context.Context, source Assets, ref AssetRef) error {
-		u := *target
-		u.Path, u.RawQuery = "/v1/"+service+"/assets/"+ref.SHA256, ""
-		head, err := http.NewRequestWithContext(ctx, http.MethodHead, u.String(), nil)
-		if err != nil {
-			return err
-		}
-		resp, err := client.Do(head)
-		if err != nil {
-			return err
-		}
-		_ = resp.Body.Close()
-		if resp.StatusCode == http.StatusOK {
-			return nil
-		}
-		body, err := source.Open(ctx, ref.ID)
-		if err != nil {
-			return err
-		}
-		defer body.Close()
-		put, err := http.NewRequestWithContext(ctx, http.MethodPut, u.String(), body)
-		if err != nil {
-			return err
-		}
-		put.ContentLength = ref.Size
-		put.Header.Set("Content-Type", "application/octet-stream")
-		resp, err = client.Do(put)
-		if err != nil {
-			return err
-		}
-		defer resp.Body.Close()
-		if resp.StatusCode/100 != 2 {
-			return errors.New(ref.Name + "：" + service + " 拒绝接收资产（HTTP " + resp.Status + "），服务可能需要升级")
-		}
-		return nil
-	}
-	if settings == nil && assets == nil {
-		return rp, true
-	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodPost {
+		candidates := nodes(r.Context())
+		if len(candidates) == 0 {
+			errorJSON(w, http.StatusServiceUnavailable, code+"_UNAVAILABLE", unreachableMessage(service)+"当前没有可用的执行节点")
+			return
+		}
+		node := candidates[0]
+		r = r.WithContext(context.WithValue(r.Context(), nodeKey{}, node))
+		if r.Method == http.MethodPost && (settings != nil || assets != nil) {
 			payload, ok, err := readJSONBody(r)
 			if err != nil {
 				errorJSON(w, http.StatusInternalServerError, code+"_REQUEST_UNAVAILABLE", "无法读取请求体："+err.Error())
 				return
 			}
 			if ok {
-				if err := applyAssetIDs(r.Context(), payload, assets, push); err != nil {
-					var bad invalidAssetIDsError
-					var pushFailed pushError
-					if errors.As(err, &bad) {
-						errorJSON(w, http.StatusBadRequest, code+"_INVALID_REQUEST", err.Error())
-					} else if errors.As(err, &pushFailed) {
-						errorJSON(w, http.StatusBadGateway, code+"_ASSETS_UNAVAILABLE", unreachableMessage(service)+"无法把资产交给它："+err.Error())
-					} else {
-						errorJSON(w, http.StatusInternalServerError, code+"_ASSETS_UNAVAILABLE", "无法读取所选资产，请稍后重试："+err.Error())
-					}
-					return
-				}
-				if err := applyAgentSettings(r.Context(), payload, settings); err != nil {
-					errorJSON(w, http.StatusInternalServerError, code+"_SETTINGS_UNAVAILABLE",
-						"无法读取 "+service+" 的 agent 配置，请稍后重试："+err.Error())
+				if err := Prepare(r.Context(), client, node, service, payload, settings, assets); err != nil {
+					WriteError(w, service, err)
 					return
 				}
 				if err := writeJSONBody(r, payload); err != nil {
@@ -262,6 +225,88 @@ func New(baseURL, service string, settings Settings, assets *Assets) (http.Handl
 		}
 		rp.ServeHTTP(w, r)
 	}), true
+}
+
+// ErrorCode is the prefix of a service's own error codes: general-agent → GENERAL_AGENT.
+func ErrorCode(service string) string { return strings.ReplaceAll(strings.ToUpper(service), "-", "_") }
+
+// Prepare turns a request into what one node receives: context.assetIds resolved into refs whose bytes are
+// pushed to that node first, and the agent configuration CaseHub stores attached as agentSettings.
+func Prepare(ctx context.Context, client *http.Client, node, service string, payload map[string]json.RawMessage, settings Settings, assets *Assets) error {
+	push := func(ctx context.Context, source Assets, ref AssetRef) error {
+		body, err := source.Open(ctx, ref.ID)
+		if err != nil {
+			return err
+		}
+		defer body.Close()
+		return PushBlob(ctx, client, node, service, ref.SHA256, ref.Size, body, ref.Name)
+	}
+	if err := applyAssetIDs(ctx, payload, assets, push); err != nil {
+		return err
+	}
+	if err := applyAgentSettings(ctx, payload, settings); err != nil {
+		return settingsError{err}
+	}
+	return nil
+}
+
+// PushBlob makes sure a node holds one content-addressed file before a task names it: HEAD asks whether its
+// cache already has that hash (the same file is never sent twice), PUT streams the bytes otherwise. Assets
+// and the planner's session archives (checkpoints) both travel this way.
+func PushBlob(ctx context.Context, client *http.Client, node, service, sha256 string, size int64, body io.Reader, name string) error {
+	u := node + "/v1/" + service + "/assets/" + sha256
+	head, err := http.NewRequestWithContext(ctx, http.MethodHead, u, nil)
+	if err != nil {
+		return pushError{err}
+	}
+	resp, err := client.Do(head)
+	if err != nil {
+		return pushError{err}
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode == http.StatusOK {
+		return nil
+	}
+	put, err := http.NewRequestWithContext(ctx, http.MethodPut, u, body)
+	if err != nil {
+		return pushError{err}
+	}
+	put.ContentLength = size
+	put.Header.Set("Content-Type", "application/octet-stream")
+	resp, err = client.Do(put)
+	if err != nil {
+		return pushError{err}
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode/100 != 2 {
+		return pushError{errors.New(name + "：" + service + " 拒绝接收资产（HTTP " + resp.Status + "），服务可能需要升级")}
+	}
+	return nil
+}
+
+// settingsError marks the stored agent configuration being unreadable (CaseHub's fault, 500).
+type settingsError struct{ error }
+
+// IsNodeError reports a failure of the node a request was being prepared for (unreachable, refused an
+// asset), as opposed to the request itself being invalid or CaseHub failing: another node may do.
+func IsNodeError(err error) bool { var p pushError; return errors.As(err, &p) }
+
+// WriteError answers a request Prepare refused, with the status and code the proxy has always used.
+func WriteError(w http.ResponseWriter, service string, err error) {
+	code := ErrorCode(service)
+	var bad invalidAssetIDsError
+	var pushFailed pushError
+	var settingsFailed settingsError
+	switch {
+	case errors.As(err, &bad):
+		errorJSON(w, http.StatusBadRequest, code+"_INVALID_REQUEST", err.Error())
+	case errors.As(err, &pushFailed):
+		errorJSON(w, http.StatusBadGateway, code+"_ASSETS_UNAVAILABLE", unreachableMessage(service)+"无法把资产交给它："+err.Error())
+	case errors.As(err, &settingsFailed):
+		errorJSON(w, http.StatusInternalServerError, code+"_SETTINGS_UNAVAILABLE", "无法读取 "+service+" 的 agent 配置，请稍后重试："+err.Error())
+	default:
+		errorJSON(w, http.StatusInternalServerError, code+"_ASSETS_UNAVAILABLE", "无法读取所选资产，请稍后重试："+err.Error())
+	}
 }
 
 func errorJSON(w http.ResponseWriter, status int, code, message string) {

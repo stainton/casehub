@@ -528,6 +528,9 @@ func (p *Postgres) GetRecordImage(ctx context.Context, id string) (core.RecordIm
 }
 
 func (p *Postgres) Close() error { return p.db.Close() }
+
+// DB is the connection pool, shared with the task store (internal/tasks).
+func (p *Postgres) DB() *sql.DB { return p.db }
 func (p *Postgres) Load(ctx context.Context) (core.State, error) {
 	var b []byte
 	e := p.db.QueryRowContext(ctx, "SELECT payload FROM casehub_state WHERE id=1").Scan(&b)
