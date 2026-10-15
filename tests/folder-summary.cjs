@@ -24,8 +24,8 @@ const CODE=`S${Date.now().toString(36).toUpperCase().slice(-6)}`;
     prompt=JSON.parse(JSON.parse(route.request().postData()).prompt);
     await gate;
     route.fulfill({status:200,contentType:'application/json',body:JSON.stringify({output:{conclusion:'整体可用，存在失败项。',features:[
-      {feature:'账号密码登录与错误提示',caseIDs:[ids[0],ids[1]]},{feature:'不存在的用例',caseIDs:['NOT-EXIST']}],risks:[
-      {level:'high',title:'错误提示不正确',detail:'用例2失败',caseIDs:[ids[1],'NOT-EXIST'],requirement:doc.Title,suggestion:'修复后回归'}]}})});
+      {feature:'正确账号密码可登录',caseIDs:[ids[0]]},{feature:'错误提示文案正确',caseIDs:[ids[1]]},{feature:'不存在的用例',caseIDs:['NOT-EXIST']}],risks:[
+      {title:'错误提示不正确',detail:'用例2失败，影响登录失败反馈',caseIDs:[ids[1],'NOT-EXIST']}]}})});
   });
   await page.reload();
   await page.waitForFunction(()=>typeof state!=='undefined'&&state&&state.folders);
@@ -49,12 +49,12 @@ const CODE=`S${Date.now().toString(36).toUpperCase().slice(-6)}`;
   assert.ok(prompt.openIssues.some(i=>i.title===`登录偶发超时 ${CODE}`));
   assert.ok(!JSON.stringify(prompt).includes('base64'),'record images are stripped from the prompt');
   assert.match(md,/\| 5 \| 1 \| 1 \| 0 \| 3 \|/);
-  // 按「需求 → 目录」分节，功能点合并多个用例，结果取最差；AI 没覆盖的用例各补一行，虚构的用例被丢弃。
-  assert.match(md,new RegExp(`### ${doc.Title}[\\s\\S]*#### 登录与认证[\\s\\S]*\\| 账号密码登录与错误提示 \\| ${ids[0]}、${ids[1]} \\| 失败 \\|`));
-  assert.match(md,/### 未关联需求[\s\S]*\| 用例3 \| FREE-3 \| 未执行 \|/);
+  // 一个目录一节、两列表；默认一用例一行，结果按所含用例汇总；AI 没覆盖的用例补一行，虚构的用例被丢弃；不列步骤。
+  assert.match(md,new RegExp(`### 登录与认证\\n\\n关联需求：${doc.Title}\\n\\n\\| 功能点 \\| 结果 \\|\\n\\| --- \\| --- \\|\\n\\| 正确账号密码可登录 \\| 通过 \\|\\n\\| 错误提示文案正确 \\| 失败 \\|`));
+  assert.match(md,/\| 用例3 \| 未执行 \|/);
   assert.ok(!md.includes('不存在的用例'));
   assert.ok(!md.includes('| s |'),'case steps are not listed');
-  assert.match(md,/\[高\] 错误提示不正确/);
+  assert.match(md,/## 高风险项\n\n- \*\*错误提示不正确\*\*：用例2失败，影响登录失败反馈（TC-/);
   assert.ok(!md.includes('NOT-EXIST'),'case ids invented by the model are dropped');
   // 失败与取消：失败显示原因和重试；关闭弹窗会中止请求且不再改动界面。
   await page.keyboard.press('Escape');
