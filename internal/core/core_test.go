@@ -1788,3 +1788,41 @@ func TestReviseReqDocRewritesCasesFlagsThemAndIsAtomic(t *testing.T) {
 		}
 	}
 }
+
+func TestCreateVersionFromSelectedCases(t *testing.T) {
+	svc := core.NewService(store.NewMemory())
+	state := apply(t, svc, core.Action{Type: "createVersion", Name: "只含所选", CaseIDs: []string{"CASE-0001"}})
+	id := branchID(t, state, "只含所选")
+	var cases, folders []string
+	for _, c := range state.Cases {
+		if c.VersionID == id {
+			cases = append(cases, c.ID)
+		}
+	}
+	for _, f := range state.Folders {
+		if f.VersionID == id {
+			folders = append(folders, f.ID)
+		}
+	}
+	if len(cases) != 1 || cases[0] != "CASE-0001" {
+		t.Fatalf("cases = %v, want only CASE-0001", cases)
+	}
+	if len(folders) != 2 {
+		t.Fatalf("folders = %v, want the root and the folder holding the selected case", folders)
+	}
+	// Nothing selected still copies all of mainline.
+	state = apply(t, svc, core.Action{Type: "createVersion", Name: "整份"})
+	full := branchID(t, state, "整份")
+	n := 0
+	for _, c := range state.Cases {
+		if c.VersionID == full {
+			n++
+		}
+	}
+	if n != 2 {
+		t.Fatalf("full copy has %d cases, want 2", n)
+	}
+	if _, err := svc.Apply(context.Background(), core.Action{Type: "createVersion", Name: "坏", CaseIDs: []string{"NOPE"}}); err == nil {
+		t.Fatal("unknown case id must be rejected")
+	}
+}

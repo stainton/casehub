@@ -747,13 +747,35 @@ func createVersion(s *State, a Action) error {
 			return errors.New("版本名称已存在")
 		}
 	}
+	// CaseIDs narrows the new version to those mainline cases (plus the folders leading to them); none means
+	// a full copy of mainline.
+	var wanted, keepFolder map[string]bool
+	if len(a.CaseIDs) > 0 {
+		wanted, keepFolder = map[string]bool{}, map[string]bool{}
+		for _, id := range a.CaseIDs {
+			c, _ := caseAt(s, "main", id)
+			if c == nil {
+				return fmt.Errorf("主线不存在用例 %s", id)
+			}
+			wanted[id] = true
+			for fid := c.FolderID; fid != "" && !keepFolder[fid]; {
+				keepFolder[fid] = true
+				f, _ := folderAt(s, "main", fid)
+				if f == nil {
+					break
+				}
+				fid = f.ParentID
+			}
+		}
+	}
 	t := now()
 	v := Version{ID: ID(), Name: strings.TrimSpace(a.Name), BaseMainRevision: s.MainRevision, CreatedBy: a.Author, CreatedAt: t}
 	s.Versions = append(s.Versions, v)
 	baseFolders := append([]Folder(nil), s.Folders...)
 	baseCases := append([]TestCase(nil), s.Cases...)
 	for _, f := range baseFolders {
-		if f.VersionID == "main" {
+		// The root folder always comes along, so a narrowed version is never folder-less.
+		if f.VersionID == "main" && (wanted == nil || keepFolder[f.ID] || f.ParentID == "") {
 			n := f
 			n.VersionID = v.ID
 			n.CreatedAt = t
@@ -762,7 +784,7 @@ func createVersion(s *State, a Action) error {
 		}
 	}
 	for _, c := range baseCases {
-		if c.VersionID == "main" {
+		if c.VersionID == "main" && (wanted == nil || wanted[c.ID]) {
 			n := c
 			n.VersionID = v.ID
 			n.BaseRevision = c.Revision
