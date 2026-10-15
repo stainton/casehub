@@ -19,17 +19,28 @@ const CODE=`S${Date.now().toString(36).toUpperCase().slice(-6)}`;
   await action({Type:'submitRecord',VersionID:v.id,CaseID:ids[0],Result:'passed',Note:'ok'});
   await action({Type:'submitRecord',VersionID:v.id,CaseID:ids[1],Result:'failed',Note:'提示不正确 ![x](data:image/png;base64,AAAA)'});
 
-  let prompt;
-  await page.route('**/api/general-agent/generate',route=>{
+  let prompt,release;const gate=new Promise(r=>release=r);
+  await page.route('**/api/general-agent/generate',async route=>{
     prompt=JSON.parse(JSON.parse(route.request().postData()).prompt);
-    route.fulfill({status:200,contentType:'application/json',body:JSON.stringify({output:{conclusion:'整体可用，存在失败项。',risks:[
+    await gate;
+    route.fulfill({status:200,contentType:'application/json',body:JSON.stringify({output:{conclusion:'整体可用，存在失败项。',features:[
+      {feature:'账号密码登录与错误提示',caseIDs:[ids[0],ids[1]]},{feature:'不存在的用例',caseIDs:['NOT-EXIST']}],risks:[
       {level:'high',title:'错误提示不正确',detail:'用例2失败',caseIDs:[ids[1],'NOT-EXIST'],requirement:doc.Title,suggestion:'修复后回归'}]}})});
   });
   await page.reload();
   await page.waitForFunction(()=>typeof state!=='undefined'&&state&&state.folders);
-  const download=page.waitForEvent('download');
-  await page.evaluate(([vid])=>summarizeFolderTestReport(vid,'auth'),[v.id]);
-  const file=await download;
+  await page.evaluate(([vid])=>{summarizeFolderTestReport(vid,'auth')},[v.id]);
+  // 进度：弹窗立即打开，前两步（整理用例、载入需求）已完成，等待 AI 时显示已等待时间。
+  await page.locator('#folder-summary[open]').waitFor();
+  assert.match(await page.locator('#fs-steps li').nth(0).innerText(),/5 条用例/);
+  assert.match(await page.locator('#fs-steps li').nth(1).innerText(),/1 份需求/);
+  assert.equal(await page.locator('#fs-steps li').nth(2).getAttribute('data-state'),'running');
+  release();
+  await page.locator('#fs-result').waitFor({state:'visible'});
+  assert.equal(await page.locator('#fs-steps li').nth(3).getAttribute('data-state'),'done');
+  const preview=await page.locator('#fs-preview').innerText();
+  assert.match(preview,/整体可用，存在失败项/);
+  const [file]=await Promise.all([page.waitForEvent('download'),page.click('#fs-download')]);
   const md=require('node:fs').readFileSync(await file.path(),'utf8');
 
   assert.deepEqual(prompt.stats,{total:5,passed:1,failed:1,blocked:0,notRun:3});
@@ -38,10 +49,22 @@ const CODE=`S${Date.now().toString(36).toUpperCase().slice(-6)}`;
   assert.ok(prompt.openIssues.some(i=>i.title===`登录偶发超时 ${CODE}`));
   assert.ok(!JSON.stringify(prompt).includes('base64'),'record images are stripped from the prompt');
   assert.match(md,/\| 5 \| 1 \| 1 \| 0 \| 3 \|/);
-  assert.match(md,new RegExp(`\\| ${ids[1]} \\| 用例2 .*\\| 失败 \\|`));
-  assert.match(md,/\| FREE-3 .*未关联需求 \| 未执行 \|/);
+  // 按「需求 → 目录」分节，功能点合并多个用例，结果取最差；AI 没覆盖的用例各补一行，虚构的用例被丢弃。
+  assert.match(md,new RegExp(`### ${doc.Title}[\\s\\S]*#### 登录与认证[\\s\\S]*\\| 账号密码登录与错误提示 \\| ${ids[0]}、${ids[1]} \\| 失败 \\|`));
+  assert.match(md,/### 未关联需求[\s\S]*\| 用例3 \| FREE-3 \| 未执行 \|/);
+  assert.ok(!md.includes('不存在的用例'));
+  assert.ok(!md.includes('| s |'),'case steps are not listed');
   assert.match(md,/\[高\] 错误提示不正确/);
   assert.ok(!md.includes('NOT-EXIST'),'case ids invented by the model are dropped');
+  // 失败与取消：失败显示原因和重试；关闭弹窗会中止请求且不再改动界面。
+  await page.keyboard.press('Escape');
+  await page.unroute('**/api/general-agent/generate');
+  await page.route('**/api/general-agent/generate',route=>route.fulfill({status:502,contentType:'application/json',body:JSON.stringify({error:{message:'boom'}})}));
+  await page.evaluate(([vid])=>{summarizeFolderTestReport(vid,'auth')},[v.id]);
+  await page.locator('#fs-error').waitFor({state:'visible'});
+  assert.match(await page.locator('#fs-error').innerText(),/boom/);
+  assert.equal(await page.locator('#fs-retry').isVisible(),true);
+  assert.equal(await page.locator('#fs-steps li').nth(2).getAttribute('data-state'),'error');
   assert.deepEqual(errors,[]);
   await browser.close();
   console.log('folder summary ok');

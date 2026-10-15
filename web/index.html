@@ -135,6 +135,14 @@
     <p id="feishu-export-status" role="status"></p>
     <p class="modal-actions"><button type="button" id="feishu-export-copy">复制思维导图</button></p>
   </dialog>
+  <dialog id="folder-summary" aria-labelledby="fs-title">
+    <div class="modal-head"><h3 id="fs-title">总结测试报告</h3><button type="button" class="icon-button" id="fs-close" aria-label="关闭">×</button></div>
+    <ol id="fs-steps"><li data-state="pending"><span></span></li><li data-state="pending"><span></span></li><li data-state="pending"><span></span></li><li data-state="pending"><span></span></li></ol>
+    <div id="fs-progress"><progress id="fs-bar" value="0" max="180"></progress></div>
+    <p id="fs-error" class="meta" role="alert" hidden></p>
+    <div id="fs-result" hidden><div id="fs-preview"></div></div>
+    <p class="modal-actions"><button type="button" class="secondary" id="fs-cancel">取消</button><button type="button" class="secondary" id="fs-copy" hidden>复制 Markdown</button><button type="button" id="fs-retry" hidden>重试</button><button type="button" id="fs-download" hidden>下载 Markdown</button></p>
+  </dialog>
   <div id="toast" class="toast hidden"></div>
   <script src="/web/vendor/toastui-editor-all.min.js"></script>
   <script src="/web/vendor/zh-cn.js"></script>
