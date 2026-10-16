@@ -30,7 +30,7 @@ const versionHTML=(v,extra='')=>`<div class="version${v.archived?' archived':''}
 // 用例树只放进行中的版本；点「完成」的版本移到「归档版本」页签，在那里只读查看，可重新打开。
 function renderVersions(){
   let box=$('#versions');
-  box.innerHTML=state.versions.filter(v=>!v.archived).map(versionHTML).join('');
+  box.innerHTML=state.versions.filter(v=>!v.archived).map(v=>versionHTML(v)).join('');
   bindTree(box);
   renderArchive();
 }

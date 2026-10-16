@@ -15,6 +15,7 @@ const BASE=process.env.CASEHUB_TEST_URL||'http://127.0.0.1:18081';
   await act('createVersion',{Name:NAME});
   const vid=await page.evaluate(n=>state.versions.find(v=>v.name===n).id,NAME);
   await act('createTask',{VersionID:vid,Name:'归档任务',CaseIDs:['CASE-0001']});
+  assert.ok(!(await page.locator('#versions .version[data-version="main"] > .version-body').evaluate(b=>b.lastChild.nodeType===3&&b.lastChild.textContent.trim())),'no stray text (e.g. a 0) after the mainline tree');
   const version=page.locator(`.version[data-version="${vid}"]`);
   assert.ok(await version.locator('.case-check').count()>0,'an active version has selection checkboxes');
   assert.equal(await page.locator('[data-view="archive"]').innerText(),'归档版本','archive is a tab beside 用例树 / 测试任务');
