@@ -1391,7 +1391,12 @@ async function importAiResult(doc,result){
 // 评估 → 直接采用评估结果 → 用例设计 → 放入用例评审（以需求命名的目录）→ 以「AI 托管」名义全部评审通过 →
 // 归档到测试版本的 全部用例 / <产品> / <产品版本> / <需求>，缺的上级目录自动创建。
 // 页面只负责发起、显示进度（state.hostings，托管进行中时轮询 /api/hostings）、以及停下后的重试/放弃。
-const AI_HOST_STEPS=[['estimating','评估用例数量'],['designing','用例设计'],['importing','放入用例评审'],['reviewing','自动评审通过'],['archiving','归档到用例树']];
+const AI_HOST_STEPS=[['estimating','评估用例数量'],['designing','用例设计'],['importing','放入用例评审'],['reviewing','自动评审通过'],['archiving','归档到用例树'],['generating','生成自动化脚本'],['running','自动化执行']];
+// 这次托管包含的步骤：脚本生成、自动化执行是可选的。
+const hostSteps=h=>AI_HOST_STEPS.filter(([k])=>k==='generating'?h.Generate:k==='running'?h.Execute:true);
+// 执行结果统计：通过 / 失败 / 执行出错（执行任务本身失败）。
+function hostRunStats(h){const r=Object.values(h.Results||{});return {passed:r.filter(x=>x==='passed').length,failed:r.filter(x=>x==='failed').length,error:r.filter(x=>x==='error').length,done:r.length,total:h.Generated||0}}
+const hostRunText=x=>[`通过 ${x.passed}`,`失败 ${x.failed}`,...(x.error?[`执行出错 ${x.error}`]:[])].join(' · ');
 const hostingOf=doc=>state.hostings.find(h=>h.DocID===doc.ID)||null;
 const hostActive=h=>Boolean(h)&&!['done','stopped'].includes(h.Stage);
 const isHosting=doc=>hostActive(hostingOf(doc));
@@ -1404,22 +1409,24 @@ function reqFolderPathNames(doc){
 }
 const hostArchivePath=h=>['全部用例',h.Product,h.ProductVersion,h.ReqFolder||'<需求>'];
 function hostStepsHTML(h){
-  const stage=h.Stage==='stopped'?h.FailedAt:h.Stage,at=AI_HOST_STEPS.findIndex(([k])=>k===stage);
-  const items=AI_HOST_STEPS.map(([k,label],i)=>{
+  const steps=hostSteps(h),stage=h.Stage==='stopped'?h.FailedAt:h.Stage,at=steps.findIndex(([k])=>k===stage),run=hostRunStats(h);
+  const items=steps.map(([k,label],i)=>{
     const st=h.Stage==='done'||i<at?'done':i===at?(h.Stage==='stopped'?'failed':'current'):'todo';
-    const extra=k==='estimating'&&st==='done'&&h.CaseCount?`：${h.CaseCount} 条，缩写 ${esc(h.Code||'')}`:k==='importing'&&st==='done'&&h.CaseIDs?.length?`：${h.CaseIDs.length} 条`:'';
+    const extra=k==='estimating'&&st==='done'&&h.CaseCount?`：${h.CaseCount} 条，缩写 ${esc(h.Code||'')}`:k==='importing'&&st==='done'&&h.CaseIDs?.length?`：${h.CaseIDs.length} 条`
+      :k==='generating'&&st==='done'?`：${h.Generated||0} 个脚本${h.Blocked?`，${h.Blocked} 条受阻未生成`:''}`
+      :k==='running'&&st!=='todo'&&run.total?`：${st==='current'?`${run.done}/${run.total}，`:''}${hostRunText(run)}`:'';
     return `<li class="host-step ${st}"><span class="host-dot">${st==='done'?'✓':st==='failed'?'!':st==='current'?'●':'○'}</span>${esc(label)}${extra}</li>`;
   }).join('');
   const v=version(h.VersionID);
   return `<div class="card host-card"><h3>AI 托管 <small class="meta">归档到「${esc(v?.name||'已删除的版本')}」：${esc(hostArchivePath(h).join(' / '))}</small></h3><ol class="host-steps">${items}</ol>${h.Note?`<p class="meta">${esc(h.Note)}</p>`:''}${h.Stage==='stopped'?`<p class="meta host-error">托管已停止：${esc(h.Error||'')}</p>`:''}</div>`;
 }
-// 设计阶段在托管视图里接上 planner 任务的进度流（和手动设计同一个接口）。
+// 设计和脚本生成阶段在托管视图里接上对应任务的进度流（和手动设计、生成同一个接口）。
 let hostLog=null;
 function closeHostLog(){hostLog?.source.close();hostLog=null}
-function openHostLog(taskID){
+function openHostLog(kind,taskID){
   if(hostLog?.taskID===taskID)return;
   closeHostLog();
-  const source=new EventSource(`/api/planner/jobs/${taskID}/events`);
+  const source=new EventSource(`/api/${kind}/jobs/${taskID}/events`);
   hostLog={taskID,source};
   source.addEventListener('progress',e=>{const ev=JSON.parse(e.data);aiLogLine(`[${fmt(ev.createdAt)}] ${ev.stage||''} ${ev.message||''}${ev.tool?` (${ev.tool} ${ev.toolStatus||''})`:''}`.trim())});
 }
@@ -1431,30 +1438,36 @@ function renderHostView(doc){
   if(!h){closeHostLog();hostShown=null;return renderHostForm(doc)}
   hostShown=hostSig(h);
   const done=h.Stage==='done',stopped=h.Stage==='stopped';
-  const late=stopped&&['importing','reviewing','archiving'].includes(h.FailedAt);
+  // 设计之后的步骤重试不用重新填写；脚本生成要看生成任务是否已经完成（服务端会告诉我们是否需要重新填写）。
+  const late=stopped&&['importing','reviewing','archiving','generating','running'].includes(h.FailedAt);
   const actions=done?'<button type="button" class="secondary" id="host-again">重新托管</button><button type="button" id="host-goto">查看用例</button>'
     :stopped?`<button type="button" class="secondary" id="host-abandon">放弃托管</button><button type="button" id="host-resume">${late?'重试这一步':h.Continuable?'继续或重新设计…':'重新填写并托管'}</button>`
     :'<button type="button" class="secondary" id="host-abandon">取消托管</button>';
   const status=h.Stage==='estimating'?'正在评估用例数量，完成后自动采用评估结果并开始设计…'
     :h.Stage==='designing'?'正在设计用例，完成后自动放入用例评审、评审通过并归档。'
     :h.Stage==='reviewing'||h.Stage==='archiving'?`设计已完成，正在${AI_HOST_STEPS.find(([k])=>k===h.Stage)[1]}…`
-    :done?`已完成：${h.CaseIDs?.length||0} 条用例已评审通过并归档。`:'';
+    :h.Stage==='generating'?'用例已归档，正在为它们生成自动化脚本…'
+    :h.Stage==='running'?'脚本已生成，正在逐条自动执行，每条执行完都会保存测试记录…'
+    :done?`已完成：${h.CaseIDs?.length||0} 条用例已评审通过并归档${h.Generate?`，生成 ${h.Generated||0} 个脚本`:''}${h.Execute&&h.Generated?`，自动执行 ${hostRunText(hostRunStats(h))}`:''}。`:'';
   const findings=done?`${h.Issues?.length?`<div class="card"><h3>探索中发现的问题 <small class="meta">已记录到问题单管理</small></h3>${aiRiskListHTML(h.Issues,i=>`<b>${esc(i.scenario)}</b>：${esc(i.symptom)}`)}</div>`:''}${h.Limitations?.length?`<div class="card"><h3>未验证/受限范围</h3>${aiRiskListHTML(h.Limitations,l=>esc(l.summary))}</div>`:''}`:'';
-  const designing=h.Stage==='designing'&&h.PlannerTaskID;
-  $('#ai-drawer-body').innerHTML=`${hostStepsHTML(h)}${status?`<p class="meta">${esc(status)}</p>`:''}${hostActive(h)?'<p class="meta">托管在 CaseHub 服务端执行，可以关闭抽屉或页面。</p>':''}${designing?'<div id="ai-log" class="ai-log"></div>':''}${findings}<p class="drawer-actions">${actions}</p>`;
-  closeHostLog();if(designing)openHostLog(h.PlannerTaskID); // 重绘清掉了日志：重新订阅，事件从头重放
+  const logTask=h.Stage==='designing'&&h.PlannerTaskID?['planner',h.PlannerTaskID]:h.Stage==='generating'&&h.GenTaskID?['generator',h.GenTaskID]:null;
+  const goto=done&&h.Generate?'<button type="button" class="secondary" id="host-goto-auto">查看脚本</button>':'';
+  $('#ai-drawer-body').innerHTML=`${hostStepsHTML(h)}${status?`<p class="meta">${esc(status)}</p>`:''}${hostActive(h)?'<p class="meta">托管在 CaseHub 服务端执行，可以关闭抽屉或页面。</p>':''}${logTask?'<div id="ai-log" class="ai-log"></div>':''}${findings}<p class="drawer-actions">${goto}${actions}</p>`;
+  closeHostLog();if(logTask)openHostLog(...logTask); // 重绘清掉了日志：重新订阅，事件从头重放
+  $('#host-goto-auto')&&($('#host-goto-auto').onclick=()=>{setPage('automation');const id=h.CaseIDs?.[0];if(id&&state.scripts.some(x=>x.VersionID===h.VersionID&&x.CaseID===id))setAutoFocus({type:'script',versionID:h.VersionID,id})});
   if(done){
     $('#host-again').onclick=()=>renderHostForm(doc);
     $('#host-goto').onclick=()=>{const id=h.CaseIDs?.[0];setPage('cases');if(id&&state.cases.some(c=>c.VersionID===h.VersionID&&c.ID===id))setFocus({type:'case',versionID:h.VersionID,id})};
   }
   $('#host-abandon')&&($('#host-abandon').onclick=async()=>{
-    if(!confirm(stopped?'放弃托管？已放入用例评审的用例会留在评审区，可以手动评审和导入。':'取消托管？正在进行的设计任务会被取消，已放入用例评审的用例会留在评审区。'))return;
+    if(!confirm(stopped?'放弃托管？已经完成的部分（评审区或用例树里的用例、脚本、测试记录）都会保留，可以手动接着处理。':'取消托管？正在进行的设计/生成/执行任务会被取消，已经完成的部分会保留。'))return;
     try{await serviceRequest(`/api/hostings/${h.ID}`,{method:'DELETE'})}catch(e){return toast(e.message,true)}
     await refresh();if(isAiDrawerOpen(doc))renderHostForm(doc);
   });
   if(stopped)$('#host-resume').onclick=async()=>{
     if(!late)return renderHostForm(doc,{retry:h});
-    try{hostingUpdated(await serviceRequest(`/api/hostings/${h.ID}/retry`,{method:'POST'}))}catch(e){toast(e.message,true)}
+    try{hostingUpdated(await serviceRequest(`/api/hostings/${h.ID}/retry`,{method:'POST'}))}
+    catch(e){if(/重新填写/.test(e.message))return renderHostForm(doc,{retry:h});toast(e.message,true)} // 生成任务需要测试账号，而账号从不保存
   };
 }
 function hostingUpdated(h){
@@ -1472,8 +1485,9 @@ function watchHostings(){
   hostTimer=setInterval(async()=>{
     let list;
     try{list=(await serviceRequest('/api/hostings')).hostings||[]}catch{return}
-    const before=new Map(state.hostings.map(h=>[h.ID,h.Stage]));
-    const moved=list.some(h=>before.get(h.ID)!==h.Stage);
+    // 阶段变化，或自动执行又出了一条结果（新测试记录）：整体刷新一次。
+    const mark=h=>`${h.Stage}:${Object.keys(h.Results||{}).length}`,before=new Map(state.hostings.map(h=>[h.ID,mark(h)]));
+    const moved=list.some(h=>before.get(h.ID)!==mark(h));
     state.hostings=list;
     if(moved)await refresh().catch(()=>{});
     syncAiButton();
@@ -1487,6 +1501,10 @@ function watchHostings(){
 // retry：停在评估/设计的托管重新提交（测试账号不保存在服务端，所以要重新填写）。归档位置沿用原托管的。
 async function renderHostForm(doc,{retry}={}){
   if(hostingEnabled===null){try{hostingEnabled=(await serviceRequest('/api/hostings')).enabled}catch{hostingEnabled=false}}
+  // 脚本生成、执行是否可用：对应服务没配置就不能勾选。
+  const services={};
+  await Promise.all(['generator','executor'].map(async k=>{try{services[k]=(await serviceRequest(`/api/${k}/status`)).enabled}catch{services[k]=false}}));
+  try{await loadAgentDefaults('generator')}catch{}
   if(!isAiDrawerOpen(doc))return;
   closeHostLog();hostShown=null;
   if(!hostingEnabled){$('#ai-drawer-body').innerHTML='<p class="meta">AI 托管需要 CaseHub 配置 AI 设计服务（planner），当前未配置。</p>';return}
@@ -1499,14 +1517,21 @@ async function renderHostForm(doc,{retry}={}){
   const versionID=[prev?.VersionID,last.versionID].find(id=>branches.some(b=>b.id===id))||branches[0]?.id;
   const target=retry?`<div class="card"><p class="meta">归档位置沿用这次托管的：「${esc(version(retry.VersionID)?.name||'')}」${esc(hostArchivePath(retry).join(' / '))}</p></div>`
     :`<fieldset class="host-target"><legend>归档位置</legend><label>测试版本<select name="versionID">${branches.map(b=>`<option value="${esc(b.id)}"${b.id===versionID?' selected':''}>${esc(b.name)}</option>`).join('')}<option value="__new__"${versionID?'':' selected'}>＋ 新建测试版本…</option></select></label><label id="host-new-version"${versionID?' class="hidden"':''}>新测试版本名称<input name="newVersionName" placeholder="如 TaskLite v2.0 测试" value=""><small class="meta">开始托管时创建一个只有「全部用例」的空测试版本作为归档目标。</small></label><label>产品<input name="product" required placeholder="以产品命名的目录" value="${esc(product)}"></label><label>产品版本<input name="productVersion" required placeholder="以版本命名的目录" value="${esc(productVersion)}"></label><p class="meta" id="host-path"></p></fieldset>`;
-  const buttons=retry?.Continuable?'<button type="submit" class="secondary" value="redo">重新设计</button><button type="submit" value="continue">继续上次的设计</button>':`<button type="submit" value="start">${retry?'重新托管':'开始托管'}</button>`;
-  $('#ai-drawer-body').innerHTML=`${retry?hostStepsHTML(retry):`<div class="card"><h3>AI 托管</h3><p class="meta">托管后不再逐步确认：AI 评估的用例数量和需求缩写直接采用，设计完成的用例放入用例评审后自动评审通过，并归档到下面的位置（上级目录不存在会自动创建）。托管由 CaseHub 服务端执行，提交后可以关闭页面。</p></div>`}<form id="host-form" autocomplete="off"><label>被测系统 URL<input name="baseUrl" required placeholder="https://test.example.com/login" autocomplete="off" value="${esc(v.baseUrl||'')}"></label><label>补充说明（可选）<textarea name="instructions" placeholder="覆盖范围、登录方式或探索约束">${esc(v.instructions||'')}</textarea></label><label>测试账号 · 用户名（可选）<input name="testAccount" autocomplete="off" value="${esc(v.testAccount||'')}"></label><label>测试账号 · 密码（可选）<input name="testSecret" type="text" class="fake-password" autocomplete="off" spellcheck="false" value="${esc(v.testSecret||'')}"></label><fieldset class="ai-assets"><legend>随任务带上的资产（可选）</legend>${assetsCache.length?assetsCache.map(a=>`<label class="ai-asset"><input type="checkbox" name="assetIds" value="${esc(a.id)}"${(v.assetIds||[]).includes(a.id)?' checked':''}> ${esc(assetTypeLabel(a.type))} · ${esc(a.name)} <small>${assetSize(a.size)}</small></label>`).join(''):'<small class="meta">还没有资产，可在头像菜单的「资产」里上传。</small>'}</fieldset><label>任务超时时间（分钟）<input name="timeoutMinutes" type="number" min="${AI_MIN_TIMEOUT_MIN}" max="${AI_MAX_TIMEOUT_MIN}" step="1" required value="${esc(v.timeoutMinutes??aiTimeoutMinutes())}"></label>${target}<p class="drawer-actions">${retry?'<button type="button" class="secondary" id="host-back">返回</button>':''}${buttons}</p></form>`;
+  const genDefaults=agentDefaultsCache.get('generator')||{};
+  // 托管范围默认沿用这份需求上一次托管的，没有就沿用上次在本浏览器里选的（默认全选）。
+  const wantScripts=prev?Boolean(prev.Generate):last.withScripts!==false,wantRun=prev?Boolean(prev.Execute):last.withRun!==false;
+  const scope=retry?'':`<fieldset class="host-scope"><legend>托管范围</legend><label class="ai-asset"><input type="checkbox" name="withScripts"${services.generator?(wantScripts?' checked':''):' disabled'}> 归档后生成自动化脚本${services.generator?'':'（脚本生成服务未配置）'}</label><label class="ai-asset"><input type="checkbox" name="withRun"${services.executor&&services.generator?(wantRun?' checked':''):' disabled'}> 生成后自动执行一次，并保存测试记录${services.executor?'':'（执行服务未配置）'}</label><label id="host-case-timeout">单用例生成时长（分钟）<input name="caseTimeoutMinutes" type="number" min="1" max="60" step="1" value="${esc(genDefaults.caseTimeoutMinutes||60)}"></label></fieldset>`;
+  const retryGen=retry&&retry.FailedAt==='generating';
+  const buttons=retryGen?'<button type="submit" value="start">重新填写并生成</button>':retry?.Continuable?'<button type="submit" class="secondary" value="redo">重新设计</button><button type="submit" value="continue">继续上次的设计</button>':`<button type="submit" value="start">${retry?'重新托管':'开始托管'}</button>`;
+  $('#ai-drawer-body').innerHTML=`${retry?hostStepsHTML(retry):`<div class="card"><h3>AI 托管</h3><p class="meta">托管后不再逐步确认：AI 评估的用例数量和需求缩写直接采用，设计完成的用例放入用例评审后自动评审通过，并归档到下面的位置（上级目录不存在会自动创建）；勾选后还会为它们生成自动化脚本、自动执行一次并保存测试记录。托管由 CaseHub 服务端执行，提交后可以关闭页面。</p></div>`}<form id="host-form" autocomplete="off"><label>被测系统 URL<input name="baseUrl" required placeholder="https://test.example.com/login" autocomplete="off" value="${esc(v.baseUrl||'')}"></label><label>补充说明（可选）<textarea name="instructions" placeholder="覆盖范围、登录方式或探索约束">${esc(v.instructions||'')}</textarea></label><label>测试账号 · 用户名（可选）<input name="testAccount" autocomplete="off" value="${esc(v.testAccount||'')}"></label><label>测试账号 · 密码（可选）<input name="testSecret" type="text" class="fake-password" autocomplete="off" spellcheck="false" value="${esc(v.testSecret||'')}"></label><fieldset class="ai-assets"><legend>随任务带上的资产（可选）</legend>${assetsCache.length?assetsCache.map(a=>`<label class="ai-asset"><input type="checkbox" name="assetIds" value="${esc(a.id)}"${(v.assetIds||[]).includes(a.id)?' checked':''}> ${esc(assetTypeLabel(a.type))} · ${esc(a.name)} <small>${assetSize(a.size)}</small></label>`).join(''):'<small class="meta">还没有资产，可在头像菜单的「资产」里上传。</small>'}</fieldset><label>设计任务超时时间（分钟）<input name="timeoutMinutes" type="number" min="${AI_MIN_TIMEOUT_MIN}" max="${AI_MAX_TIMEOUT_MIN}" step="1" required value="${esc(v.timeoutMinutes??aiTimeoutMinutes())}"></label>${target}${scope}${retryGen?`<label>单用例生成时长（分钟）<input name="caseTimeoutMinutes" type="number" min="1" max="60" step="1" value="${esc(genDefaults.caseTimeoutMinutes||60)}"></label>`:''}<p class="drawer-actions">${retry?'<button type="button" class="secondary" id="host-back">返回</button>':''}${buttons}</p></form>`;
   const form=$('#host-form');
   if(retry)$('#host-back').onclick=()=>renderHostView(doc);
   const preview=()=>{const el=$('#host-path');if(!el)return;const x=Object.fromEntries(new FormData(form));
     const fresh=x.versionID==='__new__',nv=form.elements.newVersionName;$('#host-new-version').classList.toggle('hidden',!fresh);nv.required=fresh;
     if(fresh&&!nv.dataset.touched)nv.value=[x.product.trim(),x.productVersion.trim()].filter(Boolean).join(' ')+(x.product.trim()||x.productVersion.trim()?' 测试':'');el.textContent=`用例将归档到：${['全部用例',x.product.trim()||'<产品>',x.productVersion.trim()||'<产品版本>',liveReqDoc(doc).Title].join(' / ')}`};
-  form.oninput=e=>{if(e.target.name==='newVersionName')e.target.dataset.touched='1';preview()};form.onchange=preview;preview();
+  // 自动执行依赖脚本生成：勾执行时带上生成，取消生成时一并取消执行。
+  const syncScope=e=>{const g=form.elements.withScripts,r=form.elements.withRun;if(!g)return;if(e?.target===r&&r.checked)g.checked=true;if(e?.target===g&&!g.checked)r.checked=false;$('#host-case-timeout').classList.toggle('hidden',!g.checked)};
+  form.oninput=e=>{if(e.target.name==='newVersionName')e.target.dataset.touched='1';syncScope(e);preview()};form.onchange=preview;syncScope();preview();
   form.onsubmit=async e=>{
     e.preventDefault();
     const mode=e.submitter?.value||'start',data=new FormData(form);
@@ -1519,12 +1544,17 @@ async function renderHostForm(doc,{retry}={}){
     const estimate={requirements,context:{instructions}};
     const job={requirements,target:{baseUrl:values.baseUrl},context:{instructions,...(explorationNotes?{explorationNotes}:{}),...(productExperience?{productExperience}:{}),...(values.assetIds.length?{assetIds:values.assetIds}:{})},timeoutMs:timeoutMinutes*60000};
     if(values.testAccount||values.testSecret)job.context.testData={username:values.testAccount,password:values.testSecret};
+    // 脚本生成请求（不含用例，服务端归档后补上用例和需求）：和自动化页发起生成时一样的目标、说明、资产、账号和时限。
+    const withScripts=Boolean(form.elements.withScripts?.checked)||retryGen,withRun=Boolean(form.elements.withRun?.checked);
+    const caseTimeoutMinutes=Number(data.get('caseTimeoutMinutes')||60);
+    if(withScripts&&(!Number.isInteger(caseTimeoutMinutes)||caseTimeoutMinutes<1||caseTimeoutMinutes>60))return toast('单用例生成时长需为 1–60 分钟的整数',true);
+    const generate=withScripts?{target:{baseUrl:values.baseUrl},context:{...(values.instructions.trim()?{instructions:values.instructions.trim()}:{}),...(productExperience?{productExperience}:{}),...(values.assetIds.length?{assetIds:values.assetIds}:{}),...(job.context.testData?{testData:job.context.testData}:{})},caseTimeoutMs:caseTimeoutMinutes*60000}:undefined;
     aiEstimates.set(doc.ID,{status:'draft',values}); // 手动设计/下次托管沿用填过的表单（密码只留在内存）
     saveAiForm(doc,values,est?.count||AI_DEFAULT_CASE_COUNT,liveReqDoc(doc).Code||'');
     const btns=form.querySelectorAll('button[type="submit"]');btns.forEach(b=>b.disabled=true);
     try{
       let h;
-      if(retry)h=await serviceRequest(`/api/hostings/${retry.ID}/retry`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({estimate,job,continue:mode==='continue'})});
+      if(retry)h=await serviceRequest(`/api/hostings/${retry.ID}/retry`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({estimate,job,...(generate?{generate}:{}),continue:mode==='continue'})});
       else{
         const cfg={versionID:String(data.get('versionID')),product:String(data.get('product')).trim(),productVersion:String(data.get('productVersion')).trim()};
         if(!cfg.product||!cfg.productVersion){btns.forEach(b=>b.disabled=false);return toast('请填写产品和产品版本',true)}
@@ -1535,8 +1565,8 @@ async function renderHostForm(doc,{retry}={}){
           const out=await act('createVersion',{Name:name,Blank:true});
           cfg.versionID=out.state.versions.find(v=>!before.has(v.id)).id;
         }
-        try{localStorage.setItem('casehub-ai-host-last',JSON.stringify(cfg))}catch{}
-        h=await serviceRequest('/api/hostings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({DocID:doc.ID,VersionID:cfg.versionID,Product:cfg.product,ProductVersion:cfg.productVersion,Author:'本地用户',estimate,job})});
+        try{localStorage.setItem('casehub-ai-host-last',JSON.stringify({...cfg,withScripts,withRun}))}catch{}
+        h=await serviceRequest('/api/hostings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({DocID:doc.ID,VersionID:cfg.versionID,Product:cfg.product,ProductVersion:cfg.productVersion,Author:'本地用户',withScripts,withRun,BaseURL:values.baseUrl,estimate,job,...(generate?{generate}:{})})});
       }
       toast('已开始托管，可以关闭页面，CaseHub 会自动完成');
       hostingUpdated(h);
@@ -2577,7 +2607,7 @@ function tcSwitch(key){
   else if(key==='host')tcShowHosting();
   else tcShowPlanner();
 }
-const HOST_STAGE_LABELS={estimating:'评估中',designing:'设计中',reviewing:'自动评审中',archiving:'归档中',done:'已完成'};
+const HOST_STAGE_LABELS={estimating:'评估中',designing:'设计中',reviewing:'自动评审中',archiving:'归档中',generating:'生成脚本中',running:'自动执行中',done:'已完成'};
 function hostStatusText(h){
   if(h.Stage!=='stopped')return HOST_STAGE_LABELS[h.Stage]||h.Stage;
   return `已停止于「${AI_HOST_STEPS.find(([k])=>k===h.FailedAt)?.[1]||h.FailedAt}」，需处理`;
@@ -2590,7 +2620,7 @@ function tcShowHosting(){
   $('#ai-drawer').classList.remove('hidden');
   const all=tcHostings(),list=all.filter(h=>tcShown('host',hostUnfinished(h))).sort((a,b)=>String(b.UpdatedAt).localeCompare(String(a.UpdatedAt)));
   $('#ai-drawer-body').innerHTML=`<div class="tc-list">${list.length?list.map(h=>{const doc=state.reqDocs.find(d=>d.ID===h.DocID),v=version(h.VersionID);
-    return `<button type="button" class="tc-row tc-host${h.Stage==='stopped'?' stopped':''}" data-tc-host="${esc(h.DocID)}"><span>${esc(doc.Title)}<small class="meta">${esc(v?.name||'已删除的版本')}：${esc(hostArchivePath(h).join(' / '))}</small></span><small>${esc(hostStatusText(h))}${h.Stage==='done'&&h.CaseIDs?.length?` · ${h.CaseIDs.length} 条`:''}</small></button>`}).join('')
+    return `<button type="button" class="tc-row tc-host${h.Stage==='stopped'?' stopped':''}" data-tc-host="${esc(h.DocID)}"><span>${esc(doc.Title)}<small class="meta">${esc(v?.name||'已删除的版本')}：${esc(hostArchivePath(h).join(' / '))}</small></span><small>${esc(hostStatusText(h))}${h.Stage==='done'&&h.CaseIDs?.length?` · ${h.CaseIDs.length} 条`:''}${h.Execute&&Object.keys(h.Results||{}).length?` · ${hostRunText(hostRunStats(h))}`:''}</small></button>`}).join('')
     :(all.length?tcEmptyHTML('host'):'<p class="meta">暂无托管任务。在「需求管理」里打开需求文档，点「AI 托管」发起。</p>')}</div>`;
   $$('#ai-drawer-body [data-tc-host]').forEach(b=>b.onclick=()=>{const doc=state.reqDocs.find(d=>d.ID===b.dataset.tcHost);if(doc)openAiDrawer(doc,'host')});
   tcAttach('host');

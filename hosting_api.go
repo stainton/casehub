@@ -13,9 +13,10 @@ import (
 	"casehub/internal/tasks"
 )
 
-// plannerForHosting gives the hosting runner the planner the same way the frontend reaches it: the estimate
-// through the planner proxy (agent settings and node choice included), tasks through the dispatcher.
-type plannerForHosting struct {
+// servicesForHosting gives the hosting runner the auto-test services the same way the frontend reaches them:
+// the planner's estimate through its proxy (agent settings and node choice included), tasks of every kind
+// through the dispatcher.
+type servicesForHosting struct {
 	proxy      http.Handler
 	dispatcher *dispatch.Dispatcher
 }
@@ -31,7 +32,7 @@ func (b *bufferedResponse) Header() http.Header         { return b.header }
 func (b *bufferedResponse) Write(p []byte) (int, error) { return b.body.Write(p) }
 func (b *bufferedResponse) WriteHeader(status int)      { b.status = status }
 
-func (p plannerForHosting) Estimate(ctx context.Context, body []byte) ([]byte, error) {
+func (p servicesForHosting) Estimate(ctx context.Context, body []byte) ([]byte, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "/api/planner/estimate", bytes.NewReader(body))
 	if err != nil {
 		return nil, err
@@ -51,12 +52,14 @@ func (p plannerForHosting) Estimate(ctx context.Context, body []byte) ([]byte, e
 	return res.body.Bytes(), nil
 }
 
-func (p plannerForHosting) Submit(ctx context.Context, body []byte) (tasks.Task, error) {
-	return p.dispatcher.Submit(ctx, "planner", body)
+func (p servicesForHosting) Enabled(kind string) bool { return p.dispatcher.Enabled(kind) }
+
+func (p servicesForHosting) Submit(ctx context.Context, kind string, body []byte) (tasks.Task, error) {
+	return p.dispatcher.Submit(ctx, kind, body)
 }
 
-func (p plannerForHosting) Get(ctx context.Context, id string) (tasks.Task, error) {
-	t, err := p.dispatcher.Get(ctx, "planner", id)
+func (p servicesForHosting) Get(ctx context.Context, kind, id string) (tasks.Task, error) {
+	t, err := p.dispatcher.Get(ctx, kind, id)
 	var h *dispatch.HTTPError
 	if errors.As(err, &h) && h.Status == http.StatusNotFound {
 		return t, hosting.ErrTaskGone
@@ -64,14 +67,14 @@ func (p plannerForHosting) Get(ctx context.Context, id string) (tasks.Task, erro
 	return t, err
 }
 
-func (p plannerForHosting) Cancel(ctx context.Context, id string) error {
-	_, err := p.dispatcher.Cancel(ctx, "planner", id)
+func (p servicesForHosting) Cancel(ctx context.Context, kind, id string) error {
+	_, err := p.dispatcher.Cancel(ctx, kind, id)
 	return err
 }
 
-func (p plannerForHosting) MarkHandled(ctx context.Context, id string) {
+func (p servicesForHosting) MarkHandled(ctx context.Context, kind, id string) {
 	handled := true
-	_, _ = p.dispatcher.Update(ctx, "planner", id, nil, &handled)
+	_, _ = p.dispatcher.Update(ctx, kind, id, nil, &handled)
 }
 
 func (a *api) hostingRoutes(m *http.ServeMux) {
@@ -100,13 +103,19 @@ func (a *api) hostingRoutes(m *http.ServeMux) {
 	m.HandleFunc("POST /api/hostings", func(w http.ResponseWriter, r *http.Request) {
 		var in struct {
 			DocID, VersionID, Product, ProductVersion, Author string
+			// Generate / Execute add script generation and one automated run of each script; BaseURL is the
+			// system under test the scripts run against.
+			// (Named apart from Request.Generate, the generator body: JSON keys match case-insensitively.)
+			Generate bool `json:"withScripts"`
+			Execute  bool `json:"withRun"`
+			BaseURL  string
 			hosting.Request
 		}
 		if json.NewDecoder(http.MaxBytesReader(w, r.Body, 8<<20)).Decode(&in) != nil {
 			refuse(w, errors.New("无效的 JSON 请求"))
 			return
 		}
-		h, err := a.hosting.Begin(r.Context(), core.Hosting{DocID: in.DocID, VersionID: in.VersionID, Product: in.Product, ProductVersion: in.ProductVersion}, in.Request, in.Author)
+		h, err := a.hosting.Begin(r.Context(), core.Hosting{DocID: in.DocID, VersionID: in.VersionID, Product: in.Product, ProductVersion: in.ProductVersion, Generate: in.Generate, Execute: in.Execute, BaseURL: in.BaseURL}, in.Request, in.Author)
 		reply(w, h, err)
 	})
 	m.HandleFunc("POST /api/hostings/{id}/retry", func(w http.ResponseWriter, r *http.Request) {

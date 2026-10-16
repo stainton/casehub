@@ -207,7 +207,7 @@ func main() {
 	}
 	var hostingRunner *hosting.Runner
 	if plannerEnabled && dispatcher.Enabled("planner") {
-		hostingRunner = hosting.New(svc, plannerForHosting{proxy: plannerProxy, dispatcher: dispatcher})
+		hostingRunner = hosting.New(svc, servicesForHosting{proxy: plannerProxy, dispatcher: dispatcher})
 		if err := hostingRunner.Start(context.Background()); err != nil {
 			log.Fatal(err)
 		}

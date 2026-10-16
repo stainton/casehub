@@ -297,3 +297,4 @@ button.avatar{padding:0;color:#fff;cursor:pointer;border:1px solid #ffffff40}
 .tc-list .tc-host>span small{display:block;margin-left:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .tc-list .tc-host>small{flex:none}
 .tc-list .tc-host.stopped>small{color:var(--danger)}
+.host-scope{display:grid;gap:4px}

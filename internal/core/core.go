@@ -360,8 +360,9 @@ type Action struct {
 	Origin string
 	// AI 托管 (hosting.go): the run acted on, its new values, and a finished design run's result to file.
 	HostingID string
-	Hosting   *Hosting       `json:",omitempty"`
-	Planner   *PlannerResult `json:",omitempty"`
+	Hosting   *Hosting         `json:",omitempty"`
+	Planner   *PlannerResult   `json:",omitempty"`
+	Generator *GeneratorResult `json:",omitempty"`
 }
 
 // CaseRevision is one case rewritten by "AI 修正需求". Scope is "pending" (review area) or
@@ -737,6 +738,10 @@ func (s *Service) Apply(ctx context.Context, a Action) (Result, error) {
 		var ok bool
 		if ok, err = applyHosting(&st, a); !ok {
 			err = fmt.Errorf("unknown action %q", a.Type)
+		} else if err == nil && a.Type == "hostingRecord" && (a.Result == "passed" || a.Result == "failed") {
+			// Like submitRecord: the run's screenshots move out of the note into record images.
+			last := &st.Records[len(st.Records)-1]
+			last.Note, err = s.externalizeRecordImages(ctx, last.Note)
 		}
 	}
 	if err != nil {

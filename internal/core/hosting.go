@@ -14,7 +14,7 @@ import (
 type Hosting struct {
 	ID, DocID, VersionID    string
 	Product, ProductVersion string
-	Stage                   string // estimating, designing, reviewing, archiving, done, stopped
+	Stage                   string // estimating, designing, reviewing, archiving, generating, running, done, stopped
 	FailedAt, Error, Note   string // FailedAt: the stage a stopped hosting stopped in
 	Code, Rationale         string
 	CaseCount               int
@@ -27,6 +27,37 @@ type Hosting struct {
 	CreatedBy               string
 	CreatedAt, UpdatedAt    time.Time
 	FinishedAt              time.Time `json:",omitempty"`
+
+	// Optional stages after filing: generate a Playwright script for each filed case (generator), then run
+	// every generated script once (executor) and record its result as a test record. BaseURL is the system
+	// under test the scripts run against (no secret, so it is kept; the test account is not).
+	Generate, Execute bool
+	BaseURL           string
+	GenTaskID         string
+	Generated         int               // scripts saved by the generator run
+	Blocked           int               // cases the generator could not script
+	ExecTasks         map[string]string `json:",omitempty"` // case ID -> executor task ID
+	Results           map[string]string `json:",omitempty"` // case ID -> passed / failed / error (the run itself failed)
+}
+
+// GeneratorResult is the part of a generator job's result a hosting saves.
+type GeneratorResult struct {
+	Scripts []struct {
+		CaseID        string              `json:"caseId"`
+		FileName      string              `json:"fileName"`
+		Language      string              `json:"language"`
+		Code          string              `json:"code"`
+		Status        string              `json:"status"`
+		Summary       string              `json:"summary"`
+		Deviations    []HostingLimitation `json:"deviations"`
+		MissingInputs []string            `json:"missingInputs"`
+	} `json:"scripts"`
+	ExplorationRecords map[string]string `json:"explorationRecords"`
+	ExplorationNotes   string            `json:"explorationNotes"`
+	ProductExperience  *struct {
+		Origin string `json:"origin"`
+		Notes  string `json:"notes"`
+	} `json:"productExperience"`
 }
 
 // HostingIssue and HostingLimitation keep the planner's wire names so the frontend renders them like a
@@ -72,6 +103,8 @@ const (
 	HostingImporting  = "importing" // only ever a FailedAt: importing is a single action from designing to reviewing
 	HostingReviewing  = "reviewing"
 	HostingArchiving  = "archiving"
+	HostingGenerating = "generating"
+	HostingRunning    = "running"
 	HostingDone       = "done"
 	HostingStopped    = "stopped"
 	// HostingAuthor is who the hosting's own changes are recorded as (reviewer of the cases it passes).
@@ -118,6 +151,23 @@ func applyHosting(s *State, a Action) (ok bool, err error) {
 		err = hostingReview(s, h, a)
 	case "hostingArchive":
 		err = hostingArchive(s, h, a)
+	case "hostingGenSubmitted":
+		if h.Stage != HostingGenerating {
+			return true, errors.New("托管不在脚本生成阶段")
+		}
+		h.GenTaskID = a.TaskID
+	case "hostingScripts":
+		err = hostingScripts(s, h, a)
+	case "hostingExecSubmitted":
+		if h.Stage != HostingRunning || a.CaseID == "" || a.TaskID == "" {
+			return true, errors.New("托管不在自动化执行阶段")
+		}
+		if h.ExecTasks == nil {
+			h.ExecTasks = map[string]string{}
+		}
+		h.ExecTasks[a.CaseID] = a.TaskID
+	case "hostingRecord":
+		err = hostingRecord(s, h, a)
 	case "hostingStop":
 		if !HostingActive(*h) {
 			return true, errors.New("托管已结束")
@@ -130,7 +180,7 @@ func applyHosting(s *State, a Action) (ok bool, err error) {
 			h.Continuable = a.Hosting.Continuable
 		}
 	case "hostingRetry":
-		err = hostingRetry(h)
+		err = hostingRetry(h, a.Force)
 	default:
 		return true, fmt.Errorf("unknown action %q", a.Type)
 	}
@@ -159,6 +209,9 @@ func startHosting(s *State, a Action) error {
 	if strings.ContainsAny(product+version, `/\`) {
 		return errors.New("产品和产品版本名称里不能有 /")
 	}
+	if (in.Generate || in.Execute) && strings.TrimSpace(in.BaseURL) == "" {
+		return errors.New("生成脚本和自动化执行需要被测系统 URL")
+	}
 	for _, h := range s.Hostings {
 		if h.DocID == doc.ID && HostingActive(h) {
 			return errors.New("这份需求已有进行中的托管")
@@ -173,7 +226,8 @@ func startHosting(s *State, a Action) error {
 	}
 	t := now()
 	s.Hostings = append(kept, Hosting{ID: ID(), DocID: doc.ID, VersionID: in.VersionID, Product: product, ProductVersion: version,
-		Stage: HostingEstimating, ReqFolder: doc.Title, CreatedBy: a.Author, CreatedAt: t, UpdatedAt: t})
+		Stage: HostingEstimating, ReqFolder: doc.Title, Generate: in.Generate || in.Execute, Execute: in.Execute, BaseURL: strings.TrimSpace(in.BaseURL),
+		CreatedBy: a.Author, CreatedAt: t, UpdatedAt: t})
 	return nil
 }
 
@@ -392,14 +446,143 @@ func hostingArchive(s *State, h *Hosting, a Action) error {
 			return err
 		}
 	}
-	h.Stage, h.Error, h.FailedAt, h.FinishedAt = HostingDone, "", "", now()
+	h.Error, h.FailedAt = "", ""
+	if h.Generate && len(h.CaseIDs) > 0 {
+		h.Stage = HostingGenerating
+	} else {
+		h.Stage, h.FinishedAt = HostingDone, now()
+	}
+	return nil
+}
+
+// hostingScripts saves a finished generator run the way the automation page does: one script per case
+// (blocked ones too, with what they lack), the run's exploration notes and product experience, and every
+// expectation the app failed as a defect — then moves on to running the scripts, or finishes.
+func hostingScripts(s *State, h *Hosting, a Action) error {
+	if h.Stage != HostingGenerating {
+		return errors.New("托管不在脚本生成阶段")
+	}
+	r := a.Generator
+	if r == nil {
+		return errors.New("缺少脚本生成结果")
+	}
+	doc, _ := reqDocAt(s, h.DocID)
+	if doc == nil {
+		return errors.New("需求文档不存在")
+	}
+	notes := r.ExplorationRecords[doc.ID]
+	if notes == "" {
+		notes = r.ExplorationNotes
+	}
+	if strings.TrimSpace(notes) != "" {
+		if err := saveReqExploration(s, Action{DocID: doc.ID, ExplorationNotes: notes}); err != nil {
+			return err
+		}
+	}
+	if p := r.ProductExperience; p != nil && p.Origin != "" && strings.TrimSpace(p.Notes) != "" {
+		_ = recordProductExploration(s, Action{Origin: p.Origin, ExplorationNotes: p.Notes})
+	}
+	generated, blocked := 0, 0
+	var reports []IssueReport
+	for _, sc := range r.Scripts {
+		var devs []RiskNote
+		for _, d := range sc.Deviations {
+			devs = append(devs, RiskNote{Risk: d.Risk, Summary: d.Summary})
+		}
+		if err := saveScript(s, Action{VersionID: h.VersionID, CaseID: sc.CaseID, ScriptFileName: sc.FileName, ScriptLanguage: sc.Language, ScriptCode: sc.Code,
+			ScriptStatus: sc.Status, ScriptSummary: sc.Summary, ScriptJobID: h.GenTaskID, ScriptDeviations: devs, ScriptMissingInputs: sc.MissingInputs, Author: a.Author}); err != nil {
+			return fmt.Errorf("保存 %s 的脚本：%w", sc.CaseID, err)
+		}
+		if sc.Status == "blocked" {
+			blocked++
+			continue
+		}
+		generated++
+		title := ""
+		if c, _ := caseAt(s, h.VersionID, sc.CaseID); c != nil {
+			title = c.Title
+		}
+		for _, d := range sc.Deviations {
+			label := riskLabels[d.Risk]
+			if label == "" {
+				label = "未评级"
+			}
+			reports = append(reports, IssueReport{RequirementID: doc.ID, Title: "[" + label + "] " + sc.CaseID + " " + d.Summary,
+				Description: "**用例**：" + sc.CaseID + " " + title + "\n\n**缺陷**：" + d.Summary + "\n\n**风险**：" + label + "\n\n来源：脚本生成发现的预期与实际不符，脚本已按预期断言，运行会失败。生成任务 " + h.GenTaskID + "（AI 托管）",
+				Source:      "generator:" + sc.CaseID + ":" + d.Summary})
+		}
+	}
+	if err := reportIssues(s, Action{Reports: reports, Author: a.Author}); err != nil {
+		return err
+	}
+	h.Generated, h.Blocked, h.ExecTasks, h.Results = generated, blocked, nil, nil
+	if h.Execute && generated > 0 {
+		h.Stage = HostingRunning
+	} else {
+		h.Stage, h.FinishedAt = HostingDone, now()
+	}
+	return nil
+}
+
+// HostingRunnable are the cases whose scripts a hosting runs: the ones its generator run scripted.
+func HostingRunnable(s State, h Hosting) []Script {
+	var out []Script
+	for _, id := range h.CaseIDs {
+		if sc, _ := scriptAt(&s, h.VersionID, id); sc != nil && sc.Status == "generated" && sc.Code != "" && sc.JobID == h.GenTaskID {
+			out = append(out, *sc)
+		}
+	}
+	return out
+}
+
+// hostingRecord files one script run: a submitted test record (passed / failed) like a manual run's, or —
+// when the run itself failed — only a note on the hosting. The hosting is done once every runnable case has
+// an outcome.
+func hostingRecord(s *State, h *Hosting, a Action) error {
+	if h.Stage != HostingRunning {
+		return errors.New("托管不在自动化执行阶段")
+	}
+	// With no CaseID it only checks whether the run is complete (scripts may have been deleted meanwhile).
+	switch {
+	case a.CaseID == "", a.Result == "error":
+	case a.Result == "passed" || a.Result == "failed":
+		if _, err := recordCase(s, Action{Type: "submitRecord", VersionID: h.VersionID, CaseID: a.CaseID, TaskID: a.TaskID, Result: a.Result, Note: a.Note, Submitted: true, Force: true, Author: a.Author}); err != nil {
+			return err
+		}
+	default:
+		return errors.New("执行结果必须是 passed、failed 或 error")
+	}
+	if a.CaseID != "" {
+		if h.Results == nil {
+			h.Results = map[string]string{}
+		}
+		h.Results[a.CaseID] = a.Result
+	}
+	errored := 0
+	for _, sc := range HostingRunnable(*s, *h) {
+		switch h.Results[sc.CaseID] {
+		case "":
+			return nil
+		case "error":
+			errored++
+		}
+	}
+	// A run that itself failed (browser crash, node lost) says nothing about the case: stop so a person can
+	// re-run just those scripts. Passed and failed assertions are already recorded.
+	if errored > 0 {
+		h.FailedAt, h.Stage, h.Error = HostingRunning, HostingStopped, fmt.Sprintf("%d 条用例的脚本执行出错（执行任务本身失败，未产生测试记录），可「重试这一步」重新执行它们", errored)
+		return nil
+	}
+	h.Stage, h.FinishedAt = HostingDone, now()
 	return nil
 }
 
 // hostingRetry restarts a stopped hosting at the step it stopped in. Steps after the design need nothing
 // from the person; estimating and designing need the request again (it carries test credentials, which are
 // never stored), so the runner calls this only together with a fresh request.
-func hostingRetry(h *Hosting) error {
+//
+// clearTask (Force on the action) drops a failed generator task so the runner submits a new one.
+func hostingRetry(h *Hosting, clearTask bool) error {
 	if h.Stage != HostingStopped {
 		return errors.New("只有已停止的托管可以重试")
 	}
@@ -408,6 +591,20 @@ func hostingRetry(h *Hosting) error {
 		h.Stage = HostingDesigning
 	case HostingReviewing, HostingArchiving:
 		h.Stage = h.FailedAt
+	case HostingGenerating:
+		h.Stage = HostingGenerating // the runner re-reads a finished generator run, or submits a new one
+		if clearTask {
+			h.GenTaskID = ""
+		}
+	case HostingRunning:
+		// Run again only what has no outcome yet or whose run itself failed; recorded passes/fails stay.
+		h.Stage = HostingRunning
+		for id, r := range h.Results {
+			if r == "error" {
+				delete(h.Results, id)
+				delete(h.ExecTasks, id)
+			}
+		}
 	case HostingDesigning:
 		h.Stage, h.PlannerTaskID = HostingDesigning, ""
 	default:

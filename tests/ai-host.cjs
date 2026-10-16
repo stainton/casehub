@@ -1,6 +1,8 @@
 // 「AI 托管」浏览器回归：网页只负责发起，托管由 CaseHub 服务端执行 —— 提交后关掉浏览器，评估 → 设计 → 放入用例评审 →
 // 自动评审通过 → 归档到 全部用例/产品/产品版本/需求 仍然完成；停在某一步时重新打开页面可以「重试这一步」。
-// 只对临时 CASEHUB_STORE=memory 服务运行；和 ai-design.cjs 一样自带假的 planner 服务（CASEHUB_PLANNER_URL 指向它）。
+// 只对临时 CASEHUB_STORE=memory 服务运行；脚本自带一个假的 auto-test 服务，同时充当 planner、generator 和 executor：
+//   CASEHUB_STORE=memory PORT=18081 CASEHUB_PLANNER_URL=http://127.0.0.1:4598 CASEHUB_GENERATOR_URL=http://127.0.0.1:4598 CASEHUB_EXECUTOR_URL=http://127.0.0.1:4598 go run .
+// 生成和执行任务一提交就完成：生成的脚本断言用例标题，标题含「错误」的执行失败，其余通过。
 const {chromium}=require(process.env.PLAYWRIGHT_MODULE||'playwright');
 const assert=require('node:assert/strict');
 const http=require('node:http');
@@ -30,6 +32,16 @@ function fakePlanner(){
         result:{reviewStatus:'draft',modules:[{requirement:req0,code:'AUTH',name:'登录认证'},{requirement:req0,code:'PWD',name:'找回密码'}],
           cases:[c('AUTH',1,'正确密码登录成功'),c('AUTH',2,'错误密码登录失败'),c('PWD',1,'邮箱找回密码')],
           explorationNotes:'登录页在 /login',limitations:[{risk:'low',summary:'短信验证码未验证'}],issues:[{risk:'high',scenario:'错误密码',symptom:'没有任何提示'}]}};
+      jobs.set(jobId,entry);
+      return json(res,202,entry.job);
+    }
+    if(req.method==='POST'&&(path==='/v1/generator/jobs'||path==='/v1/executor/jobs')){
+      const input=await read(req),kind=path.split('/')[2];submissions.push({kind,input});
+      const jobId=randomUUID(),at=new Date().toISOString();
+      const result=kind==='generator'
+        ?{scripts:input.cases.map(c=>({caseId:c.id,fileName:`${c.id}.spec.ts`,language:'typescript',status:'generated',code:`test(${JSON.stringify(c.title)}, async () => {})`,summary:'按用例步骤断言'})),generated:input.cases.length,blocked:0}
+        :{passed:!input.title.includes('错误'),markdown:`## ${input.title}\n\n![step](data:image/png;base64,iVBORw0KGgo=)`,output:''};
+      const entry={job:{id:jobId,kind,status:'succeeded',stage:'completed',createdAt:at,updatedAt:at,finishedAt:at,lastEventId:0},result};
       jobs.set(jobId,entry);
       return json(res,202,entry.job);
     }
@@ -94,6 +106,8 @@ async function openHostDrawer(page,docId){
     await page.locator('#host-form [name="testAccount"]').fill('tester');
     await page.locator('#host-form [name="testSecret"]').fill('s3cret');
     assert.match(await page.locator('#host-path').innerText(),new RegExp(`全部用例 / TaskLite / v2.0 / ${title}`));
+    await page.locator('#host-form [name="withScripts"]').uncheck(); // 前两个场景只托管到归档，脚本生成在最后一个场景
+    assert.equal(await page.locator('#host-form [name="withRun"]').isChecked(),false,'running needs scripts');
     await page.locator('#host-form button[type="submit"]').click();
     await waitStage(docId,['designing']);
     await page.locator('#ai-log').waitFor(); // 设计阶段显示 planner 进度
@@ -126,11 +140,13 @@ async function openHostDrawer(page,docId){
     ({page,errors}=await openPage(browser));
     await openHostDrawer(page,docId);
     await page.locator('.host-card').waitFor();
+    assert.equal(await page.locator('.host-step').count(),5,'no script steps when not asked for');
     assert.equal(await page.locator('.host-step.done').count(),5);
     assert.match(await page.locator('#ai-drawer-body').innerText(),/已完成：3 条用例已评审通过并归档/);
 
     // 再托管一次：归档时目标需求目录里已有同名用例 → 停在「归档到用例树」；清掉冲突后在页面上「重试这一步」。
     await page.locator('#host-again').click();
+    assert.equal(await page.locator('#host-form [name="withScripts"]').isChecked(),false,'the scope is remembered');
     await page.locator('#host-form [name="versionID"]').selectOption(vid);
     await page.locator('#host-form [name="baseUrl"]').fill('http://127.0.0.1:4500');
     await page.locator('#host-form button[type="submit"]').click();
@@ -170,6 +186,7 @@ async function openHostDrawer(page,docId){
     await page.locator('#host-form [name="versionID"]').selectOption('__new__');
     await page.locator('#host-form [name="product"]').fill('NewProd');
     await page.locator('#host-form [name="productVersion"]').fill('v9');
+    await page.locator('#host-form [name="withRun"]').check(); // 勾执行会带上生成
     assert.equal(await page.locator('#host-form [name="newVersionName"]').inputValue(),'NewProd v9 测试','the new version is named after the target');
     await page.locator('#host-form [name="baseUrl"]').fill('http://127.0.0.1:4500');
     await page.locator('#host-form button[type="submit"]').click();
@@ -180,6 +197,22 @@ async function openHostDrawer(page,docId){
     const st3=await api('/api/state'),nv=st3.versions.find(v=>v.id===h.VersionID);
     assert.equal(nv?.name,'NewProd v9 测试');
     assert.ok(st3.folders.some(f=>f.VersionID===nv.id&&f.Name==='NewProd')&&st3.cases.filter(c=>c.VersionID===nv.id).length===3);
+    // 归档之后：为 3 条用例生成脚本，逐条执行，保存测试记录（含截图），统计通过/失败。
+    assert.equal(h.Generated,3);
+    assert.deepEqual(Object.values(h.Results).sort(),['failed','passed','passed']);
+    const gen=submissions.filter(x=>x.kind==='generator').at(-1).input;
+    assert.equal(gen.cases.length,3);
+    assert.equal(gen.requirements[0].id,doc2,'the requirement goes to the generator');
+    assert.equal(gen.target.baseUrl,'http://127.0.0.1:4500');
+    assert.equal(submissions.filter(x=>x.kind==='executor').length,3);
+    assert.equal(st3.scripts.filter(x=>x.VersionID===nv.id).length,3,'the scripts are saved in the version');
+    const recs=st3.records.filter(r=>r.VersionID===nv.id&&r.Submitted);
+    assert.equal(recs.length,3);
+    assert.equal(recs.filter(r=>r.Result==='failed').length,1);
+    assert.ok(recs.every(r=>r.Note.includes('AI 托管自动执行的脚本')&&!r.Note.includes('data:image')),'screenshots move into record images');
+    await page.waitForFunction(()=>document.querySelectorAll('.host-step.done').length===7);
+    assert.match(await page.locator('#ai-drawer-body').innerText(),/生成自动化脚本：3 个脚本/);
+    assert.match(await page.locator('#ai-drawer-body').innerText(),/自动化执行：通过 2 · 失败 1/);
     // 同一缩写已被第一份需求占用：托管自动改用下一个可用的（…2），不会停下。
     assert.equal(st3.reqDocs.find(d=>d.ID===doc2).Code,`${REQ_CODE}2`);
     await page.waitForFunction(code=>document.querySelector('#req-doc-code')?.textContent===code,`${REQ_CODE}2`);
@@ -190,7 +223,7 @@ async function openHostDrawer(page,docId){
     assert.equal(await page.locator('#ai-drawer-body [data-tc-host]').count(),0);
     await page.locator('[data-tc-filter="done"]').click();
     assert.equal(await page.locator(`#ai-drawer-body [data-tc-host="${docId}"], #ai-drawer-body [data-tc-host="${doc2}"]`).count(),2);
-    assert.match(await page.locator(`#ai-drawer-body [data-tc-host="${doc2}"]`).innerText(),/已完成 · 3 条/);
+    assert.match(await page.locator(`#ai-drawer-body [data-tc-host="${doc2}"]`).innerText(),/已完成 · 3 条 · 通过 2 · 失败 1/);
     await page.locator('.tc-tab[data-tc="plan"]').click();
     assert.equal(await page.locator('#ai-drawer .panel-head strong').innerText(),'AI 设计','switching back restores the planner header');
     assert.deepEqual(errors,[]);
