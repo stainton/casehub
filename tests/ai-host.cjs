@@ -140,6 +140,15 @@ async function openHostDrawer(page,docId){
     assert.equal(h.FailedAt,'archiving',JSON.stringify(h));
     assert.match(h.Error,/同名用例/);
     await page.locator('#host-resume').waitFor();
+    // 任务中心的「AI 托管」页签：停下的托管在「进行中」里，标明需处理；点开回到它的托管视图。
+    await page.locator('.tc-tab[data-tc="host"]').click();
+    const row=page.locator(`#ai-drawer-body [data-tc-host="${docId}"]`);
+    await row.waitFor();
+    assert.match(await row.innerText(),/已停止于「归档到用例树」，需处理/);
+    assert.match(await row.innerText(),new RegExp(`TaskLite / v2.0 / ${title}`));
+    assert.match(await page.locator('.tc-tab[data-tc="host"]').innerText(),/AI 托管\s*1/,'the tab counts unfinished hostings');
+    await row.click();
+    await page.locator('#host-resume').waitFor();
     assert.match(await page.locator('#host-resume').innerText(),/重试这一步/);
     const vcases=(await api('/api/state')).cases.filter(c=>c.VersionID===vid).map(c=>c.ID);
     await page.evaluate(([vid,ids])=>act('deleteCases',{VersionID:vid,CaseIDs:ids}),[vid,vcases]);
@@ -174,6 +183,16 @@ async function openHostDrawer(page,docId){
     // 同一缩写已被第一份需求占用：托管自动改用下一个可用的（…2），不会停下。
     assert.equal(st3.reqDocs.find(d=>d.ID===doc2).Code,`${REQ_CODE}2`);
     await page.waitForFunction(code=>document.querySelector('#req-doc-code')?.textContent===code,`${REQ_CODE}2`);
+    // 两次托管都完成后：「进行中」为空，「已完成」里各有一行。
+    await page.locator('#open-task-center').click();
+    await page.locator('.tc-tab[data-tc="host"]').click();
+    await page.waitForFunction(()=>document.querySelector('.tc-filter')?.textContent.includes('进行中 0'));
+    assert.equal(await page.locator('#ai-drawer-body [data-tc-host]').count(),0);
+    await page.locator('[data-tc-filter="done"]').click();
+    assert.equal(await page.locator(`#ai-drawer-body [data-tc-host="${docId}"], #ai-drawer-body [data-tc-host="${doc2}"]`).count(),2);
+    assert.match(await page.locator(`#ai-drawer-body [data-tc-host="${doc2}"]`).innerText(),/已完成 · 3 条/);
+    await page.locator('.tc-tab[data-tc="plan"]').click();
+    assert.equal(await page.locator('#ai-drawer .panel-head strong').innerText(),'AI 设计','switching back restores the planner header');
     assert.deepEqual(errors,[]);
     console.log('ai host ok');
   }finally{await browser.close();planner.close()}

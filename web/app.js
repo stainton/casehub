@@ -1479,6 +1479,7 @@ function watchHostings(){
     syncAiButton();
     // 托管可能刚保存了需求缩写：只更新详情页上的标签，整页重绘会丢掉未保存的需求正文修改。
     if(reqFocus?.type==='doc'&&$('#req-doc-code')){const d=state.reqDocs.find(x=>x.ID===reqFocus.id);if(d)$('#req-doc-code').textContent=d.Code||'未设置'}
+    if(!aiDoc&&tcCurrent==='host'&&!$('#ai-drawer').classList.contains('hidden'))tcShowHosting();
     if(aiDoc&&!$('#ai-drawer').classList.contains('hidden')){const h=hostingOf(aiDoc);if(h&&hostSig(h)!==hostShown&&(aiDrawerMode==='host'||hostActive(h)||moved))renderHostView(aiDoc)}
     if(!list.some(hostActive)){clearInterval(hostTimer);hostTimer=null}
   },3000);
@@ -2531,12 +2532,16 @@ async function resumeGenTasks(){
   }
 }
 
-// ---- 任务中心：三类任务（设计 / 生成修复 / 执行）共用一排标签，随抽屉一起弹出 ----
-const TC_TABS=[['plan','Planner · 设计','#ai-drawer'],['gen','Generator · 生成/修复','#gen-drawer'],['run','Executor · 执行','#run-drawer']];
+// ---- 任务中心：四类任务（设计 / AI 托管 / 生成修复 / 执行）共用一排标签，随抽屉一起弹出 ----
+// AI 托管和设计共用 AI 抽屉：托管的设计任务不出现在「设计」里（它的结果由服务端自动处理），在「AI 托管」里按需求查看。
+const TC_TABS=[['plan','Planner · 设计','#ai-drawer'],['host','AI 托管','#ai-drawer'],['gen','Generator · 生成/修复','#gen-drawer'],['run','Executor · 执行','#run-drawer']];
+// 「进行中」= 还没完成的托管，包括停下等人处理（重试/放弃）的；「已完成」= 已归档的。
+const tcHostings=()=>(state?.hostings||[]).filter(h=>state.reqDocs.some(d=>d.ID===h.DocID));
+const hostUnfinished=h=>h.Stage!=='done';
 const tcPlannerDocs=()=>(state?.reqDocs||[]).filter(doc=>aiJobOf(doc)||isAiActive(doc));
-const tcActiveOf={plan:()=>tcPlannerDocs().filter(isAiActive).length,gen:()=>genRunning().length,run:()=>activeScriptRuns().length};
-const tcTotalOf={plan:()=>tcPlannerDocs().length,gen:()=>genTasks.length,run:()=>scriptRunTasks.length};
-const tcFilter={plan:'active',gen:'active',run:'active'};
+const tcActiveOf={plan:()=>tcPlannerDocs().filter(isAiActive).length,host:()=>tcHostings().filter(hostUnfinished).length,gen:()=>genRunning().length,run:()=>activeScriptRuns().length};
+const tcTotalOf={plan:()=>tcPlannerDocs().length,host:()=>tcHostings().length,gen:()=>genTasks.length,run:()=>scriptRunTasks.length};
+const tcFilter={plan:'active',host:'active',gen:'active',run:'active'};
 const tcShown=(key,active)=>tcFilter[key]==='active'?active:!active;
 const tcEmptyHTML=key=>`<p class="meta">${tcFilter[key]==='active'?'没有进行中的任务。':'没有已完成的任务。'}</p>`;
 let tcCurrent='gen';
@@ -2557,7 +2562,7 @@ function tcRenderTabs(){
   tcTabs.querySelector('#tc-pin')?.addEventListener('click',()=>{tcPinned=!tcPinned;try{localStorage.setItem('casehub-tc-pinned',tcPinned?'1':'0')}catch{}tcTabs.dataset.sig='';tcRenderTabs()});
   tcTabs.querySelectorAll('[data-tc-filter]').forEach(b=>b.onclick=()=>{tcFilter[tcCurrent]=b.dataset.tcFilter;tcRenderTabs();tcRerender(tcCurrent)});
 }
-function tcRerender(key){if(key==='gen')renderGenDrawer();else if(key==='run')renderScriptRunDrawer();else tcShowPlanner()}
+function tcRerender(key){if(key==='gen')renderGenDrawer();else if(key==='run')renderScriptRunDrawer();else if(key==='host')tcShowHosting();else tcShowPlanner()}
 function tcAttach(key){
   tcCurrent=key;
   tcTabs.dataset.sig='';
@@ -2569,10 +2574,30 @@ function tcSwitch(key){
   TC_TABS.forEach(([,,sel])=>$(sel).classList.add('hidden'));
   if(key==='gen')openGenDrawer();
   else if(key==='run')openScriptRunDrawer();
+  else if(key==='host')tcShowHosting();
   else tcShowPlanner();
 }
+const HOST_STAGE_LABELS={estimating:'评估中',designing:'设计中',reviewing:'自动评审中',archiving:'归档中',done:'已完成'};
+function hostStatusText(h){
+  if(h.Stage!=='stopped')return HOST_STAGE_LABELS[h.Stage]||h.Stage;
+  return `已停止于「${AI_HOST_STEPS.find(([k])=>k===h.FailedAt)?.[1]||h.FailedAt}」，需处理`;
+}
+// 托管列表：每份需求一行（最近一次托管），显示阶段和归档位置，点开进入该需求的托管视图（进度、重试、放弃）。
+function tcShowHosting(){
+  aiDoc=null;closeHostLog();hostShown=null;
+  $('#ai-drawer-doc').textContent='';
+  $('#ai-drawer .panel-head strong').textContent='AI 托管';
+  $('#ai-drawer').classList.remove('hidden');
+  const all=tcHostings(),list=all.filter(h=>tcShown('host',hostUnfinished(h))).sort((a,b)=>String(b.UpdatedAt).localeCompare(String(a.UpdatedAt)));
+  $('#ai-drawer-body').innerHTML=`<div class="tc-list">${list.length?list.map(h=>{const doc=state.reqDocs.find(d=>d.ID===h.DocID),v=version(h.VersionID);
+    return `<button type="button" class="tc-row tc-host${h.Stage==='stopped'?' stopped':''}" data-tc-host="${esc(h.DocID)}"><span>${esc(doc.Title)}<small class="meta">${esc(v?.name||'已删除的版本')}：${esc(hostArchivePath(h).join(' / '))}</small></span><small>${esc(hostStatusText(h))}${h.Stage==='done'&&h.CaseIDs?.length?` · ${h.CaseIDs.length} 条`:''}</small></button>`}).join('')
+    :(all.length?tcEmptyHTML('host'):'<p class="meta">暂无托管任务。在「需求管理」里打开需求文档，点「AI 托管」发起。</p>')}</div>`;
+  $$('#ai-drawer-body [data-tc-host]').forEach(b=>b.onclick=()=>{const doc=state.reqDocs.find(d=>d.ID===b.dataset.tcHost);if(doc)openAiDrawer(doc,'host')});
+  tcAttach('host');
+}
 function tcShowPlanner(){
-  aiDoc=null;
+  aiDoc=null;closeHostLog();
+  $('#ai-drawer .panel-head strong').textContent='AI 设计';
   $('#ai-drawer-doc').textContent='';
   $('#ai-drawer').classList.remove('hidden');
   const all=tcPlannerDocs(),docs=all.filter(doc=>tcShown('plan',isAiActive(doc)));
@@ -2583,7 +2608,7 @@ function tcShowPlanner(){
 // 任何入口打开这三个抽屉，都带上标签，方便互相切换。
 {const g=openGenDrawer;openGenDrawer=function(){g.apply(this,arguments);tcAttach('gen')};
  const r=openScriptRunDrawer;openScriptRunDrawer=function(){r.apply(this,arguments);tcAttach('run')};
- const a=openAiDrawer;openAiDrawer=function(){a.apply(this,arguments);tcAttach('plan')}}
+ const a=openAiDrawer;openAiDrawer=function(doc,mode){a.apply(this,arguments);tcAttach(mode==='host'?'host':'plan')}}
 $('#open-task-center').onclick=()=>tcSwitch(tcCurrent);
 setInterval(tcRenderTabs,2000);
 

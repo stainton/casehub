@@ -292,3 +292,8 @@ button.avatar{padding:0;color:#fff;cursor:pointer;border:1px solid #ffffff40}
 .host-error{color:#dc2626}
 .host-target{display:grid;gap:8px}
 @keyframes host-pulse{50%{opacity:.35}}
+/* 任务中心「AI 托管」列表：需求名下方一行写归档位置，停下的托管标红 */
+.tc-list .tc-host>span{min-width:0}
+.tc-list .tc-host>span small{display:block;margin-left:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tc-list .tc-host>small{flex:none}
+.tc-list .tc-host.stopped>small{color:var(--danger)}
