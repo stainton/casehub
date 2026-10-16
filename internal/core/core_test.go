@@ -1847,3 +1847,34 @@ func TestCreateBlankVersionHasOnlyRootFolder(t *testing.T) {
 		t.Fatalf("blank version has %d cases and folders %v, want 0 cases and only 全部用例", cases, folders)
 	}
 }
+
+func TestSyncPullsOnlyTheChosenCases(t *testing.T) {
+	svc := core.NewService(store.NewMemory())
+	state := apply(t, svc, core.Action{Type: "createVersion", Name: "空", Blank: true})
+	id := branchID(t, state, "空")
+	count := func(st core.State) (cases, folders int) {
+		for _, c := range st.Cases {
+			if c.VersionID == id {
+				cases++
+			}
+		}
+		for _, f := range st.Folders {
+			if f.VersionID == id {
+				folders++
+			}
+		}
+		return
+	}
+	state = apply(t, svc, core.Action{Type: "sync", VersionID: id, CaseIDs: []string{"CASE-0002"}})
+	if c, f := count(state); c != 1 || f != 2 {
+		t.Fatalf("after choosing one case: %d cases, %d folders; want 1 case with its folder chain (2)", c, f)
+	}
+	for _, c := range state.Cases {
+		if c.VersionID == id && c.ID != "CASE-0002" {
+			t.Fatalf("unchosen case %s was pulled", c.ID)
+		}
+	}
+	if _, err := svc.Apply(context.Background(), core.Action{Type: "sync", VersionID: id, CaseIDs: []string{"NOPE"}}); err == nil {
+		t.Fatal("unknown mainline case must be rejected")
+	}
+}

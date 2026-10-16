@@ -1275,10 +1275,31 @@ func syncVersion(s *State, a Action) ([]string, error) {
 		return nil, errors.New("只能同步测试版本")
 	}
 	conflicts := []string{}
+	// CaseIDs limits the pull to those mainline cases (and the folders leading to new ones). The UI always sends
+	// the person's choice; without CaseIDs this pulls everything, which only API callers get.
+	var wanted, keepFolder map[string]bool
+	if len(a.CaseIDs) > 0 {
+		wanted, keepFolder = map[string]bool{}, map[string]bool{}
+		for _, id := range a.CaseIDs {
+			c, _ := caseAt(s, "main", id)
+			if c == nil {
+				return nil, fmt.Errorf("主线不存在用例 %s", id)
+			}
+			wanted[id] = true
+			for fid := c.FolderID; fid != "" && !keepFolder[fid]; {
+				keepFolder[fid] = true
+				f, _ := folderAt(s, "main", fid)
+				if f == nil {
+					break
+				}
+				fid = f.ParentID
+			}
+		}
+	}
 	mainFolders := append([]Folder(nil), s.Folders...)
 	mainCases := append([]TestCase(nil), s.Cases...)
 	for _, mf := range mainFolders {
-		if mf.VersionID == "main" {
+		if mf.VersionID == "main" && (wanted == nil || keepFolder[mf.ID]) {
 			if f, _ := folderAt(s, v.ID, mf.ID); f == nil {
 				n := mf
 				n.VersionID = v.ID
@@ -1298,7 +1319,7 @@ func syncVersion(s *State, a Action) ([]string, error) {
 		}
 	}
 	for _, mc := range mainCases {
-		if mc.VersionID != "main" {
+		if mc.VersionID != "main" || (wanted != nil && !wanted[mc.ID]) {
 			continue
 		}
 		bc, _ := caseAt(s, v.ID, mc.ID)
