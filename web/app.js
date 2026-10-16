@@ -744,7 +744,13 @@ $('#create-req-folder').onclick=()=>reqFolderModal(currentReqFolderTarget());
 $('#create-req-doc').onclick=()=>reqDocModal(currentReqFolderTarget());
 function reqFolderMenu(id){const items=[['查看详情',()=>setReqFocus({type:'folder',id})],['新建文件夹',()=>reqFolderModal(id)],['新增需求文档',()=>reqDocModal(id)],['重命名文件夹',()=>renameReqFolderModal(id)]];if(id!=='req-root')items.push(['删除空文件夹',()=>{if(confirm('确定删除这个空文件夹？'))actReview('deleteReqFolder',{FolderID:id})}]);return items}
 function reqDocMenu(id){const doc=state.reqDocs.find(x=>x.ID===id),active=isAiActive(doc);return [['查看详情',()=>setReqFocus({type:'doc',id})],['重命名',()=>renameReqDocModal(doc)],[reqReviseInFlight.has(id)?'AI 修正需求中':'AI 修正需求',()=>openReqAiRevise(doc),reqReviseInFlight.has(id)?'ai-running':''],[active?'AI 设计中':'AI 设计',()=>openAiDrawer(doc),active?'ai-running':''],['删除',()=>{if(confirm('确定删除这份需求文档？'))actReview('deleteReqDoc',{DocID:id})}]]}
-function reqFolderModal(parent){showModal('新建文件夹',`<label>文件夹名称<input name="Name" required></label>`,x=>act('createReqFolder',{...x,ParentID:parent}))}
+// 位置可选「顶级」（与现有的顶级文件夹并列，例如按 产品 / 产品版本 / 需求 组织时新建一个产品），默认放在当前文件夹下。
+const REQ_TOP='__top__';
+function reqFolderOptionsHTML(selected){
+  const node=(f,depth)=>`<option value="${esc(f.ID)}"${f.ID===selected?' selected':''}>${'　'.repeat(depth+1)}${esc(f.Name)}</option>`+reqChildren(f.ID).map(ch=>node(ch,depth+1)).join('');
+  return `<option value="${REQ_TOP}"${selected?'':' selected'}>（顶级）</option>`+reqRoots().map(r=>node(r,0)).join('');
+}
+function reqFolderModal(parent){showModal('新建文件夹',`<label>文件夹名称<input name="Name" required></label><label>位置<select name="ParentID">${reqFolderOptionsHTML(parent)}</select></label>`,x=>act('createReqFolder',{Name:x.Name,ParentID:x.ParentID===REQ_TOP?'':x.ParentID}))}
 function renameReqFolderModal(id){const f=reqFolder(id);showModal('重命名文件夹',`<label>文件夹名称<input name="Name" required value="${esc(f.Name)}"></label>`,x=>act('renameReqFolder',{...x,FolderID:id}))}
 function reqDocModal(folderId){showModal('新增需求文档',`<label>标题<input name="Title" required></label>`,x=>act('createReqDoc',{...x,FolderID:folderId,Content:''}))}
 function renameReqDocModal(doc){showModal('重命名需求文档',`<label>标题<input name="Title" required value="${esc(doc.Title)}"></label>`,x=>act('editReqDoc',{...x,DocID:doc.ID,Content:doc.Content}))}
