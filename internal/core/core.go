@@ -1338,8 +1338,10 @@ func syncVersion(s *State, a Action) ([]string, error) {
 			continue
 		}
 		if mc.Revision > bc.BaseRevision {
-			res := bc.Result
+			res, folderID := bc.Result, bc.FolderID
 			*bc = mc
+			// The case keeps the folder it sits in on this version (a move made here is not undone by a pull).
+			bc.FolderID = folderID
 			bc.VersionID = v.ID
 			bc.BaseRevision = mc.Revision
 			bc.Revision = 0

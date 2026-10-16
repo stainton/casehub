@@ -1878,3 +1878,33 @@ func TestSyncPullsOnlyTheChosenCases(t *testing.T) {
 		t.Fatal("unknown mainline case must be rejected")
 	}
 }
+
+func TestSyncKeepsFolderStructureAndBranchMoves(t *testing.T) {
+	svc := core.NewService(store.NewMemory())
+	state := apply(t, svc, core.Action{Type: "createVersion", Name: "结构", Blank: true})
+	id := branchID(t, state, "结构")
+	state = apply(t, svc, core.Action{Type: "sync", VersionID: id, CaseIDs: []string{"CASE-0001"}})
+	for _, f := range state.Folders {
+		if f.VersionID == id && f.ID == "auth" && f.ParentID != "root" {
+			t.Fatalf("pulled folder lost its place in the tree: %+v", f)
+		}
+	}
+	// A case moved on the branch stays where the branch put it when a pull touches it.
+	other := apply(t, svc, core.Action{Type: "createFolder", VersionID: id, ParentID: "root", Name: "另放", Author: "a"})
+	var dest string
+	for _, f := range other.Folders {
+		if f.VersionID == id && f.Name == "另放" {
+			dest = f.ID
+		}
+	}
+	apply(t, svc, core.Action{Type: "moveCases", VersionID: id, CaseIDs: []string{"CASE-0001"}, TargetFolderID: dest, Author: "a"})
+	src := branchID(t, apply(t, svc, core.Action{Type: "createVersion", Name: "源"}), "源")
+	apply(t, svc, core.Action{Type: "editCase", VersionID: src, CaseID: "CASE-0001", Title: "主线改名", Steps: "s", Expected: "e", Priority: "P0", Author: "m"})
+	apply(t, svc, core.Action{Type: "merge", VersionID: src, Author: "m"})
+	state = apply(t, svc, core.Action{Type: "sync", VersionID: id, CaseIDs: []string{"CASE-0001"}})
+	for _, c := range state.Cases {
+		if c.VersionID == id && c.ID == "CASE-0001" && c.FolderID != dest {
+			t.Fatalf("a pull must not move a case out of the folder the branch put it in: %+v", c)
+		}
+	}
+}

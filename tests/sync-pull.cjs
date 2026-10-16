@@ -10,6 +10,13 @@ await p.click('#create-version');await p.fill('[name="Name"]','空');await p.cli
 await p.locator('[data-sync]').last().click();
 await p.locator('#modal[open] .sync-row').first().waitFor();
 assert.equal(await p.locator('.sync-row').count(),2);
+// 按主线用例树展示：全部用例 / 登录与认证；勾选文件夹批量选取其下用例，部分选中时为半选。
+assert.equal(await p.locator('.sync-folder').count(),2);
+await p.locator('.sync-folder-check').first().check();
+assert.equal(await p.locator('.sync-row input:checked').count(),2,'ticking a folder selects every case under it');
+await p.locator('.sync-row input').first().uncheck();
+assert.equal(await p.locator('.sync-folder-check').first().evaluate(x=>x.indeterminate),true);
+await p.click('#sync-none');
 assert.equal(await p.locator('.sync-row input:checked').count(),0,'new cases are not pre-checked');
 assert.deepEqual((await counts()).cases,[],'opening the dialog pulls nothing');
 await p.click('#modal-form button[type="submit"]');await p.waitForTimeout(300);

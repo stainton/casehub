@@ -357,31 +357,44 @@ function versionModal(){
   const note=picked.length?`已在主线勾选 <b>${picked.length}</b> 条用例，新版本只包含它们及其所在目录。`:'主线未勾选用例，新版本将只有一个空的「全部用例」目录。如需带入用例，请先在主线中勾选。';
   showModal('创建测试版本',`<label>版本名称<input name="Name" required placeholder="例如：v2.4.0 回归"></label><p class="meta">${note}</p>`,async x=>{await act('createVersion',picked.length?{...x,CaseIDs:picked}:{...x,Blank:true});if(picked.length){selected.get('main')?.clear();updateBulk();renderVersions()}});
 }
-// 拉取主线不静默进行：列出主线里与本版本不同步的用例，由人勾选要拉取哪些。
+// 拉取主线不静默进行：按主线的用例树列出与本版本不同步的用例，由人勾选（可勾选文件夹批量选取）。
 // 「有更新」= 版本里已有、主线改过且本版本没改（默认勾选）；「新增」= 版本里还没有（默认不勾，创建版本时没选的不应被悄悄补回）；
-// 「冲突」= 两边都改过，拉取不会覆盖，需要在用例里手工处理，所以不可选。
+// 「冲突」= 两边都改过，拉取不会覆盖，需要在用例里手工处理，所以不可选。新增用例按主线的目录结构放入，缺的上级目录一并建好。
 function syncModal(versionID){
-  const path=id=>{const names=[];for(let cur=id;cur;){const f=state.folders.find(x=>x.VersionID==='main'&&x.ID===cur);if(!f)break;names.unshift(f.Name);cur=f.ParentID}return names.join(' / ')};
-  const rows=cases('main').map(mc=>{
+  const rows=new Map();
+  cases('main').forEach(mc=>{
     const bc=state.cases.find(c=>c.VersionID===versionID&&c.ID===mc.ID);
     const status=!bc?'new':mc.Revision>bc.BaseRevision?(bc.Dirty?'conflict':'update'):'same';
-    return {mc,status,path:path(mc.FolderID)};
-  }).filter(r=>r.status!=='same');
-  if(!rows.length)return toast('主线没有可拉取的更新，且本版本已包含全部主线用例');
-  const label={update:'有更新',new:'新增',conflict:'冲突'},order=['update','new','conflict'];
-  const section=st=>{
-    const list=rows.filter(r=>r.status===st);if(!list.length)return '';
-    return `<h4 class="sync-group">${label[st]} <small class="meta">${list.length} 条${st==='conflict'?' · 两边都改过，拉取不会覆盖，请在用例里手工处理':''}</small></h4>`
-      +list.map(r=>`<label class="sync-row"><input type="checkbox" name="pull" value="${esc(r.mc.ID)}"${st==='update'?' checked':''}${st==='conflict'?' disabled':''}> <b>${esc(r.mc.ID)}</b> ${esc(r.mc.Title||'')} <small class="meta">${esc(r.path)}</small></label>`).join('');
-  };
-  showModal(`拉取主线 · ${version(versionID).name}`,`<p class="meta">勾选要从主线拉取的用例；未勾选的不会改动。已有用例拉取后会更新为主线内容，新增用例会连同所在目录放入本版本。</p><p class="sync-tools"><button type="button" class="secondary" id="sync-all">全选</button> <button type="button" class="secondary" id="sync-none">全不选</button></p><div class="sync-list">${order.map(section).join('')}</div>`,async()=>{
+    if(status!=='same')rows.set(mc.ID,{mc,status});
+  });
+  if(!rows.size)return toast('主线没有可拉取的更新，且本版本已包含全部主线用例');
+  const label={update:'有更新',new:'新增',conflict:'冲突'},mainFolders=folders('main');
+  const hasRows=fid=>[...rows.values()].some(r=>r.mc.FolderID===fid)||mainFolders.some(f=>f.ParentID===fid&&hasRows(f.ID));
+  const caseRow=r=>`<label class="sync-row"><input type="checkbox" name="pull" value="${esc(r.mc.ID)}"${r.status==='update'?' checked':''}${r.status==='conflict'?' disabled':''}><span class="sync-tag sync-${r.status}">${label[r.status]}</span><b>${esc(r.mc.ID)}</b> ${esc(r.mc.Title||'')}${r.status==='conflict'?' <small class="meta">两边都改过，请在用例里手工处理</small>':''}</label>`;
+  const node=f=>`<div class="sync-node"><label class="sync-folder"><input type="checkbox" class="sync-folder-check"> 📁 <b>${esc(f.Name)}</b></label><div class="sync-children">`
+    +mainFolders.filter(x=>x.ParentID===f.ID&&hasRows(x.ID)).map(node).join('')
+    +[...rows.values()].filter(r=>r.mc.FolderID===f.ID).map(caseRow).join('')+`</div></div>`;
+  const roots=mainFolders.filter(f=>!f.ParentID||!mainFolders.some(x=>x.ID===f.ParentID));
+  // 目录已不存在（异常数据）的用例不应丢，单独列在最后。
+  const known=new Set(mainFolders.map(f=>f.ID)),orphans=[...rows.values()].filter(r=>!known.has(r.mc.FolderID));
+  showModal(`拉取主线 · ${version(versionID).name}`,`<p class="meta">按主线的用例树勾选要拉取的用例，勾选文件夹即选中其下全部可拉取的用例；未勾选的不会改动。已有用例拉取后更新为主线内容（保留它在本版本里所在的目录），新增用例按主线的目录结构放入。</p><p class="sync-tools"><button type="button" class="secondary" id="sync-all">全选</button> <button type="button" class="secondary" id="sync-none">全不选</button></p><div class="sync-list">${roots.filter(f=>hasRows(f.ID)).map(node).join('')}${orphans.map(caseRow).join('')}</div>`,async()=>{
     const ids=[...$('#modal-body').querySelectorAll('input[name="pull"]:checked')].map(x=>x.value);
     if(!ids.length){toast('请至少勾选一条用例',true);throw Error('empty')}
     await act('sync',{VersionID:versionID,CaseIDs:ids});
   });
-  const boxes=()=>[...$('#modal-body').querySelectorAll('input[name="pull"]:not(:disabled)')];
-  $('#sync-all').onclick=()=>boxes().forEach(b=>b.checked=true);
-  $('#sync-none').onclick=()=>boxes().forEach(b=>b.checked=false);
+  const body=$('#modal-body'),boxes=root=>[...root.querySelectorAll('input[name="pull"]:not(:disabled)')];
+  // 文件夹的勾选状态由其下可选用例推出：全选/部分(indeterminate)/全不选。
+  const refresh=()=>body.querySelectorAll('.sync-node').forEach(n=>{
+    const own=n.querySelector(':scope > .sync-folder > input'),list=boxes(n.querySelector(':scope > .sync-children')),on=list.filter(x=>x.checked).length;
+    own.disabled=!list.length;own.checked=!!list.length&&on===list.length;own.indeterminate=on>0&&on<list.length;
+  });
+  body.addEventListener('change',e=>{
+    if(e.target.classList.contains('sync-folder-check'))boxes(e.target.closest('.sync-node').querySelector(':scope > .sync-children')).forEach(x=>x.checked=e.target.checked);
+    refresh();
+  });
+  $('#sync-all').onclick=()=>{boxes(body).forEach(b=>b.checked=true);refresh()};
+  $('#sync-none').onclick=()=>{boxes(body).forEach(b=>b.checked=false);refresh()};
+  refresh();
   setModalSubmitLabel('拉取所选');
 }
 function folderModal(v,parent){showModal('新建文件夹',`<label>文件夹名称<input name="Name" required></label>`,x=>act('createFolder',{...x,VersionID:v,ParentID:parent}))}

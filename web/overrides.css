@@ -263,8 +263,10 @@ button.avatar{padding:0;color:#fff;cursor:pointer;border:1px solid #ffffff40}
 #fs-bar { width:100%; }
 #fs-preview { max-height:50vh; overflow:auto; border:1px solid var(--line); border-radius:7px; padding:8px 14px; }
 
-.sync-list { max-height:50vh; overflow:auto; }
-.sync-group { margin:12px 0 4px; }
-.sync-row { display:flex; align-items:baseline; gap:6px; margin:4px 0; color:var(--text); font-size:13px; cursor:pointer; }
-.sync-row input { width:auto; margin:0; display:inline-block; }
-.sync-row input:disabled + * { opacity:.6; }
+.sync-list { max-height:55vh; overflow:auto; }
+.sync-node > .sync-children { margin-left:18px; border-left:1px solid var(--line); padding-left:8px; }
+.sync-folder, .sync-row { display:flex; align-items:baseline; gap:6px; margin:4px 0; color:var(--text); font-size:13px; cursor:pointer; }
+.sync-folder input, .sync-row input { width:auto; margin:0; display:inline-block; }
+.sync-tag { font-size:11px; padding:0 6px; border-radius:10px; background:var(--brand-soft); color:var(--brand); }
+.sync-conflict { background:#fde8e8; color:#b42318; }
+.sync-row input:disabled ~ * { opacity:.6; }
