@@ -1826,3 +1826,24 @@ func TestCreateVersionFromSelectedCases(t *testing.T) {
 		t.Fatal("unknown case id must be rejected")
 	}
 }
+
+func TestCreateBlankVersionHasOnlyRootFolder(t *testing.T) {
+	svc := core.NewService(store.NewMemory())
+	state := apply(t, svc, core.Action{Type: "createVersion", Name: "空版本", Blank: true})
+	id := branchID(t, state, "空版本")
+	var cases int
+	var folders []string
+	for _, c := range state.Cases {
+		if c.VersionID == id {
+			cases++
+		}
+	}
+	for _, f := range state.Folders {
+		if f.VersionID == id {
+			folders = append(folders, f.Name)
+		}
+	}
+	if cases != 0 || len(folders) != 1 || folders[0] != "全部用例" {
+		t.Fatalf("blank version has %d cases and folders %v, want 0 cases and only 全部用例", cases, folders)
+	}
+}

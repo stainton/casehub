@@ -22,6 +22,16 @@ const assert=require('node:assert/strict');
     assert.ok((await page.locator('#content').boundingBox()).width>1000);
     await page.locator('#expand').click();
     assert.equal(await page.locator('.tree-row').filter({hasText:'◇'}).count(),0);
+    // 没勾选用例时「创建测试版本」只建一个空的「全部用例」目录。
+    await page.locator('#create-version').click();
+    assert.match(await page.locator('#modal-body').innerText(),/空的「全部用例」目录/);
+    await page.locator('[name="Name"]').fill(`UI 空版本 ${Date.now()}`);
+    await page.locator('#modal-form button[type="submit"]').click();
+    await page.locator('#modal').waitFor({state:'hidden'});
+    const blank=await page.evaluate(async()=>{const st=await (await fetch('/api/state')).json();const v=st.versions.at(-1);return {cases:st.cases.filter(c=>c.VersionID===v.id).length,folders:st.folders.filter(f=>f.VersionID===v.id).map(f=>f.Name)}});
+    assert.deepEqual(blank,{cases:0,folders:['全部用例']});
+    // 勾选主线用例后创建，版本含所选用例。
+    await page.evaluate(()=>cases('main').forEach(c=>toggleSelect('main',c.ID,true)));
     await page.locator('#create-version').click();
     await page.locator('[name="Name"]').fill(`UI 验证 ${Date.now()}`);
     await page.locator('#modal-form button[type="submit"]').click();

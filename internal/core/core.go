@@ -318,12 +318,14 @@ type Action struct {
 	Priority, Result, Note, Author                      string
 	CaseIDs                                             []string
 	Submitted, Force                                    bool
-	Resolved, NotIssue                                  bool
-	DocID, Content, Code                                string
-	IssueID, RequirementID, RootCause                   string
-	ExplorationNotes                                    string
-	Review                                              string
-	TargetFolderID                                      string
+	// createVersion: with no CaseIDs, create the version with only the root folder instead of copying mainline.
+	Blank                             bool
+	Resolved, NotIssue                bool
+	DocID, Content, Code              string
+	IssueID, RequirementID, RootCause string
+	ExplorationNotes                  string
+	Review                            string
+	TargetFolderID                    string
 	// importPendingCases: the review folder mapped onto TargetFolderID; its
 	// subfolders are recreated beneath the target. Defaults to pending-root.
 	SourceFolderID string
@@ -747,10 +749,10 @@ func createVersion(s *State, a Action) error {
 			return errors.New("版本名称已存在")
 		}
 	}
-	// CaseIDs narrows the new version to those mainline cases (plus the folders leading to them); none means
-	// a full copy of mainline.
+	// CaseIDs narrows the new version to those mainline cases (plus the folders leading to them); Blank with no
+	// CaseIDs keeps only the root folder; neither means a full copy of mainline.
 	var wanted, keepFolder map[string]bool
-	if len(a.CaseIDs) > 0 {
+	if len(a.CaseIDs) > 0 || a.Blank {
 		wanted, keepFolder = map[string]bool{}, map[string]bool{}
 		for _, id := range a.CaseIDs {
 			c, _ := caseAt(s, "main", id)

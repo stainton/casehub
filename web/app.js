@@ -350,11 +350,12 @@ function moveCasesModal(v,ids){targetFolderModal('移动用例',v,id=>act('moveC
 function caseMenu(v,id){let c=state.cases.find(x=>x.VersionID===v&&x.ID===id),script=scriptFor(v,id),runnable=script&&script.Status!=='blocked'&&script.Code,items=[['查看详情',()=>setFocus({type:'case',versionID:v,id})],['测试记录',()=>openRecords(c)],['脚本生成',()=>startGeneration(v,[id],caseLabel(c))],['自动化执行',()=>runScriptModal(script),'',!runnable]];if(!version(v).mainline)items.push(['AI 修正',()=>openCaseAiFix(c)],['编辑用例',()=>{startCaseEdit(c,false,'case');setFocus({type:'case',versionID:v,id})}]);items.push(['删除用例',()=>{if(confirm('确定删除这条用例？测试记录和历史也会一并删除，且无法恢复。'))act('deleteCases',{VersionID:v,CaseIDs:[id]})}]);return items}
 function menu(e,items){e.preventDefault();let m=$('#context-menu');m.innerHTML=items.map((x,i)=>`<button data-i="${i}"${x[2]?` class="${x[2]}"`:''}${x[3]?' disabled':''}>${esc(x[0])}</button>`).join('');m.style.left=Math.min(e.clientX,innerWidth-205)+'px';m.style.top=Math.min(e.clientY,innerHeight-items.length*38-10)+'px';m.classList.remove('hidden');m.querySelectorAll('button').forEach(b=>b.onclick=()=>{if(b.disabled)return;m.classList.add('hidden');items[+b.dataset.i][1]()})}
 function showModal(title,html,save){$('#modal-title').textContent=title;$('#modal-body').innerHTML=html;modalSave=save;$('#modal').showModal()}
-// 主线里勾选了用例时，新版本只包含这些用例（连同它们所在的目录）；没勾选则整份复制主线。
+// 创建测试版本：主线里勾选了用例时，新版本只含这些用例（连同它们所在的目录）；没勾选则只有一个空的「全部用例」目录，
+// 不会把主线整份拉下来。之后可用合并/移动等操作往版本里放用例。
 function versionModal(){
   const picked=[...(selected.get('main')||[])].filter(id=>state.cases.some(c=>c.VersionID==='main'&&c.ID===id));
-  const note=picked.length?`已在主线勾选 <b>${picked.length}</b> 条用例，新版本只包含它们及其所在目录。`:'主线未勾选用例，新版本将复制主线的全部目录和用例。如只需要部分用例，请先在主线中勾选。';
-  showModal('创建测试版本',`<label>版本名称<input name="Name" required placeholder="例如：v2.4.0 回归"></label><p class="meta">${note}</p>`,async x=>{await act('createVersion',picked.length?{...x,CaseIDs:picked}:x);if(picked.length){selected.get('main')?.clear();updateBulk();renderVersions()}});
+  const note=picked.length?`已在主线勾选 <b>${picked.length}</b> 条用例，新版本只包含它们及其所在目录。`:'主线未勾选用例，新版本将只有一个空的「全部用例」目录。如需带入用例，请先在主线中勾选。';
+  showModal('创建测试版本',`<label>版本名称<input name="Name" required placeholder="例如：v2.4.0 回归"></label><p class="meta">${note}</p>`,async x=>{await act('createVersion',picked.length?{...x,CaseIDs:picked}:{...x,Blank:true});if(picked.length){selected.get('main')?.clear();updateBulk();renderVersions()}});
 }
 function folderModal(v,parent){showModal('新建文件夹',`<label>文件夹名称<input name="Name" required></label>`,x=>act('createFolder',{...x,VersionID:v,ParentID:parent}))}
 function renameModal(v,id){let f=state.folders.find(x=>x.VersionID===v&&x.ID===id);showModal('重命名文件夹',`<label>文件夹名称<input name="Name" required value="${esc(f.Name)}"></label>`,x=>act('renameFolder',{...x,VersionID:v,FolderID:id}))}
