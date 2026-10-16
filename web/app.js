@@ -1471,6 +1471,8 @@ function watchHostings(){
     state.hostings=list;
     if(moved)await refresh().catch(()=>{});
     syncAiButton();
+    // 托管可能刚保存了需求缩写：只更新详情页上的标签，整页重绘会丢掉未保存的需求正文修改。
+    if(reqFocus?.type==='doc'&&$('#req-doc-code')){const d=state.reqDocs.find(x=>x.ID===reqFocus.id);if(d)$('#req-doc-code').textContent=d.Code||'未设置'}
     if(aiDoc&&!$('#ai-drawer').classList.contains('hidden')){const h=hostingOf(aiDoc);if(h&&hostSig(h)!==hostShown&&(aiDrawerMode==='host'||hostActive(h)||moved))renderHostView(aiDoc)}
     if(!list.some(hostActive)){clearInterval(hostTimer);hostTimer=null}
   },3000);
@@ -1488,15 +1490,16 @@ async function renderHostForm(doc,{retry}={}){
   const product=prev?.Product??(path.length>=2?path[path.length-2]:last.product||'');
   const productVersion=prev?.ProductVersion??(path.length>=1?path[path.length-1]:last.productVersion||'');
   const versionID=[prev?.VersionID,last.versionID].find(id=>branches.some(b=>b.id===id))||branches[0]?.id;
-  if(!retry&&!branches.length){$('#ai-drawer-body').innerHTML='<p class="meta">AI 托管会把评审通过的用例归档到一个测试版本的用例树里，请先在「用例管理」创建一个测试版本（已完成的版本不能作为目标）。</p>';return}
   const target=retry?`<div class="card"><p class="meta">归档位置沿用这次托管的：「${esc(version(retry.VersionID)?.name||'')}」${esc(hostArchivePath(retry).join(' / '))}</p></div>`
-    :`<fieldset class="host-target"><legend>归档位置</legend><label>测试版本<select name="versionID">${branches.map(b=>`<option value="${esc(b.id)}"${b.id===versionID?' selected':''}>${esc(b.name)}</option>`).join('')}</select></label><label>产品<input name="product" required placeholder="以产品命名的目录" value="${esc(product)}"></label><label>产品版本<input name="productVersion" required placeholder="以版本命名的目录" value="${esc(productVersion)}"></label><p class="meta" id="host-path"></p></fieldset>`;
+    :`<fieldset class="host-target"><legend>归档位置</legend><label>测试版本<select name="versionID">${branches.map(b=>`<option value="${esc(b.id)}"${b.id===versionID?' selected':''}>${esc(b.name)}</option>`).join('')}<option value="__new__"${versionID?'':' selected'}>＋ 新建测试版本…</option></select></label><label id="host-new-version"${versionID?' class="hidden"':''}>新测试版本名称<input name="newVersionName" placeholder="如 TaskLite v2.0 测试" value=""><small class="meta">开始托管时创建一个只有「全部用例」的空测试版本作为归档目标。</small></label><label>产品<input name="product" required placeholder="以产品命名的目录" value="${esc(product)}"></label><label>产品版本<input name="productVersion" required placeholder="以版本命名的目录" value="${esc(productVersion)}"></label><p class="meta" id="host-path"></p></fieldset>`;
   const buttons=retry?.Continuable?'<button type="submit" class="secondary" value="redo">重新设计</button><button type="submit" value="continue">继续上次的设计</button>':`<button type="submit" value="start">${retry?'重新托管':'开始托管'}</button>`;
   $('#ai-drawer-body').innerHTML=`${retry?hostStepsHTML(retry):`<div class="card"><h3>AI 托管</h3><p class="meta">托管后不再逐步确认：AI 评估的用例数量和需求缩写直接采用，设计完成的用例放入用例评审后自动评审通过，并归档到下面的位置（上级目录不存在会自动创建）。托管由 CaseHub 服务端执行，提交后可以关闭页面。</p></div>`}<form id="host-form" autocomplete="off"><label>被测系统 URL<input name="baseUrl" required placeholder="https://test.example.com/login" autocomplete="off" value="${esc(v.baseUrl||'')}"></label><label>补充说明（可选）<textarea name="instructions" placeholder="覆盖范围、登录方式或探索约束">${esc(v.instructions||'')}</textarea></label><label>测试账号 · 用户名（可选）<input name="testAccount" autocomplete="off" value="${esc(v.testAccount||'')}"></label><label>测试账号 · 密码（可选）<input name="testSecret" type="text" class="fake-password" autocomplete="off" spellcheck="false" value="${esc(v.testSecret||'')}"></label><fieldset class="ai-assets"><legend>随任务带上的资产（可选）</legend>${assetsCache.length?assetsCache.map(a=>`<label class="ai-asset"><input type="checkbox" name="assetIds" value="${esc(a.id)}"${(v.assetIds||[]).includes(a.id)?' checked':''}> ${esc(assetTypeLabel(a.type))} · ${esc(a.name)} <small>${assetSize(a.size)}</small></label>`).join(''):'<small class="meta">还没有资产，可在头像菜单的「资产」里上传。</small>'}</fieldset><label>任务超时时间（分钟）<input name="timeoutMinutes" type="number" min="${AI_MIN_TIMEOUT_MIN}" max="${AI_MAX_TIMEOUT_MIN}" step="1" required value="${esc(v.timeoutMinutes??aiTimeoutMinutes())}"></label>${target}<p class="drawer-actions">${retry?'<button type="button" class="secondary" id="host-back">返回</button>':''}${buttons}</p></form>`;
   const form=$('#host-form');
   if(retry)$('#host-back').onclick=()=>renderHostView(doc);
-  const preview=()=>{const el=$('#host-path');if(!el)return;const x=Object.fromEntries(new FormData(form));el.textContent=`用例将归档到：${['全部用例',x.product.trim()||'<产品>',x.productVersion.trim()||'<产品版本>',liveReqDoc(doc).Title].join(' / ')}`};
-  form.oninput=preview;preview();
+  const preview=()=>{const el=$('#host-path');if(!el)return;const x=Object.fromEntries(new FormData(form));
+    const fresh=x.versionID==='__new__',nv=form.elements.newVersionName;$('#host-new-version').classList.toggle('hidden',!fresh);nv.required=fresh;
+    if(fresh&&!nv.dataset.touched)nv.value=[x.product.trim(),x.productVersion.trim()].filter(Boolean).join(' ')+(x.product.trim()||x.productVersion.trim()?' 测试':'');el.textContent=`用例将归档到：${['全部用例',x.product.trim()||'<产品>',x.productVersion.trim()||'<产品版本>',liveReqDoc(doc).Title].join(' / ')}`};
+  form.oninput=e=>{if(e.target.name==='newVersionName')e.target.dataset.touched='1';preview()};form.onchange=preview;preview();
   form.onsubmit=async e=>{
     e.preventDefault();
     const mode=e.submitter?.value||'start',data=new FormData(form);
@@ -1518,6 +1521,13 @@ async function renderHostForm(doc,{retry}={}){
       else{
         const cfg={versionID:String(data.get('versionID')),product:String(data.get('product')).trim(),productVersion:String(data.get('productVersion')).trim()};
         if(!cfg.product||!cfg.productVersion){btns.forEach(b=>b.disabled=false);return toast('请填写产品和产品版本',true)}
+        if(cfg.versionID==='__new__'){ // 目标版本当场新建：空版本，只有「全部用例」
+          const name=String(data.get('newVersionName')||'').trim();
+          if(!name){btns.forEach(b=>b.disabled=false);return toast('请填写新测试版本名称',true)}
+          const before=new Set(state.versions.map(v=>v.id));
+          const out=await act('createVersion',{Name:name,Blank:true});
+          cfg.versionID=out.state.versions.find(v=>!before.has(v.id)).id;
+        }
         try{localStorage.setItem('casehub-ai-host-last',JSON.stringify(cfg))}catch{}
         h=await serviceRequest('/api/hostings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({DocID:doc.ID,VersionID:cfg.versionID,Product:cfg.product,ProductVersion:cfg.productVersion,Author:'本地用户',estimate,job})});
       }

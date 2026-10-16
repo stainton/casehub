@@ -151,6 +151,29 @@ async function openHostDrawer(page,docId){
     assert.equal(st2.folders.filter(x=>x.VersionID===vid&&x.Name==='TaskLite').length,1,'the product folder is reused');
     assert.equal(st2.cases.filter(c=>c.VersionID===vid).length,3);
     await page.waitForFunction(()=>document.querySelectorAll('.host-step.done').length===5);
+
+    // 还没有合适的测试版本时，表单里直接「＋ 新建测试版本…」：开始托管时创建一个空版本作为归档目标。
+    const title2=`新版本托管 ${Date.now()}`;
+    const doc2=await page.evaluate(async t=>{await act('createReqDoc',{FolderID:'req-root',Title:t,Content:'登录'});return state.reqDocs.find(d=>d.Title===t).ID},title2);
+    await page.locator('#ai-drawer-close').click();
+    await openHostDrawer(page,doc2);
+    await page.locator('#host-form').waitFor();
+    await page.locator('#host-form [name="versionID"]').selectOption('__new__');
+    await page.locator('#host-form [name="product"]').fill('NewProd');
+    await page.locator('#host-form [name="productVersion"]').fill('v9');
+    assert.equal(await page.locator('#host-form [name="newVersionName"]').inputValue(),'NewProd v9 测试','the new version is named after the target');
+    await page.locator('#host-form [name="baseUrl"]').fill('http://127.0.0.1:4500');
+    await page.locator('#host-form button[type="submit"]').click();
+    await waitStage(doc2,['designing']);
+    release();
+    h=await waitStage(doc2,['done','stopped']);
+    assert.equal(h.Stage,'done',h.Error);
+    const st3=await api('/api/state'),nv=st3.versions.find(v=>v.id===h.VersionID);
+    assert.equal(nv?.name,'NewProd v9 测试');
+    assert.ok(st3.folders.some(f=>f.VersionID===nv.id&&f.Name==='NewProd')&&st3.cases.filter(c=>c.VersionID===nv.id).length===3);
+    // 同一缩写已被第一份需求占用：托管自动改用下一个可用的（…2），不会停下。
+    assert.equal(st3.reqDocs.find(d=>d.ID===doc2).Code,`${REQ_CODE}2`);
+    await page.waitForFunction(code=>document.querySelector('#req-doc-code')?.textContent===code,`${REQ_CODE}2`);
     assert.deepEqual(errors,[]);
     console.log('ai host ok');
   }finally{await browser.close();planner.close()}

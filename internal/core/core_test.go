@@ -1990,3 +1990,26 @@ func TestReviewPendingCasesPassesABatch(t *testing.T) {
 		}
 	}
 }
+
+func TestHostingPicksAFreeRequirementCodeOnAClash(t *testing.T) {
+	svc := core.NewService(store.NewMemory())
+	state := apply(t, svc, core.Action{Type: "createReqDoc", FolderID: "req-root", Title: "甲"})
+	state = apply(t, svc, core.Action{Type: "createReqDoc", FolderID: "req-root", Title: "乙"})
+	id := map[string]string{}
+	for _, d := range state.ReqDocs {
+		id[d.Title] = d.ID
+	}
+	apply(t, svc, core.Action{Type: "setReqDocCode", DocID: id["甲"], Code: "LOGIN"})
+	branch := branchID(t, apply(t, svc, core.Action{Type: "createVersion", Name: "托管", Blank: true}), "托管")
+	state = apply(t, svc, core.Action{Type: "startHosting", Hosting: &core.Hosting{DocID: id["乙"], VersionID: branch, Product: "P", ProductVersion: "1"}})
+	h := state.Hostings[0]
+	state = apply(t, svc, core.Action{Type: "hostingDesigning", HostingID: h.ID, Hosting: &core.Hosting{CaseCount: 3, Code: "LOGIN"}})
+	for _, d := range state.ReqDocs {
+		if d.ID == id["乙"] && d.Code != "LOGIN2" {
+			t.Fatalf("code = %q, want LOGIN2", d.Code)
+		}
+	}
+	if state.Hostings[0].Code != "LOGIN2" || state.Hostings[0].Stage != core.HostingDesigning {
+		t.Fatalf("hosting: %+v", state.Hostings[0])
+	}
+}

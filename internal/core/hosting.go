@@ -206,7 +206,7 @@ func hostingDesigning(s *State, h *Hosting, a Action) error {
 		return errors.New("需求文档不存在")
 	}
 	if doc.Code == "" {
-		if err := setReqDocCode(s, Action{DocID: doc.ID, Code: in.Code, Author: a.Author}); err != nil {
+		if err := setReqDocCode(s, Action{DocID: doc.ID, Code: freeReqCode(s, doc.ID, in.Code), Author: a.Author}); err != nil {
 			return err
 		}
 	}
@@ -215,6 +215,35 @@ func hostingDesigning(s *State, h *Hosting, a Action) error {
 	}
 	h.Stage, h.Code, h.CaseCount, h.Rationale, h.Note, h.PlannerTaskID = HostingDesigning, doc.Code, in.CaseCount, in.Rationale, in.Note, ""
 	return nil
+}
+
+// freeReqCode is the suggested code, or — when another requirement already has it — the first free
+// variant with a digit appended (LOGIN → LOGIN2 …), still within the 12-character limit. Nobody is there to
+// pick another code during a hosting, so a clash must not stop it.
+func freeReqCode(s *State, docID, code string) string {
+	code = strings.ToUpper(strings.TrimSpace(code))
+	taken := func(c string) bool {
+		for _, d := range s.ReqDocs {
+			if d.ID != docID && d.Code == c {
+				return true
+			}
+		}
+		return false
+	}
+	if !codeRE.MatchString(code) || !taken(code) {
+		return code
+	}
+	for n := 2; n < 1000; n++ {
+		suffix := fmt.Sprint(n)
+		base := code
+		if len(base)+len(suffix) > 12 {
+			base = base[:12-len(suffix)]
+		}
+		if c := base + suffix; !taken(c) {
+			return c
+		}
+	}
+	return code
 }
 
 var (
