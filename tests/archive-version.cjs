@@ -16,29 +16,29 @@ const BASE=process.env.CASEHUB_TEST_URL||'http://127.0.0.1:18081';
   const vid=await page.evaluate(n=>state.versions.find(v=>v.name===n).id,NAME);
   await act('createTask',{VersionID:vid,Name:'归档任务',CaseIDs:['CASE-0001']});
   const version=page.locator(`.version[data-version="${vid}"]`);
-  assert.equal(await page.locator('#versions .archive-group').count(),0,'no archive group before anything is archived');
   assert.ok(await version.locator('.case-check').count()>0,'an active version has selection checkboxes');
+  assert.equal(await page.locator('[data-view="archive"]').innerText(),'归档版本','archive is a tab beside 用例树 / 测试任务');
 
   await version.locator('[data-archive]').click();
-  await page.locator('#versions .archive-group').waitFor();
-  assert.match(await page.locator('#versions .archive-title').innerText(),/归档版本\s*1/);
-  assert.equal(await page.locator(`#versions > .version[data-version="${vid}"]`).count(),0,'archived version left the main list');
-  const archived=page.locator(`#versions .archive-body .version[data-version="${vid}"]`);
+  await page.waitForFunction(id=>!document.querySelector(`#versions .version[data-version="${id}"]`),vid);
+  await page.click('[data-view="tasks"]');
+  assert.ok(!(await page.locator('#tasks').innerText()).includes(NAME),'a finished version leaves the 测试任务 list');
+
+  await page.click('[data-view="archive"]');
+  assert.equal(await page.locator('#archive-view').isVisible(),true);
+  assert.equal(await page.locator('#case-view').isVisible(),false);
+  const archived=page.locator(`#archive .version[data-version="${vid}"]`);
   assert.match(await archived.locator('.badge').innerText(),/已完成/);
   assert.equal(await archived.locator('.case-check').count(),0,'archived version is read-only: no checkboxes');
-  assert.equal(await archived.locator('[data-sync],[data-merge],[data-archive]').count(),0,'no pull/merge/archive on an archived version');
+  assert.equal(await archived.locator('[data-sync],[data-merge],[data-archive]').count(),0,'no pull/merge/finish on an archived version');
   assert.equal(await archived.locator('[data-unarchive]').count(),1);
+  assert.match(await archived.textContent(),/归档任务/,'its tasks are listed under the version');
 
-  // 测试任务里同样归入「归档版本」
-  await page.click('[data-view="tasks"]');
-  await page.locator('#tasks .archive-group').waitFor();
-  assert.ok(await page.locator('#tasks .archive-body').innerText().then(t=>t.includes(NAME)&&t.includes('归档任务')));
-
-  // 取消归档
-  await page.click('[data-view="cases"]');
   await archived.locator('[data-unarchive]').click();
-  await page.waitForFunction(()=>!document.querySelector('#versions .archive-group'));
-  assert.ok(await page.locator(`#versions > .version[data-version="${vid}"] .case-check`).count()>0);
+  await page.waitForFunction(id=>!document.querySelector(`#archive .version[data-version="${id}"]`),vid);
+  assert.match(await page.locator('#archive').innerText(),/还没有已完成/);
+  await page.click('[data-view="cases"]');
+  assert.ok(await page.locator(`#versions > .version[data-version="${vid}"] .case-check`).count()>0,'reopened version is back in 用例树');
   assert.deepEqual(errors,[]);
   await browser.close();console.log('archive ok');
 })().catch(e=>{console.error(e);process.exit(1)});
