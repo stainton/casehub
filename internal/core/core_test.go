@@ -1908,3 +1908,43 @@ func TestSyncKeepsFolderStructureAndBranchMoves(t *testing.T) {
 		}
 	}
 }
+
+func TestArchivedVersionIsReadOnlyUntilUnarchived(t *testing.T) {
+	svc := core.NewService(store.NewMemory())
+	state := apply(t, svc, core.Action{Type: "createVersion", Name: "已完成"})
+	id := branchID(t, state, "已完成")
+	state = apply(t, svc, core.Action{Type: "archiveVersion", VersionID: id})
+	for _, v := range state.Versions {
+		if v.ID == id && (!v.Archived || v.ArchivedAt.IsZero()) {
+			t.Fatalf("version not archived: %+v", v)
+		}
+	}
+	mutations := []core.Action{
+		{Type: "createFolder", VersionID: id, ParentID: "root", Name: "x"},
+		{Type: "createCase", VersionID: id, FolderID: "root", Title: "x"},
+		{Type: "submitRecord", VersionID: id, CaseID: "CASE-0001", Result: "passed"},
+		{Type: "sync", VersionID: id},
+		{Type: "merge", VersionID: id},
+		{Type: "renameFolder", VersionID: id, FolderID: "auth", Name: "y"},
+		{Type: "deleteCases", VersionID: id, CaseIDs: []string{"CASE-0001"}},
+		{Type: "createTask", VersionID: id, Name: "t", CaseIDs: []string{"CASE-0001"}},
+	}
+	for _, a := range mutations {
+		if _, err := svc.Apply(context.Background(), a); err == nil {
+			t.Fatalf("%s must be rejected on an archived version", a.Type)
+		}
+	}
+	if _, err := svc.Apply(context.Background(), core.Action{Type: "archiveVersion", VersionID: "main"}); err == nil {
+		t.Fatal("mainline cannot be archived")
+	}
+	apply(t, svc, core.Action{Type: "unarchiveVersion", VersionID: id})
+	apply(t, svc, core.Action{Type: "createFolder", VersionID: id, ParentID: "root", Name: "x"})
+	// An archived version can still be deleted.
+	apply(t, svc, core.Action{Type: "archiveVersion", VersionID: id})
+	state = apply(t, svc, core.Action{Type: "deleteVersion", VersionID: id})
+	for _, v := range state.Versions {
+		if v.ID == id {
+			t.Fatal("archived version should be deletable")
+		}
+	}
+}

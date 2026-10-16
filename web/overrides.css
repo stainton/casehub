@@ -273,3 +273,11 @@ button.avatar{padding:0;color:#fff;cursor:pointer;border:1px solid #ffffff40}
 .sync-tag { font-size:11px; padding:0 6px; border-radius:10px; background:var(--brand-soft); color:var(--brand); }
 .sync-conflict { background:#fde8e8; color:#b42318; }
 .sync-row input:disabled ~ * { opacity:.6; }
+
+.archive-group { margin-top:14px; border-top:1px dashed var(--line); padding-top:8px; }
+.archive-title { display:flex; align-items:center; gap:8px; padding:8px 10px; font-weight:650; cursor:pointer; color:var(--muted); }
+.archive-title .chev { transition:.2s; }
+.archive-title .badge { font-size:10px; background:var(--brand-soft); color:var(--brand); padding:2px 6px; border-radius:12px; }
+.archive-group.closed .archive-body { display:none; }
+.archive-group.closed .archive-title .chev { transform:rotate(-90deg); }
+.version.archived { opacity:.85; }

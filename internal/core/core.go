@@ -40,9 +40,12 @@ type Repository interface {
 }
 
 type Version struct {
-	ID               string    `json:"id"`
-	Name             string    `json:"name"`
-	Mainline         bool      `json:"mainline"`
+	ID       string `json:"id"`
+	Name     string `json:"name"`
+	Mainline bool   `json:"mainline"`
+	// Archived marks a finished test version: it is kept for reference but read-only until unarchived.
+	Archived         bool      `json:"archived"`
+	ArchivedAt       time.Time `json:"archivedAt"`
 	BaseMainRevision int64     `json:"baseMainRevision"`
 	CreatedBy        string    `json:"createdBy"`
 	CreatedAt        time.Time `json:"createdAt"`
@@ -710,6 +713,10 @@ func (s *Service) Apply(ctx context.Context, a Action) (Result, error) {
 		if err == nil && merged == 0 {
 			warnings = append(warnings, "没有可合并的变更")
 		}
+	case "archiveVersion":
+		err = archiveVersion(&st, a, true)
+	case "unarchiveVersion":
+		err = archiveVersion(&st, a, false)
 	case "deleteVersion":
 		err = deleteVersion(&st, a)
 	case "deleteCases":
@@ -730,7 +737,8 @@ func (s *Service) Apply(ctx context.Context, a Action) (Result, error) {
 	return Result{State: st, Warnings: warnings}, nil
 }
 
-func requireBranch(s *State, id string) (*Version, error) {
+// branchOf finds a test version (never mainline), archived or not.
+func branchOf(s *State, id string) (*Version, error) {
 	v, _ := versionAt(s, id)
 	if v == nil {
 		return nil, errors.New("版本不存在")
@@ -739,6 +747,35 @@ func requireBranch(s *State, id string) (*Version, error) {
 		return nil, errors.New("主线只读")
 	}
 	return v, nil
+}
+
+// requireBranch is for every change to a test version's content: an archived version is finished and read-only.
+func requireBranch(s *State, id string) (*Version, error) {
+	v, err := branchOf(s, id)
+	if err != nil {
+		return nil, err
+	}
+	if v.Archived {
+		return nil, errors.New("版本已归档，请先取消归档")
+	}
+	return v, nil
+}
+
+// archiveVersion moves a test version into (or back out of) the archive.
+func archiveVersion(s *State, a Action, archive bool) error {
+	v, err := branchOf(s, a.VersionID)
+	if err != nil {
+		return err
+	}
+	if v.Archived == archive {
+		return nil
+	}
+	v.Archived = archive
+	v.ArchivedAt = time.Time{}
+	if archive {
+		v.ArchivedAt = now()
+	}
+	return nil
 }
 func createVersion(s *State, a Action) error {
 	if strings.TrimSpace(a.Name) == "" {
@@ -808,7 +845,7 @@ func createVersion(s *State, a Action) error {
 // entries recorded on other versions that merely cite this one as a merge
 // source are left untouched — they document what mainline already absorbed.
 func deleteVersion(s *State, a Action) error {
-	v, err := requireBranch(s, a.VersionID)
+	v, err := branchOf(s, a.VersionID)
 	if err != nil {
 		return err
 	}
@@ -881,8 +918,12 @@ func createFolder(s *State, a Action) error {
 	return nil
 }
 func renameFolder(s *State, a Action) error {
-	if v, _ := versionAt(s, a.VersionID); v == nil {
+	v, _ := versionAt(s, a.VersionID)
+	if v == nil {
 		return errors.New("版本不存在")
+	}
+	if v.Archived {
+		return errors.New("版本已归档，请先取消归档")
 	}
 	f, _ := folderAt(s, a.VersionID, a.FolderID)
 	if f == nil {
@@ -1274,6 +1315,9 @@ func syncVersion(s *State, a Action) ([]string, error) {
 	if v == nil || v.Mainline {
 		return nil, errors.New("只能同步测试版本")
 	}
+	if v.Archived {
+		return nil, errors.New("版本已归档，请先取消归档")
+	}
 	conflicts := []string{}
 	// CaseIDs limits the pull to those mainline cases (and the folders leading to new ones). The UI always sends
 	// the person's choice; without CaseIDs this pulls everything, which only API callers get.
@@ -1356,6 +1400,9 @@ func mergeVersion(s *State, a Action) ([]string, error) {
 	v, _ := versionAt(s, a.VersionID)
 	if v == nil || v.Mainline {
 		return nil, errors.New("只能合并测试版本")
+	}
+	if v.Archived {
+		return nil, errors.New("版本已归档，请先取消归档")
 	}
 	conflicts := []string{}
 	for i := range s.Cases {
@@ -1673,6 +1720,9 @@ func deleteCases(s *State, a Action) error {
 	if v == nil {
 		return errors.New("版本不存在")
 	}
+	if v.Archived {
+		return errors.New("版本已归档，请先取消归档")
+	}
 	if len(a.CaseIDs) == 0 {
 		return errors.New("请选择用例")
 	}
@@ -1739,6 +1789,9 @@ func deleteFolder(s *State, a Action) error {
 	v, _ := versionAt(s, a.VersionID)
 	if v == nil {
 		return errors.New("版本不存在")
+	}
+	if v.Archived {
+		return errors.New("版本已归档，请先取消归档")
 	}
 	f, i := folderAt(s, v.ID, a.FolderID)
 	if f == nil {
