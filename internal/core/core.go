@@ -756,7 +756,7 @@ func requireBranch(s *State, id string) (*Version, error) {
 		return nil, err
 	}
 	if v.Archived {
-		return nil, errors.New("版本已归档，请先取消归档")
+		return nil, errors.New("版本已完成并归档，请先重新打开")
 	}
 	return v, nil
 }
@@ -923,7 +923,7 @@ func renameFolder(s *State, a Action) error {
 		return errors.New("版本不存在")
 	}
 	if v.Archived {
-		return errors.New("版本已归档，请先取消归档")
+		return errors.New("版本已完成并归档，请先重新打开")
 	}
 	f, _ := folderAt(s, a.VersionID, a.FolderID)
 	if f == nil {
@@ -1316,7 +1316,7 @@ func syncVersion(s *State, a Action) ([]string, error) {
 		return nil, errors.New("只能同步测试版本")
 	}
 	if v.Archived {
-		return nil, errors.New("版本已归档，请先取消归档")
+		return nil, errors.New("版本已完成并归档，请先重新打开")
 	}
 	conflicts := []string{}
 	// CaseIDs limits the pull to those mainline cases (and the folders leading to new ones). The UI always sends
@@ -1402,7 +1402,7 @@ func mergeVersion(s *State, a Action) ([]string, error) {
 		return nil, errors.New("只能合并测试版本")
 	}
 	if v.Archived {
-		return nil, errors.New("版本已归档，请先取消归档")
+		return nil, errors.New("版本已完成并归档，请先重新打开")
 	}
 	conflicts := []string{}
 	for i := range s.Cases {
@@ -1721,7 +1721,7 @@ func deleteCases(s *State, a Action) error {
 		return errors.New("版本不存在")
 	}
 	if v.Archived {
-		return errors.New("版本已归档，请先取消归档")
+		return errors.New("版本已完成并归档，请先重新打开")
 	}
 	if len(a.CaseIDs) == 0 {
 		return errors.New("请选择用例")
@@ -1791,7 +1791,7 @@ func deleteFolder(s *State, a Action) error {
 		return errors.New("版本不存在")
 	}
 	if v.Archived {
-		return errors.New("版本已归档，请先取消归档")
+		return errors.New("版本已完成并归档，请先重新打开")
 	}
 	f, i := folderAt(s, v.ID, a.FolderID)
 	if f == nil {

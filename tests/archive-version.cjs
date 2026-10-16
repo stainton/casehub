@@ -1,4 +1,4 @@
-// 「归档版本」浏览器回归：用例树和测试任务里，已完成的测试版本收进底部的「归档版本」（默认折叠），归档后只读，可取消归档。
+// 「完成」/「归档版本」浏览器回归：点「完成」把测试版本收进用例树和测试任务底部的「归档版本」（默认折叠），完成后只读，可「重新打开」。
 // 只对临时 CASEHUB_STORE=memory 服务运行。
 const {chromium}=require(process.env.PLAYWRIGHT_MODULE||'playwright');
 const assert=require('node:assert/strict');
@@ -24,7 +24,7 @@ const BASE=process.env.CASEHUB_TEST_URL||'http://127.0.0.1:18081';
   assert.match(await page.locator('#versions .archive-title').innerText(),/归档版本\s*1/);
   assert.equal(await page.locator(`#versions > .version[data-version="${vid}"]`).count(),0,'archived version left the main list');
   const archived=page.locator(`#versions .archive-body .version[data-version="${vid}"]`);
-  assert.match(await archived.locator('.badge').innerText(),/已归档/);
+  assert.match(await archived.locator('.badge').innerText(),/已完成/);
   assert.equal(await archived.locator('.case-check').count(),0,'archived version is read-only: no checkboxes');
   assert.equal(await archived.locator('[data-sync],[data-merge],[data-archive]').count(),0,'no pull/merge/archive on an archived version');
   assert.equal(await archived.locator('[data-unarchive]').count(),1);
