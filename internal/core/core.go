@@ -312,6 +312,8 @@ type State struct {
 	KnowledgeDocs      []KnowledgeDoc      `json:"knowledgeDocs"`
 	// KnowledgeItems is the legacy flat list; it is migrated on load and never written back.
 	KnowledgeItems []LegacyKnowledgeItem `json:"knowledgeItems,omitempty"`
+	// Hostings are the AI 托管 runs, at most one per requirement (see hosting.go).
+	Hostings []Hosting `json:"hostings"`
 }
 
 type Action struct {
@@ -356,6 +358,10 @@ type Action struct {
 	Scope     string
 	// recordProductExploration: the target origin the ExplorationNotes belong to.
 	Origin string
+	// AI 托管 (hosting.go): the run acted on, its new values, and a finished design run's result to file.
+	HostingID string
+	Hosting   *Hosting       `json:",omitempty"`
+	Planner   *PlannerResult `json:",omitempty"`
 }
 
 // CaseRevision is one case rewritten by "AI 修正需求". Scope is "pending" (review area) or
@@ -679,6 +685,8 @@ func (s *Service) Apply(ctx context.Context, a Action) (Result, error) {
 		err = deletePendingCase(&st, a)
 	case "reviewPendingCase":
 		err = reviewPendingCase(&st, a)
+	case "reviewPendingCases":
+		err = reviewPendingCases(&st, a)
 	case "moveFolder":
 		err = moveFolder(&st, a)
 	case "movePendingFolder":
@@ -726,7 +734,10 @@ func (s *Service) Apply(ctx context.Context, a Action) (Result, error) {
 	case "moveCases":
 		err = moveCases(&st, a)
 	default:
-		err = fmt.Errorf("unknown action %q", a.Type)
+		var ok bool
+		if ok, err = applyHosting(&st, a); !ok {
+			err = fmt.Errorf("unknown action %q", a.Type)
+		}
 	}
 	if err != nil {
 		return Result{State: st}, err
@@ -2611,6 +2622,35 @@ func reviewPendingCase(s *State, a Action) error {
 	c.Review = a.Review
 	c.ReviewedBy = a.Author
 	c.ReviewedAt = now()
+	return nil
+}
+
+// reviewPendingCases gives every case in CaseIDs the same verdict at once (AI
+// 托管 passes a whole design run in one step). Unlike the single-case action,
+// cases that already carry the verdict are left as they are rather than
+// rejected; it is all-or-nothing on missing cases.
+func reviewPendingCases(s *State, a Action) error {
+	if a.Review != "passed" && a.Review != "rejected" {
+		return errors.New("评审结果必须是通过或不通过")
+	}
+	if len(a.CaseIDs) == 0 {
+		return errors.New("没有要评审的用例")
+	}
+	var found []*PendingCase
+	for _, id := range a.CaseIDs {
+		c, _ := pendingCaseAt(s, id)
+		if c == nil {
+			return fmt.Errorf("用例不存在：%s", id)
+		}
+		found = append(found, c)
+	}
+	t := now()
+	for _, c := range found {
+		if c.Review == a.Review {
+			continue
+		}
+		c.Review, c.ReviewedBy, c.ReviewedAt = a.Review, a.Author, t
+	}
 	return nil
 }
 

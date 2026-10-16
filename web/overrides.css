@@ -277,3 +277,18 @@ button.avatar{padding:0;color:#fff;cursor:pointer;border:1px solid #ffffff40}
 .archive-tasks { margin:6px 0 4px; padding-left:8px; border-top:1px dashed var(--line); }
 .archive-tasks-title { padding:6px 4px 2px; }
 .version.archived { opacity:.85; }
+
+/* AI 托管：步骤进度 */
+.host-card h3 small{display:block;margin-top:4px;font-weight:400}
+.host-steps{list-style:none;margin:8px 0 0;padding:0;display:grid;gap:6px}
+.host-step{display:flex;align-items:center;gap:8px;color:var(--muted,#888)}
+.host-step .host-dot{width:18px;height:18px;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;font-size:11px;border:1px solid currentColor;flex:none}
+.host-step.done{color:inherit}
+.host-step.done .host-dot{background:#16a34a;border-color:#16a34a;color:#fff}
+.host-step.current{color:inherit;font-weight:600}
+.host-step.current .host-dot{color:#2563eb;animation:host-pulse 1.2s ease-in-out infinite}
+.host-step.failed{color:#dc2626}
+.host-step.failed .host-dot{background:#dc2626;border-color:#dc2626;color:#fff}
+.host-error{color:#dc2626}
+.host-target{display:grid;gap:8px}
+@keyframes host-pulse{50%{opacity:.35}}

@@ -20,7 +20,7 @@ const esc=s=>String(s??'').replace(/[&<>'"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&
 const fmt=s=>s?new Date(s).toLocaleString():'—';
 const version=id=>state.versions.find(v=>v.id===id), folders=id=>state.folders.filter(f=>f.VersionID===id), cases=id=>state.cases.filter(c=>c.VersionID===id);
 async function request(path,options){let r=await fetch(path,options),x;try{x=await r.json()}catch(err){if(r.ok)throw err;const e=Error(`服务返回了无法解析的响应（HTTP ${r.status}），可能被网关拦截或服务异常`);e.status=r.status;throw e}if(!r.ok){let e=Error(x.error||'请求失败');e.status=r.status;e.conflicts=x.conflicts;throw e}return x}
-function normalizeState(s){s=s||{};for(const key of ['versions','folders','cases','histories','records','tasks','reqFolders','reqDocs','issues','knowledgeFolders','knowledgeDocs','pendingFolders','pendingCases','scripts','scriptVersions','productExperiences'])if(!Array.isArray(s[key]))s[key]=[];return s}
+function normalizeState(s){s=s||{};for(const key of ['versions','folders','cases','histories','records','tasks','reqFolders','reqDocs','issues','knowledgeFolders','knowledgeDocs','pendingFolders','pendingCases','scripts','scriptVersions','productExperiences','hostings'])if(!Array.isArray(s[key]))s[key]=[];return s}
 async function refresh(){state=normalizeState(await request('/api/state'));let changed=false;state.folders.filter(f=>f.VersionID==='main').forEach(f=>{const key=`main:${f.ID}`;if(!openMainlineFolders.has(key)&&!closedFolders.has(key)){closedFolders.add(key);changed=true}});if(changed)saveClosedFolders();render();}
 async function act(type,data={},retry=false){try{let out=await request('/api/action',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({Type:type,Author:'本地用户',...data})});state=normalizeState(out.state);if(out.warnings?.length)toast(out.warnings.join('；'));render();return out}catch(e){if(e.status===409&&type.startsWith('merge')){alert(`${e.message}\n冲突用例：${(e.conflicts||[]).join(', ')}\n请拉取主线，然后打开冲突用例编辑并确认人工处理。`)}else if(e.status===409&&!retry&&confirm(`${e.message}\n冲突用例：${(e.conflicts||[]).join(', ')}\n是否以当前编辑内容作为人工解决结果？`))return act(type,{...data,Force:true},true);toast(e.message,true);throw e}}
 function render(){ renderVersions();renderTasks();renderFocus();if(recordTask)$('#edit-case')?.remove();updateBulk();if(location.hash)renderHistoryRoute();renderReqTree();renderReviewTree();renderScriptTree();renderAutoFocus();renderIssueList();renderIssueFocus();renderKnowledgeList();renderKnowledgeFocus(); }
@@ -527,7 +527,7 @@ document.onmousemove=e=>{if(resizing){lastX=e.clientX;document.documentElement.s
 document.onmouseup=()=>{if(resizing&&lastX<70&&resizeCollapse)$(resizeCollapse).click();else if(resizing&&lastX<220)document.documentElement.style.setProperty(resizeVar,'220px');resizing=false;$$('.resizer').forEach(r=>r.classList.remove('dragging'))};
 document.documentElement.classList.toggle('dark',localStorage.getItem('casehub-theme')==='dark');
 window.addEventListener('hashchange',renderHistoryRoute);
-refresh().then(restoreServerTasks).then(resumeGenTasks).catch(e=>toast(e.message,true));
+refresh().then(()=>{watchHostings();return restoreServerTasks()}).then(resumeGenTasks).catch(e=>toast(e.message,true));
 
 function resetRecordEditor(initialValue='') {
   if(recordEditor){recordEditor.setMarkdown(initialValue);return}
@@ -718,11 +718,12 @@ function renderReqFocus(){
   const outRefs=reqRefs(doc.Content).map(id=>state.reqDocs.find(x=>x.ID===id)).filter(Boolean);
   const inRefs=reqBacklinks(doc.ID);
   const relHTML=(outRefs.length||inRefs.length)?`<div class="card req-rel"><h4>关联需求</h4><div class="req-rel-list">${outRefs.map(r=>`<button type="button" class="req-rel-chip" data-req-doc="${esc(r.ID)}">→ ${esc(r.ID)} ${esc(r.Title)}</button>`).join('')}${inRefs.map(r=>`<button type="button" class="req-rel-chip" data-req-doc="${esc(r.ID)}">← ${esc(r.ID)} ${esc(r.Title)}</button>`).join('')}</div></div>`:'';
-  d.innerHTML=`<div class="detail-head"><div><div class="eyebrow">${esc(doc.ID)} · ${reqStatusBadge(doc)}</div><h1>${esc(doc.Title)}</h1></div><div class="detail-actions"><button type="button" id="req-link-btn" class="secondary">🔗 引用需求</button><button type="button" id="req-ai-revise" class="secondary${reqReviseInFlight.has(doc.ID)?' ai-running':''}"${reqReviseInFlight.has(doc.ID)?' disabled':''} title="按修改点改写需求，并同步修正关联的用例（与用例自身的「AI 修正」不同）">${reqReviseInFlight.has(doc.ID)?'AI 修正需求中…':'AI 修正需求'}</button><button type="button" id="req-ai-supplement" class="secondary${reqSupplementInFlight.has(doc.ID)?' ai-running':''}"${reqSupplementInFlight.has(doc.ID)?' disabled':''} title="按你的提示为这份需求补充用例，加入待评审区">${reqSupplementInFlight.has(doc.ID)?'AI 补充设计中…':'AI 补充设计'}</button><button type="button" id="req-ai-design" class="secondary${isAiActive(doc)?' ai-running':''}">${isAiActive(doc)?'AI 设计中':'AI 设计'}</button><button type="button" id="save-req-doc">保存</button></div></div><div class="card meta-grid"><span>需求缩写 <b id="req-doc-code">${esc(doc.Code||'未设置')}</b></span><span>创建者 <b>${esc(doc.CreatedBy)}</b></span><span>创建时间 <b>${fmt(doc.CreatedAt)}</b></span><span>更新者 <b>${esc(doc.UpdatedBy)}</b></span><span>更新时间 <b>${fmt(doc.UpdatedAt)}</b></span></div>${relHTML}<div class="card"><div id="req-editor"></div></div>`;
+  d.innerHTML=`<div class="detail-head"><div><div class="eyebrow">${esc(doc.ID)} · ${reqStatusBadge(doc)}</div><h1>${esc(doc.Title)}</h1></div><div class="detail-actions"><button type="button" id="req-link-btn" class="secondary">🔗 引用需求</button><button type="button" id="req-ai-revise" class="secondary${reqReviseInFlight.has(doc.ID)?' ai-running':''}"${reqReviseInFlight.has(doc.ID)?' disabled':''} title="按修改点改写需求，并同步修正关联的用例（与用例自身的「AI 修正」不同）">${reqReviseInFlight.has(doc.ID)?'AI 修正需求中…':'AI 修正需求'}</button><button type="button" id="req-ai-supplement" class="secondary${reqSupplementInFlight.has(doc.ID)?' ai-running':''}"${reqSupplementInFlight.has(doc.ID)?' disabled':''} title="按你的提示为这份需求补充用例，加入待评审区">${reqSupplementInFlight.has(doc.ID)?'AI 补充设计中…':'AI 补充设计'}</button><button type="button" id="req-ai-design" class="secondary${isAiActive(doc)?' ai-running':''}">${isAiActive(doc)?'AI 设计中':'AI 设计'}</button><button type="button" id="req-ai-host" class="secondary${isHosting(doc)?' ai-running':''}" title="评估、设计、评审、归档由服务端全自动完成，提交后关掉页面也会继续">${isHosting(doc)?'AI 托管中':'AI 托管'}</button><button type="button" id="save-req-doc">保存</button></div></div><div class="card meta-grid"><span>需求缩写 <b id="req-doc-code">${esc(doc.Code||'未设置')}</b></span><span>创建者 <b>${esc(doc.CreatedBy)}</b></span><span>创建时间 <b>${fmt(doc.CreatedAt)}</b></span><span>更新者 <b>${esc(doc.UpdatedBy)}</b></span><span>更新时间 <b>${fmt(doc.UpdatedAt)}</b></span></div>${relHTML}<div class="card"><div id="req-editor"></div></div>`;
   reqEditor?.destroy();
   reqEditor=new toastui.Editor({el:$('#req-editor'),height:'520px',initialEditType:'wysiwyg',previewStyle:'tab',initialValue:doc.Content||'',language:'zh-CN',theme:document.documentElement.classList.contains('dark')?'dark':'light',usageStatistics:false});
   $('#save-req-doc').onclick=()=>saveReqDoc(doc).catch(()=>{});
   $('#req-ai-design').onclick=()=>openAiDrawer(doc);
+  $('#req-ai-host').onclick=()=>openAiDrawer(doc,'host');
   $('#req-ai-revise').onclick=()=>openReqAiRevise(doc);
   $('#req-ai-supplement').onclick=()=>openReqAiSupplement(doc);
   $('#req-link-btn').onclick=e=>openReqLinkPicker(e,doc);
@@ -781,6 +782,8 @@ function syncAiButton(){
   if(!doc)return;
   btn.textContent=isAiActive(doc)?'AI 设计中':'AI 设计';
   btn.classList.toggle('ai-running',isAiActive(doc));
+  const host=$('#req-ai-host');
+  if(host){host.textContent=isHosting(doc)?'AI 托管中':'AI 托管';host.classList.toggle('ai-running',isHosting(doc))}
 }
 function closeAiStream(jobId){aiSources.get(jobId)?.close();aiSources.delete(jobId)}
 // 两个 auto-test 服务（planner / generator）共用：它们的错误体格式相同，CaseHub 的代理在
@@ -813,13 +816,15 @@ async function serviceRequest(path,options){
   return x;
 }
 function isAiDrawerOpen(doc){return aiDoc?.ID===doc.ID&&!$('#ai-drawer').classList.contains('hidden')}
-function openAiDrawer(doc){
-  aiDoc=doc;
+let aiDrawerMode='design'; // 'design'：AI 设计；'host'：AI 托管
+function openAiDrawer(doc,mode='design'){
+  aiDoc=doc;aiDrawerMode=mode;closeHostLog();
+  $('#ai-drawer .panel-head strong').textContent=mode==='host'?'AI 托管':'AI 设计';
   $('#ai-drawer-doc').textContent=`${doc.ID} · ${doc.Title}`;
   $('#ai-drawer').classList.remove('hidden');
   renderAiDrawer(doc);
 }
-$('#ai-drawer-close').onclick=()=>$('#ai-drawer').classList.add('hidden');
+$('#ai-drawer-close').onclick=()=>{$('#ai-drawer').classList.add('hidden');closeHostLog()};
 
 async function renderAiDrawer(doc){
   const body=$('#ai-drawer-body');
@@ -838,7 +843,9 @@ async function checkAiJob(doc){
   const jobId=aiJobOf(doc);
   if(!jobId){
     clearAiActive(doc);
-    if(isAiDrawerOpen(doc)){const summary=loadAiResult(doc);summary?renderAiResult(doc,summary):renderAiForm(doc)}
+    if(!isAiDrawerOpen(doc))return;
+    if(aiDrawerMode==='host'||isHosting(doc))return hostingOf(doc)?renderHostView(doc):renderHostForm(doc);
+    const summary=loadAiResult(doc);summary?renderAiResult(doc,summary):renderAiForm(doc);
     return;
   }
   try{
@@ -1372,6 +1379,152 @@ async function importAiResult(doc,result){
     }
     await act('createPendingCase',{FolderID:folderID,Title:c.name,Priority:c.priority,Preconditions:c.precondition,Steps:c.steps,Expected:c.expects});
   }
+}
+
+// ---- AI 托管：由 CaseHub 服务端执行（internal/hosting），提交后不依赖网页 ----
+// 评估 → 直接采用评估结果 → 用例设计 → 放入用例评审（以需求命名的目录）→ 以「AI 托管」名义全部评审通过 →
+// 归档到测试版本的 全部用例 / <产品> / <产品版本> / <需求>，缺的上级目录自动创建。
+// 页面只负责发起、显示进度（state.hostings，托管进行中时轮询 /api/hostings）、以及停下后的重试/放弃。
+const AI_HOST_STEPS=[['estimating','评估用例数量'],['designing','用例设计'],['importing','放入用例评审'],['reviewing','自动评审通过'],['archiving','归档到用例树']];
+const hostingOf=doc=>state.hostings.find(h=>h.DocID===doc.ID)||null;
+const hostActive=h=>Boolean(h)&&!['done','stopped'].includes(h.Stage);
+const isHosting=doc=>hostActive(hostingOf(doc));
+let hostingEnabled=null;
+// 需求在需求树里的目录（从上到下）。需求树按 产品 / 产品版本 / 需求 组织时，正好用来预填托管的归档位置。
+function reqFolderPathNames(doc){
+  const names=[];
+  for(let id=doc.FolderID,guard=0;id&&guard<200;guard++){const f=reqFolder(id);if(!f)break;names.unshift(f.Name);id=f.ParentID}
+  return names;
+}
+const hostArchivePath=h=>['全部用例',h.Product,h.ProductVersion,h.ReqFolder||'<需求>'];
+function hostStepsHTML(h){
+  const stage=h.Stage==='stopped'?h.FailedAt:h.Stage,at=AI_HOST_STEPS.findIndex(([k])=>k===stage);
+  const items=AI_HOST_STEPS.map(([k,label],i)=>{
+    const st=h.Stage==='done'||i<at?'done':i===at?(h.Stage==='stopped'?'failed':'current'):'todo';
+    const extra=k==='estimating'&&st==='done'&&h.CaseCount?`：${h.CaseCount} 条，缩写 ${esc(h.Code||'')}`:k==='importing'&&st==='done'&&h.CaseIDs?.length?`：${h.CaseIDs.length} 条`:'';
+    return `<li class="host-step ${st}"><span class="host-dot">${st==='done'?'✓':st==='failed'?'!':st==='current'?'●':'○'}</span>${esc(label)}${extra}</li>`;
+  }).join('');
+  const v=version(h.VersionID);
+  return `<div class="card host-card"><h3>AI 托管 <small class="meta">归档到「${esc(v?.name||'已删除的版本')}」：${esc(hostArchivePath(h).join(' / '))}</small></h3><ol class="host-steps">${items}</ol>${h.Note?`<p class="meta">${esc(h.Note)}</p>`:''}${h.Stage==='stopped'?`<p class="meta host-error">托管已停止：${esc(h.Error||'')}</p>`:''}</div>`;
+}
+// 设计阶段在托管视图里接上 planner 任务的进度流（和手动设计同一个接口）。
+let hostLog=null;
+function closeHostLog(){hostLog?.source.close();hostLog=null}
+function openHostLog(taskID){
+  if(hostLog?.taskID===taskID)return;
+  closeHostLog();
+  const source=new EventSource(`/api/planner/jobs/${taskID}/events`);
+  hostLog={taskID,source};
+  source.addEventListener('progress',e=>{const ev=JSON.parse(e.data);aiLogLine(`[${fmt(ev.createdAt)}] ${ev.stage||''} ${ev.message||''}${ev.tool?` (${ev.tool} ${ev.toolStatus||''})`:''}`.trim())});
+}
+const hostSig=h=>JSON.stringify(h||null);
+let hostShown=null; // 抽屉里正在显示的托管记录：没变就不重绘，以免清掉进度日志
+function renderHostView(doc){
+  if(!isAiDrawerOpen(doc))return;
+  const h=hostingOf(doc);
+  if(!h){closeHostLog();hostShown=null;return renderHostForm(doc)}
+  hostShown=hostSig(h);
+  const done=h.Stage==='done',stopped=h.Stage==='stopped';
+  const late=stopped&&['importing','reviewing','archiving'].includes(h.FailedAt);
+  const actions=done?'<button type="button" class="secondary" id="host-again">重新托管</button><button type="button" id="host-goto">查看用例</button>'
+    :stopped?`<button type="button" class="secondary" id="host-abandon">放弃托管</button><button type="button" id="host-resume">${late?'重试这一步':h.Continuable?'继续或重新设计…':'重新填写并托管'}</button>`
+    :'<button type="button" class="secondary" id="host-abandon">取消托管</button>';
+  const status=h.Stage==='estimating'?'正在评估用例数量，完成后自动采用评估结果并开始设计…'
+    :h.Stage==='designing'?'正在设计用例，完成后自动放入用例评审、评审通过并归档。'
+    :h.Stage==='reviewing'||h.Stage==='archiving'?`设计已完成，正在${AI_HOST_STEPS.find(([k])=>k===h.Stage)[1]}…`
+    :done?`已完成：${h.CaseIDs?.length||0} 条用例已评审通过并归档。`:'';
+  const findings=done?`${h.Issues?.length?`<div class="card"><h3>探索中发现的问题 <small class="meta">已记录到问题单管理</small></h3>${aiRiskListHTML(h.Issues,i=>`<b>${esc(i.scenario)}</b>：${esc(i.symptom)}`)}</div>`:''}${h.Limitations?.length?`<div class="card"><h3>未验证/受限范围</h3>${aiRiskListHTML(h.Limitations,l=>esc(l.summary))}</div>`:''}`:'';
+  const designing=h.Stage==='designing'&&h.PlannerTaskID;
+  $('#ai-drawer-body').innerHTML=`${hostStepsHTML(h)}${status?`<p class="meta">${esc(status)}</p>`:''}${hostActive(h)?'<p class="meta">托管在 CaseHub 服务端执行，可以关闭抽屉或页面。</p>':''}${designing?'<div id="ai-log" class="ai-log"></div>':''}${findings}<p class="drawer-actions">${actions}</p>`;
+  closeHostLog();if(designing)openHostLog(h.PlannerTaskID); // 重绘清掉了日志：重新订阅，事件从头重放
+  if(done){
+    $('#host-again').onclick=()=>renderHostForm(doc);
+    $('#host-goto').onclick=()=>{const id=h.CaseIDs?.[0];setPage('cases');if(id&&state.cases.some(c=>c.VersionID===h.VersionID&&c.ID===id))setFocus({type:'case',versionID:h.VersionID,id})};
+  }
+  $('#host-abandon')&&($('#host-abandon').onclick=async()=>{
+    if(!confirm(stopped?'放弃托管？已放入用例评审的用例会留在评审区，可以手动评审和导入。':'取消托管？正在进行的设计任务会被取消，已放入用例评审的用例会留在评审区。'))return;
+    try{await serviceRequest(`/api/hostings/${h.ID}`,{method:'DELETE'})}catch(e){return toast(e.message,true)}
+    await refresh();if(isAiDrawerOpen(doc))renderHostForm(doc);
+  });
+  if(stopped)$('#host-resume').onclick=async()=>{
+    if(!late)return renderHostForm(doc,{retry:h});
+    try{hostingUpdated(await serviceRequest(`/api/hostings/${h.ID}/retry`,{method:'POST'}))}catch(e){toast(e.message,true)}
+  };
+}
+function hostingUpdated(h){
+  const i=state.hostings.findIndex(x=>x.DocID===h.DocID);
+  i<0?state.hostings.push(h):state.hostings.splice(i,1,h);
+  syncAiButton();
+  const doc=state.reqDocs.find(d=>d.ID===h.DocID);
+  if(doc&&isAiDrawerOpen(doc))renderHostView(doc);
+  watchHostings();
+}
+// 托管进行中时每 3 秒读一次 /api/hostings；阶段变化后整体刷新一次（评审区、用例树、问题单随之更新）。
+let hostTimer=null;
+function watchHostings(){
+  if(hostTimer||!state.hostings.some(hostActive))return;
+  hostTimer=setInterval(async()=>{
+    let list;
+    try{list=(await serviceRequest('/api/hostings')).hostings||[]}catch{return}
+    const before=new Map(state.hostings.map(h=>[h.ID,h.Stage]));
+    const moved=list.some(h=>before.get(h.ID)!==h.Stage);
+    state.hostings=list;
+    if(moved)await refresh().catch(()=>{});
+    syncAiButton();
+    if(aiDoc&&!$('#ai-drawer').classList.contains('hidden')){const h=hostingOf(aiDoc);if(h&&hostSig(h)!==hostShown&&(aiDrawerMode==='host'||hostActive(h)||moved))renderHostView(aiDoc)}
+    if(!list.some(hostActive)){clearInterval(hostTimer);hostTimer=null}
+  },3000);
+}
+// retry：停在评估/设计的托管重新提交（测试账号不保存在服务端，所以要重新填写）。归档位置沿用原托管的。
+async function renderHostForm(doc,{retry}={}){
+  if(hostingEnabled===null){try{hostingEnabled=(await serviceRequest('/api/hostings')).enabled}catch{hostingEnabled=false}}
+  if(!isAiDrawerOpen(doc))return;
+  closeHostLog();hostShown=null;
+  if(!hostingEnabled){$('#ai-drawer-body').innerHTML='<p class="meta">AI 托管需要 CaseHub 配置 AI 设计服务（planner），当前未配置。</p>';return}
+  const prev=retry||hostingOf(doc),est=aiFormState(doc),v={...agentDefaults(aiDesignAgents.find(a=>a.id==='playwright')),...(est?.values||{})};
+  const branches=state.versions.filter(x=>!x.mainline&&!x.archived);
+  let last={};try{last=JSON.parse(localStorage.getItem('casehub-ai-host-last'))||{}}catch{}
+  const path=reqFolderPathNames(liveReqDoc(doc));
+  const product=prev?.Product??(path.length>=2?path[path.length-2]:last.product||'');
+  const productVersion=prev?.ProductVersion??(path.length>=1?path[path.length-1]:last.productVersion||'');
+  const versionID=[prev?.VersionID,last.versionID].find(id=>branches.some(b=>b.id===id))||branches[0]?.id;
+  if(!retry&&!branches.length){$('#ai-drawer-body').innerHTML='<p class="meta">AI 托管会把评审通过的用例归档到一个测试版本的用例树里，请先在「用例管理」创建一个测试版本（已完成的版本不能作为目标）。</p>';return}
+  const target=retry?`<div class="card"><p class="meta">归档位置沿用这次托管的：「${esc(version(retry.VersionID)?.name||'')}」${esc(hostArchivePath(retry).join(' / '))}</p></div>`
+    :`<fieldset class="host-target"><legend>归档位置</legend><label>测试版本<select name="versionID">${branches.map(b=>`<option value="${esc(b.id)}"${b.id===versionID?' selected':''}>${esc(b.name)}</option>`).join('')}</select></label><label>产品<input name="product" required placeholder="以产品命名的目录" value="${esc(product)}"></label><label>产品版本<input name="productVersion" required placeholder="以版本命名的目录" value="${esc(productVersion)}"></label><p class="meta" id="host-path"></p></fieldset>`;
+  const buttons=retry?.Continuable?'<button type="submit" class="secondary" value="redo">重新设计</button><button type="submit" value="continue">继续上次的设计</button>':`<button type="submit" value="start">${retry?'重新托管':'开始托管'}</button>`;
+  $('#ai-drawer-body').innerHTML=`${retry?hostStepsHTML(retry):`<div class="card"><h3>AI 托管</h3><p class="meta">托管后不再逐步确认：AI 评估的用例数量和需求缩写直接采用，设计完成的用例放入用例评审后自动评审通过，并归档到下面的位置（上级目录不存在会自动创建）。托管由 CaseHub 服务端执行，提交后可以关闭页面。</p></div>`}<form id="host-form" autocomplete="off"><label>被测系统 URL<input name="baseUrl" required placeholder="https://test.example.com/login" autocomplete="off" value="${esc(v.baseUrl||'')}"></label><label>补充说明（可选）<textarea name="instructions" placeholder="覆盖范围、登录方式或探索约束">${esc(v.instructions||'')}</textarea></label><label>测试账号 · 用户名（可选）<input name="testAccount" autocomplete="off" value="${esc(v.testAccount||'')}"></label><label>测试账号 · 密码（可选）<input name="testSecret" type="text" class="fake-password" autocomplete="off" spellcheck="false" value="${esc(v.testSecret||'')}"></label><fieldset class="ai-assets"><legend>随任务带上的资产（可选）</legend>${assetsCache.length?assetsCache.map(a=>`<label class="ai-asset"><input type="checkbox" name="assetIds" value="${esc(a.id)}"${(v.assetIds||[]).includes(a.id)?' checked':''}> ${esc(assetTypeLabel(a.type))} · ${esc(a.name)} <small>${assetSize(a.size)}</small></label>`).join(''):'<small class="meta">还没有资产，可在头像菜单的「资产」里上传。</small>'}</fieldset><label>任务超时时间（分钟）<input name="timeoutMinutes" type="number" min="${AI_MIN_TIMEOUT_MIN}" max="${AI_MAX_TIMEOUT_MIN}" step="1" required value="${esc(v.timeoutMinutes??aiTimeoutMinutes())}"></label>${target}<p class="drawer-actions">${retry?'<button type="button" class="secondary" id="host-back">返回</button>':''}${buttons}</p></form>`;
+  const form=$('#host-form');
+  if(retry)$('#host-back').onclick=()=>renderHostView(doc);
+  const preview=()=>{const el=$('#host-path');if(!el)return;const x=Object.fromEntries(new FormData(form));el.textContent=`用例将归档到：${['全部用例',x.product.trim()||'<产品>',x.productVersion.trim()||'<产品版本>',liveReqDoc(doc).Title].join(' / ')}`};
+  form.oninput=preview;preview();
+  form.onsubmit=async e=>{
+    e.preventDefault();
+    const mode=e.submitter?.value||'start',data=new FormData(form);
+    const values={agentId:'playwright',baseUrl:String(data.get('baseUrl')).trim(),instructions:String(data.get('instructions')||''),testAccount:String(data.get('testAccount')||''),testSecret:String(data.get('testSecret')||''),assetIds:data.getAll('assetIds'),timeoutMinutes:String(data.get('timeoutMinutes'))};
+    const timeoutMinutes=Number(values.timeoutMinutes);
+    if(!Number.isInteger(timeoutMinutes)||timeoutMinutes<AI_MIN_TIMEOUT_MIN||timeoutMinutes>AI_MAX_TIMEOUT_MIN)return toast(`任务超时时间需为 ${AI_MIN_TIMEOUT_MIN}–${AI_MAX_TIMEOUT_MIN} 分钟的整数`,true);
+    try{localStorage.setItem(AI_TIMEOUT_KEY,String(timeoutMinutes))}catch{}
+    // 评估和设计请求的组成和手动设计完全一样（引用需求的上下文、探索记录、产品经验、资产、测试账号），由服务端补上评估出的数量和缩写。
+    const {requirements,instructions,explorationNotes}=aiRequirementPayload(doc,values),productExperience=productExperienceFor(values.baseUrl);
+    const estimate={requirements,context:{instructions}};
+    const job={requirements,target:{baseUrl:values.baseUrl},context:{instructions,...(explorationNotes?{explorationNotes}:{}),...(productExperience?{productExperience}:{}),...(values.assetIds.length?{assetIds:values.assetIds}:{})},timeoutMs:timeoutMinutes*60000};
+    if(values.testAccount||values.testSecret)job.context.testData={username:values.testAccount,password:values.testSecret};
+    aiEstimates.set(doc.ID,{status:'draft',values}); // 手动设计/下次托管沿用填过的表单（密码只留在内存）
+    saveAiForm(doc,values,est?.count||AI_DEFAULT_CASE_COUNT,liveReqDoc(doc).Code||'');
+    const btns=form.querySelectorAll('button[type="submit"]');btns.forEach(b=>b.disabled=true);
+    try{
+      let h;
+      if(retry)h=await serviceRequest(`/api/hostings/${retry.ID}/retry`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({estimate,job,continue:mode==='continue'})});
+      else{
+        const cfg={versionID:String(data.get('versionID')),product:String(data.get('product')).trim(),productVersion:String(data.get('productVersion')).trim()};
+        if(!cfg.product||!cfg.productVersion){btns.forEach(b=>b.disabled=false);return toast('请填写产品和产品版本',true)}
+        try{localStorage.setItem('casehub-ai-host-last',JSON.stringify(cfg))}catch{}
+        h=await serviceRequest('/api/hostings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({DocID:doc.ID,VersionID:cfg.versionID,Product:cfg.product,ProductVersion:cfg.productVersion,Author:'本地用户',estimate,job})});
+      }
+      toast('已开始托管，可以关闭页面，CaseHub 会自动完成');
+      hostingUpdated(h);
+    }catch(err){btns.forEach(b=>b.disabled=false);toast(err.message,true)}
+  };
 }
 
 // ---- Pending case review (用例评审) ----

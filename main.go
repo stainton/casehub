@@ -14,6 +14,7 @@ import (
 
 	"casehub/internal/core"
 	"casehub/internal/dispatch"
+	"casehub/internal/hosting"
 	"casehub/internal/store"
 	"casehub/internal/tasks"
 	"casehub/internal/upstream"
@@ -26,6 +27,8 @@ type api struct {
 	service *core.Service
 	// dispatcher owns the planner/generator/healer/executor tasks; nil in tests that only exercise the state API.
 	dispatcher *dispatch.Dispatcher
+	// hosting runs AI 托管; nil when the planner is not configured.
+	hosting *hosting.Runner
 }
 
 func jsonOut(w http.ResponseWriter, status int, v any) {
@@ -83,6 +86,7 @@ func routes(a *api, services ...service) http.Handler {
 	m.HandleFunc("DELETE /api/assets/{id}", a.assetByID)
 	m.HandleFunc("GET /api/record-images/{id}", a.recordImageByID)
 	m.HandleFunc("POST /api/action", a.action)
+	a.hostingRoutes(m)
 	for _, s := range services {
 		enabled := s.enabled
 		m.HandleFunc("GET /api/"+s.name+"/status", func(w http.ResponseWriter, r *http.Request) {
@@ -201,8 +205,15 @@ func main() {
 	if err := dispatcher.Start(context.Background()); err != nil {
 		log.Fatal(err)
 	}
+	var hostingRunner *hosting.Runner
+	if plannerEnabled && dispatcher.Enabled("planner") {
+		hostingRunner = hosting.New(svc, plannerForHosting{proxy: plannerProxy, dispatcher: dispatcher})
+		if err := hostingRunner.Start(context.Background()); err != nil {
+			log.Fatal(err)
+		}
+	}
 	log.Printf("CaseHub listening on :%s (store=%s, planner=%v, generator=%v, healer=%v, executor=%v, general-agent=%v; nodes: %s)", port, kind, plannerEnabled, generatorEnabled, healerEnabled, executorEnabled, generalAgentEnabled, dispatcher)
-	log.Fatal(http.ListenAndServe(":"+port, routes(&api{service: svc, dispatcher: dispatcher},
+	log.Fatal(http.ListenAndServe(":"+port, routes(&api{service: svc, dispatcher: dispatcher, hosting: hostingRunner},
 		service{name: "planner", proxy: plannerProxy, enabled: plannerEnabled},
 		service{name: "generator", proxy: generatorProxy, enabled: generatorEnabled},
 		service{name: "healer", proxy: healerProxy, enabled: healerEnabled},

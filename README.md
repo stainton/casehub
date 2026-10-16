@@ -118,6 +118,10 @@ planner、generator、healer、executor 的任务（`/api/<服务>/jobs`）由 C
 
 「AI 设计」抽屉先选择 agent，再显示对应参数。目前可选 aigc用例设计，选择后填写被测系统 URL、补充说明和测试账号等参数；重试与继续会恢复原 agent，旧版任务按 aigc用例设计 处理。
 
+「AI 设计」旁边的「AI 托管」走同一条流程，但不再逐步人工确认，并且**由 CaseHub 服务端执行**（`internal/hosting`）：提交后关掉页面、换浏览器，甚至 CaseHub 重启，托管都会继续。填写被测系统、账号、资产、超时和**归档位置**（目标测试版本、产品、产品版本，默认取需求在需求树里的上两级目录）后，服务端调 planner 评估并直接采用评估出的用例数量和需求缩写，提交设计任务；任务完成后把用例放入「用例评审」里以需求命名的目录（同时保存探索记录、产品经验，并把发现的问题记入问题单管理），以「AI 托管」的名义全部评审通过，再导入目标测试版本的 `全部用例 / <产品> / <产品版本> / <需求>`，缺的上级目录自动创建、已有的按名称复用。每一步是一次原子操作，进度记在状态里的 `hostings`（每份需求一条），页面只负责发起和显示进度（托管进行中时轮询 `GET /api/hostings`）。
+
+某一步失败时托管停下：导入、评审、归档失败（如目标位置已有同名用例）可「重试这一步」（`POST /api/hostings/{id}/retry`，不会重新设计、不会重复导入）；设计任务失败可重新填写后「继续上次的设计」或「重新设计」——测试账号只随请求留在内存里，从不保存，所以评估或设计阶段停下（包括 CaseHub 在这两个阶段重启）需要重新填写。「取消托管/放弃托管」（`DELETE /api/hostings/{id}`）会取消正在跑的设计任务，已放入评审区的用例留给人工处理。托管的设计任务 subject 是 `hosting:<需求 ID>`，不会出现在手动「AI 设计」的确认流程里。
+
 点击右上角头像弹出菜单，里面有「设置」和「资产」。「设置」打开 agent 设置弹窗：左侧选择 agent（aigc用例设计 / 脚本生成 / 通用 AI，各自一份配置），右侧分为两部分，分别保存：
 
 - **业务默认参数**：默认被测系统 URL、补充说明、用户名、密码和任务时长，新任务选择该 agent 后自动带入，已有任务保留原参数。默认密码可预填、修改和清空。保存业务默认参数不会改变配置版本号，agent 不会因此改写自己的 setting.json。
@@ -173,6 +177,8 @@ planner 不会绕开约束去试；同一段文字也会参与"建议覆盖用�
 Kubernetes 部署中，planner、generator（同时提供 healer）、executor 各是一组无状态 Pod，CaseHub 通过 headless Service `planner-nodes:4501`、`generator-nodes:4502`、`executor-nodes:4504` 找到每个就绪 Pod 并把任务交给空闲的那个；副本数可以固定，也可以引入 auto-test 的 autoscaling 组件按排队数自动扩缩；先在 auto-test 中执行 `kubectl apply -k deploy/kubernetes`（同时部署 general-agent），再部署 CaseHub。
 
 「AI 设计」抽屉的浏览器回归（评估、失败后保留表单、重试与继续）：`node tests/ai-design.cjs`，脚本自带一个假的 planner 服务（默认 127.0.0.1:4598，`CASEHUB_FAKE_PLANNER_PORT` 可改），不需要 auto-test 在场，也不调用模型；启动临时服务时把 `CASEHUB_PLANNER_URL` 指向它：`CASEHUB_STORE=memory PORT=18081 CASEHUB_PLANNER_URL=http://127.0.0.1:4598 go run .`。
+
+「AI 托管」的浏览器回归（提交后关掉浏览器，服务端仍完成 评估 → 设计 → 自动评审 → 归档到 产品/版本/需求；停下后在页面上重试）：`node tests/ai-host.cjs`，同样自带假的 planner 服务，启动方式同上；服务端流程（含 CaseHub 重启后续跑、继续失败的设计、放弃）另有 `go test ./internal/hosting/`。
 
 「AI 修正需求」浏览器回归（详情页按钮 / 右键菜单、变更确认、需求与关联用例一起保存、用例打标与确认）：`node tests/req-ai-revise.cjs`，通用 AI 服务由脚本拦截成固定结果，不调用模型；只对 `CASEHUB_STORE=memory PORT=18081 go run .` 启动的临时服务运行。
 

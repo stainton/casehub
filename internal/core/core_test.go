@@ -1948,3 +1948,45 @@ func TestArchivedVersionIsReadOnlyUntilUnarchived(t *testing.T) {
 		}
 	}
 }
+
+func TestReviewPendingCasesPassesABatch(t *testing.T) {
+	svc := core.NewService(store.NewMemory())
+	state := apply(t, svc, core.Action{Type: "createPendingFolder", ParentID: "pending-root", Name: "登录"})
+	var folderID string
+	for _, f := range state.PendingFolders {
+		if f.Name == "登录" {
+			folderID = f.ID
+		}
+	}
+	for _, title := range []string{"a", "b", "c"} {
+		state = apply(t, svc, core.Action{Type: "createPendingCase", FolderID: folderID, Title: title})
+	}
+	ids := map[string]string{}
+	for _, c := range state.PendingCases {
+		ids[c.Title] = c.ID
+	}
+	apply(t, svc, core.Action{Type: "reviewPendingCase", CaseID: ids["a"], Review: "passed"})
+	// An already-passed case in the batch is not an error.
+	state = apply(t, svc, core.Action{Type: "reviewPendingCases", CaseIDs: []string{ids["a"], ids["b"]}, Review: "passed", Author: "AI 托管"})
+	for _, c := range state.PendingCases {
+		want := map[string]string{"a": "passed", "b": "passed", "c": ""}[c.Title]
+		if c.Review != want {
+			t.Fatalf("%s review = %q, want %q", c.Title, c.Review, want)
+		}
+		if c.Title == "b" && c.ReviewedBy != "AI 托管" {
+			t.Fatalf("reviewer not recorded: %+v", c)
+		}
+	}
+	if _, err := svc.Apply(context.Background(), core.Action{Type: "reviewPendingCases", CaseIDs: []string{ids["c"], "nope"}, Review: "passed"}); err == nil {
+		t.Fatal("a missing case must reject the whole batch")
+	}
+	after, err := svc.State(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range after.PendingCases {
+		if c.Title == "c" && c.Review != "" {
+			t.Fatal("a rejected batch must not review any case")
+		}
+	}
+}
