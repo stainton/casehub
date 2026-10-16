@@ -265,6 +265,9 @@ button.avatar{padding:0;color:#fff;cursor:pointer;border:1px solid #ffffff40}
 
 .sync-list { max-height:55vh; overflow:auto; }
 .sync-node > .sync-children { margin-left:18px; border-left:1px solid var(--line); padding-left:8px; }
+.sync-folder > label { display:flex; align-items:baseline; gap:6px; cursor:pointer; }
+.sync-toggle { width:20px; height:20px; padding:0; background:transparent; color:var(--muted); border:0; line-height:1; }
+.sync-node.closed > .sync-children { display:none; }
 .sync-folder, .sync-row { display:flex; align-items:baseline; gap:6px; margin:4px 0; color:var(--text); font-size:13px; cursor:pointer; }
 .sync-folder input, .sync-row input { width:auto; margin:0; display:inline-block; }
 .sync-tag { font-size:11px; padding:0 6px; border-radius:10px; background:var(--brand-soft); color:var(--brand); }

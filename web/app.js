@@ -371,13 +371,13 @@ function syncModal(versionID){
   const label={update:'有更新',new:'新增',conflict:'冲突'},mainFolders=folders('main');
   const hasRows=fid=>[...rows.values()].some(r=>r.mc.FolderID===fid)||mainFolders.some(f=>f.ParentID===fid&&hasRows(f.ID));
   const caseRow=r=>`<label class="sync-row"><input type="checkbox" name="pull" value="${esc(r.mc.ID)}"${r.status==='update'?' checked':''}${r.status==='conflict'?' disabled':''}><span class="sync-tag sync-${r.status}">${label[r.status]}</span><b>${esc(r.mc.ID)}</b> ${esc(r.mc.Title||'')}${r.status==='conflict'?' <small class="meta">两边都改过，请在用例里手工处理</small>':''}</label>`;
-  const node=f=>`<div class="sync-node"><label class="sync-folder"><input type="checkbox" class="sync-folder-check"> 📁 <b>${esc(f.Name)}</b></label><div class="sync-children">`
+  const node=f=>`<div class="sync-node"><div class="sync-folder"><button type="button" class="sync-toggle" aria-label="折叠或展开" aria-expanded="true">▾</button><label><input type="checkbox" class="sync-folder-check"> 📁 <b>${esc(f.Name)}</b></label><small class="meta sync-count"></small></div><div class="sync-children">`
     +mainFolders.filter(x=>x.ParentID===f.ID&&hasRows(x.ID)).map(node).join('')
     +[...rows.values()].filter(r=>r.mc.FolderID===f.ID).map(caseRow).join('')+`</div></div>`;
   const roots=mainFolders.filter(f=>!f.ParentID||!mainFolders.some(x=>x.ID===f.ParentID));
   // 目录已不存在（异常数据）的用例不应丢，单独列在最后。
   const known=new Set(mainFolders.map(f=>f.ID)),orphans=[...rows.values()].filter(r=>!known.has(r.mc.FolderID));
-  showModal(`拉取主线 · ${version(versionID).name}`,`<p class="meta">按主线的用例树勾选要拉取的用例，勾选文件夹即选中其下全部可拉取的用例；未勾选的不会改动。已有用例拉取后更新为主线内容（保留它在本版本里所在的目录），新增用例按主线的目录结构放入。</p><p class="sync-tools"><button type="button" class="secondary" id="sync-all">全选</button> <button type="button" class="secondary" id="sync-none">全不选</button></p><div class="sync-list">${roots.filter(f=>hasRows(f.ID)).map(node).join('')}${orphans.map(caseRow).join('')}</div>`,async()=>{
+  showModal(`拉取主线 · ${version(versionID).name}`,`<p class="meta">按主线的用例树勾选要拉取的用例，勾选文件夹即选中其下全部可拉取的用例；未勾选的不会改动。已有用例拉取后更新为主线内容（保留它在本版本里所在的目录），新增用例按主线的目录结构放入。</p><p class="sync-tools"><button type="button" class="secondary" id="sync-all">全选</button> <button type="button" class="secondary" id="sync-none">全不选</button> <button type="button" class="secondary" id="sync-expand">全部展开</button> <button type="button" class="secondary" id="sync-collapse">全部折叠</button></p><div class="sync-list">${roots.filter(f=>hasRows(f.ID)).map(node).join('')}${orphans.map(caseRow).join('')}</div>`,async()=>{
     const ids=[...$('#modal-body').querySelectorAll('input[name="pull"]:checked')].map(x=>x.value);
     if(!ids.length){toast('请至少勾选一条用例',true);throw Error('empty')}
     await act('sync',{VersionID:versionID,CaseIDs:ids});
@@ -385,9 +385,15 @@ function syncModal(versionID){
   const body=$('#modal-body'),boxes=root=>[...root.querySelectorAll('input[name="pull"]:not(:disabled)')];
   // 文件夹的勾选状态由其下可选用例推出：全选/部分(indeterminate)/全不选。
   const refresh=()=>body.querySelectorAll('.sync-node').forEach(n=>{
-    const own=n.querySelector(':scope > .sync-folder > input'),list=boxes(n.querySelector(':scope > .sync-children')),on=list.filter(x=>x.checked).length;
+    const own=n.querySelector(':scope > .sync-folder .sync-folder-check'),list=boxes(n.querySelector(':scope > .sync-children')),on=list.filter(x=>x.checked).length;
+    n.querySelector(':scope > .sync-folder .sync-count').textContent=`已选 ${on}/${list.length}`;
     own.disabled=!list.length;own.checked=!!list.length&&on===list.length;own.indeterminate=on>0&&on<list.length;
   });
+  // 折叠只收起显示，不影响勾选：收起的文件夹仍按其下全部可选用例统计（右侧的「已选 x/y」）。
+  const fold=(node,closed)=>{node.classList.toggle('closed',closed);const t=node.querySelector(':scope > .sync-folder .sync-toggle');t.textContent=closed?'▸':'▾';t.setAttribute('aria-expanded',String(!closed))};
+  body.addEventListener('click',e=>{const t=e.target.closest('.sync-toggle');if(t){const n=t.closest('.sync-node');fold(n,!n.classList.contains('closed'))}});
+  $('#sync-expand').onclick=()=>body.querySelectorAll('.sync-node').forEach(n=>fold(n,false));
+  $('#sync-collapse').onclick=()=>body.querySelectorAll('.sync-node').forEach(n=>fold(n,true));
   body.addEventListener('change',e=>{
     if(e.target.classList.contains('sync-folder-check'))boxes(e.target.closest('.sync-node').querySelector(':scope > .sync-children')).forEach(x=>x.checked=e.target.checked);
     refresh();

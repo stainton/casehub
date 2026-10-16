@@ -12,6 +12,13 @@ await p.locator('#modal[open] .sync-row').first().waitFor();
 assert.equal(await p.locator('.sync-row').count(),2);
 // 按主线用例树展示：全部用例 / 登录与认证；勾选文件夹批量选取其下用例，部分选中时为半选。
 assert.equal(await p.locator('.sync-folder').count(),2);
+// 折叠：收起后其下用例不可见，但勾选统计不变；全部展开恢复。
+await p.locator('.sync-toggle').nth(1).click();
+assert.equal(await p.locator('.sync-row').first().isVisible(),false);
+await p.locator('.sync-toggle').first().click();
+assert.equal(await p.locator('.sync-node').first().evaluate(n=>n.classList.contains('closed')),true);
+await p.click('#sync-expand');
+assert.equal(await p.locator('.sync-row').first().isVisible(),true);
 await p.locator('.sync-folder-check').first().check();
 assert.equal(await p.locator('.sync-row input:checked').count(),2,'ticking a folder selects every case under it');
 await p.locator('.sync-row input').first().uncheck();
