@@ -2,6 +2,8 @@
 
 CaseHub 是按版本管理测试用例、测试任务和执行记录的本地系统。主线只读，测试版本从主线完整派生，文本变更经过冲突检查后合并。
 
+项目结构与设计说明见 [docs/architecture.md](docs/architecture.md)。
+
 ## 本地运行
 
 ```sh
