@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 )
@@ -11,8 +12,12 @@ import (
 // Hosting is one "AI 托管" run of a requirement: estimate → design → review area → passed → filed into a test
 // version under 全部用例 / Product / ProductVersion / <requirement>. The hosting runner (internal/hosting) drives
 // it on the server, one action per step, so it needs no browser and survives a CaseHub restart.
+//
+// A hosting started from 用例管理 (Source "cases") has no design part: it takes cases already in a test version
+// (CaseIDs, picked one by one or as a folder, Label naming them) straight to script generation and the run.
 type Hosting struct {
 	ID, DocID, VersionID    string
+	Source, Label           string // Source: "" (a requirement) or HostingFromCases
 	Product, ProductVersion string
 	Stage                   string // estimating, designing, reviewing, archiving, generating, running, done, stopped
 	FailedAt, Error, Note   string // FailedAt: the stage a stopped hosting stopped in
@@ -107,6 +112,8 @@ const (
 	HostingRunning    = "running"
 	HostingDone       = "done"
 	HostingStopped    = "stopped"
+	// HostingFromCases is the Source of a hosting started from cases in a test version.
+	HostingFromCases = "cases"
 	// HostingAuthor is who the hosting's own changes are recorded as (reviewer of the cases it passes).
 	HostingAuthor = "AI 托管"
 )
@@ -195,6 +202,12 @@ func startHosting(s *State, a Action) error {
 	if in == nil {
 		return errors.New("缺少托管参数")
 	}
+	if in.Source == HostingFromCases {
+		return startCaseHosting(s, a)
+	}
+	if in.Source != "" {
+		return errors.New("未知的托管来源")
+	}
 	doc, _ := reqDocAt(s, in.DocID)
 	if doc == nil {
 		return errors.New("需求文档不存在")
@@ -230,6 +243,88 @@ func startHosting(s *State, a Action) error {
 		CreatedBy: a.Author, CreatedAt: t, UpdatedAt: t})
 	return nil
 }
+
+// startCaseHosting hosts cases already in a test version: generate a script for each (and run them once when
+// asked). A case can be in only one running hosting; a new run replaces the finished or stopped ones it covers.
+func startCaseHosting(s *State, a Action) error {
+	in := a.Hosting
+	if _, err := requireBranch(s, in.VersionID); err != nil {
+		return err
+	}
+	if strings.TrimSpace(in.BaseURL) == "" {
+		return errors.New("生成脚本和自动化执行需要被测系统 URL")
+	}
+	// Only cases with steps can be scripted; the others are left out (a folder may hold some).
+	var ids []string
+	picked := map[string]bool{}
+	for _, id := range in.CaseIDs {
+		c, _ := caseAt(s, in.VersionID, id)
+		if c == nil {
+			return fmt.Errorf("用例 %s 不存在", id)
+		}
+		if !picked[id] && strings.TrimSpace(c.Steps) != "" {
+			picked[id] = true
+			ids = append(ids, id)
+		}
+	}
+	if len(in.CaseIDs) == 0 {
+		return errors.New("请选择要托管的用例")
+	}
+	if len(ids) == 0 {
+		return errors.New("选中的用例都没有执行步骤，无法生成脚本")
+	}
+	busy := 0
+	for _, h := range s.Hostings {
+		if h.VersionID == in.VersionID && HostingActive(h) {
+			for _, id := range h.CaseIDs {
+				if picked[id] {
+					busy++
+				}
+			}
+		}
+	}
+	if busy > 0 {
+		return fmt.Errorf("选中的用例中有 %d 条正在被其他托管处理", busy)
+	}
+	kept := s.Hostings[:0]
+	for _, h := range s.Hostings {
+		covered := h.Source == HostingFromCases && h.VersionID == in.VersionID
+		for _, id := range h.CaseIDs {
+			covered = covered && picked[id]
+		}
+		if !covered {
+			kept = append(kept, h)
+		}
+	}
+	label := strings.TrimSpace(in.Label)
+	if label == "" {
+		label = fmt.Sprintf("%d 条用例", len(ids))
+	}
+	t := now()
+	s.Hostings = append(kept, Hosting{ID: ID(), VersionID: in.VersionID, Source: HostingFromCases, Label: label, CaseIDs: ids,
+		Stage: HostingGenerating, Generate: true, Execute: in.Execute, BaseURL: strings.TrimSpace(in.BaseURL),
+		CreatedBy: a.Author, CreatedAt: t, UpdatedAt: t})
+	return nil
+}
+
+// HostingDoc is the requirement a hosted case belongs to: the hosting's own, or — for hosted cases — the one
+// whose code the case ID carries (TC-<code>-…), as the automation page matches them. It may be nil.
+func HostingDoc(s *State, h Hosting, caseID string) *ReqDoc {
+	if h.DocID != "" {
+		doc, _ := reqDocAt(s, h.DocID)
+		return doc
+	}
+	if m := caseCodeRE.FindStringSubmatch(caseID); m != nil {
+		for i := range s.ReqDocs {
+			if s.ReqDocs[i].Code == m[1] {
+				return &s.ReqDocs[i]
+			}
+		}
+	}
+	return nil
+}
+
+var caseCodeRE = regexp.MustCompile(`^TC-([A-Z][A-Z0-9]{1,11})-`)
 
 // deleteHosting is "放弃托管": only a hosting that is not running can be dropped (the runner cancels a running
 // one's design task first). Cases it already put in the review area stay there.
@@ -466,17 +561,28 @@ func hostingScripts(s *State, h *Hosting, a Action) error {
 	if r == nil {
 		return errors.New("缺少脚本生成结果")
 	}
-	doc, _ := reqDocAt(s, h.DocID)
-	if doc == nil {
-		return errors.New("需求文档不存在")
+	if h.DocID != "" {
+		if doc, _ := reqDocAt(s, h.DocID); doc == nil {
+			return errors.New("需求文档不存在")
+		}
 	}
-	notes := r.ExplorationRecords[doc.ID]
-	if notes == "" {
-		notes = r.ExplorationNotes
+	// Exploration notes go to each requirement the scripted cases belong to; the run's general notes only
+	// when there is exactly one.
+	var docIDs []string
+	for _, id := range h.CaseIDs {
+		if doc := HostingDoc(s, *h, id); doc != nil && !slices.Contains(docIDs, doc.ID) {
+			docIDs = append(docIDs, doc.ID)
+		}
 	}
-	if strings.TrimSpace(notes) != "" {
-		if err := saveReqExploration(s, Action{DocID: doc.ID, ExplorationNotes: notes}); err != nil {
-			return err
+	for _, docID := range docIDs {
+		notes := r.ExplorationRecords[docID]
+		if notes == "" && len(docIDs) == 1 {
+			notes = r.ExplorationNotes
+		}
+		if strings.TrimSpace(notes) != "" {
+			if err := saveReqExploration(s, Action{DocID: docID, ExplorationNotes: notes}); err != nil {
+				return err
+			}
 		}
 	}
 	if p := r.ProductExperience; p != nil && p.Origin != "" && strings.TrimSpace(p.Notes) != "" {
@@ -501,6 +607,10 @@ func hostingScripts(s *State, h *Hosting, a Action) error {
 		title := ""
 		if c, _ := caseAt(s, h.VersionID, sc.CaseID); c != nil {
 			title = c.Title
+		}
+		doc := HostingDoc(s, *h, sc.CaseID)
+		if doc == nil {
+			continue // a defect is filed against a requirement; a case with none keeps it on its script only
 		}
 		for _, d := range sc.Deviations {
 			label := riskLabels[d.Risk]
@@ -608,6 +718,10 @@ func hostingRetry(h *Hosting, clearTask bool) error {
 	case HostingDesigning:
 		h.Stage, h.PlannerTaskID = HostingDesigning, ""
 	default:
+		if h.Source == HostingFromCases { // nothing before the generation to go back to
+			h.Stage, h.GenTaskID = HostingGenerating, ""
+			break
+		}
 		h.Stage = HostingEstimating
 	}
 	h.Error, h.Continuable = "", false

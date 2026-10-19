@@ -1,7 +1,8 @@
 // Package hosting runs AI 托管 on the server: once a person hands a requirement over, CaseHub itself estimates
 // it, submits the design task, files the result into the review area, passes it and moves it into the test
 // version's case tree, then (when asked) generates a script per case and runs each script once, recording the
-// results — no browser has to stay open. Each step is one core action, so a step either happens whole or not
+// results — no browser has to stay open. Cases handed over from 用例管理 skip the design part and start at the
+// script generation. Each step is one core action, so a step either happens whole or not
 // at all; the run picks up at its recorded stage after a CaseHub restart.
 package hosting
 
@@ -85,12 +86,16 @@ func (r *Runner) Close() {
 	r.wg.Wait()
 }
 
-// Begin records a new hosting for a requirement and starts running it.
+// Begin records a new hosting for a requirement (or for cases in a test version) and starts running it.
 func (r *Runner) Begin(ctx context.Context, h core.Hosting, req Request, author string) (core.Hosting, error) {
-	if len(req.Estimate) == 0 || len(req.Job) == 0 {
+	fromCases := h.Source == core.HostingFromCases
+	if !fromCases && !r.srv.Enabled("planner") {
+		return core.Hosting{}, errors.New("AI 设计服务（planner）未配置，不能托管需求")
+	}
+	if !fromCases && (len(req.Estimate) == 0 || len(req.Job) == 0) {
 		return core.Hosting{}, errors.New("缺少评估或设计请求")
 	}
-	h.Generate = h.Generate || h.Execute
+	h.Generate = h.Generate || h.Execute || fromCases
 	if h.Generate && !r.srv.Enabled("generator") {
 		return core.Hosting{}, errors.New("脚本生成服务（generator）未配置，不能托管脚本生成")
 	}
@@ -104,7 +109,7 @@ func (r *Runner) Begin(ctx context.Context, h core.Hosting, req Request, author 
 	if err != nil {
 		return core.Hosting{}, err
 	}
-	created := findDoc(out.State, h.DocID)
+	created := out.State.Hostings[len(out.State.Hostings)-1] // startHosting appends the new one
 	r.launch(created.ID, &req)
 	return created, nil
 }
@@ -121,7 +126,7 @@ func (r *Runner) Retry(ctx context.Context, id string, req *Request) (core.Hosti
 	if h.Stage != core.HostingStopped {
 		return core.Hosting{}, errors.New("只有已停止的托管可以重试")
 	}
-	needEstimate := h.FailedAt == core.HostingEstimating || h.FailedAt == ""
+	needEstimate := h.Source != core.HostingFromCases && (h.FailedAt == core.HostingEstimating || h.FailedAt == "")
 	if (needEstimate || h.FailedAt == core.HostingDesigning) && (req == nil || len(req.Job) == 0 || needEstimate && len(req.Estimate) == 0) {
 		return core.Hosting{}, errors.New("重新设计需要重新填写托管参数")
 	}
@@ -130,7 +135,7 @@ func (r *Runner) Retry(ctx context.Context, id string, req *Request) (core.Hosti
 	}
 	// A finished generator run is only saved again; any other generation stop submits a new one.
 	resubmitGeneration := false
-	if h.FailedAt == core.HostingGenerating {
+	if h.FailedAt == core.HostingGenerating || h.Source == core.HostingFromCases && h.FailedAt == "" {
 		t, err := r.srv.Get(ctx, "generator", h.GenTaskID)
 		resubmitGeneration = h.GenTaskID == "" || err != nil || t.Status != tasks.Succeeded
 		if resubmitGeneration && (req == nil || len(req.Generate) == 0) {
@@ -244,15 +249,6 @@ func (r *Runner) forget(id string, all bool) {
 	}
 }
 
-func findDoc(st core.State, docID string) core.Hosting {
-	for _, h := range st.Hostings {
-		if h.DocID == docID {
-			return h
-		}
-	}
-	return core.Hosting{}
-}
-
 func (r *Runner) hosting(ctx context.Context, id string) (core.Hosting, error) {
 	st, err := r.svc.State(ctx)
 	if err != nil {
@@ -296,7 +292,11 @@ func (r *Runner) wait() bool {
 
 func (r *Runner) subject(h core.Hosting) map[string]any {
 	// Not req:<id>: the manual design / generation views must not pick a hosting's tasks up and import them again.
-	return map[string]any{"subject": "hosting:" + h.DocID, "meta": map[string]string{"hosting": h.ID}}
+	key := h.DocID
+	if key == "" {
+		key = h.ID
+	}
+	return map[string]any{"subject": "hosting:" + key, "meta": map[string]string{"hosting": h.ID}}
 }
 
 // run advances one hosting until it is done, stops, or CaseHub shuts down.
@@ -479,38 +479,44 @@ func (r *Runner) awaitDesign(h core.Hosting) bool {
 	return true
 }
 
-// submitGeneration asks the generator for one script per filed case, sending the cases as they now are in
-// the test version together with the requirement (and its exploration notes) — what the automation page sends.
+// submitGeneration asks the generator for one script per hosted case, sending the cases as they now are in
+// the test version together with their requirements (and exploration notes) — what the automation page sends.
 func (r *Runner) submitGeneration(h core.Hosting, req *Request) bool {
 	st, err := r.svc.State(r.ctx)
 	if err != nil {
 		return r.wait() // try again
 	}
-	var doc core.ReqDoc
-	for _, d := range st.ReqDocs {
-		if d.ID == h.DocID {
-			doc = d
-		}
-	}
 	var cases []map[string]any
+	var requirements []any
+	seen := map[string]bool{}
 	for _, id := range h.CaseIDs {
 		for _, c := range st.Cases {
-			if c.VersionID == h.VersionID && c.ID == id && strings.TrimSpace(c.Steps) != "" {
-				cases = append(cases, map[string]any{"id": c.ID, "title": c.Title, "priority": c.Priority, "requirement": doc.ID,
-					"precondition": c.Preconditions, "steps": c.Steps, "expects": c.Expected})
+			if c.VersionID != h.VersionID || c.ID != id || strings.TrimSpace(c.Steps) == "" {
+				continue
 			}
+			item := map[string]any{"id": c.ID, "title": c.Title, "priority": c.Priority, "precondition": c.Preconditions, "steps": c.Steps, "expects": c.Expected}
+			if doc := core.HostingDoc(&st, h, c.ID); doc != nil {
+				item["requirement"] = doc.ID
+				if !seen[doc.ID] {
+					seen[doc.ID] = true
+					requirement := map[string]any{"id": doc.ID, "title": doc.Title, "content": doc.Content}
+					if strings.TrimSpace(doc.ExplorationNotes) != "" {
+						requirement["explorationNotes"] = doc.ExplorationNotes
+					}
+					requirements = append(requirements, requirement)
+				}
+			}
+			cases = append(cases, item)
 		}
 	}
 	if len(cases) == 0 {
-		r.halt(h.ID, core.HostingGenerating, "归档的用例都没有执行步骤（或已被删除），无法生成脚本", false)
+		r.halt(h.ID, core.HostingGenerating, "托管的用例都没有执行步骤（或已被删除），无法生成脚本", false)
 		return false
 	}
-	requirement := map[string]any{"id": doc.ID, "title": doc.Title, "content": doc.Content}
-	if strings.TrimSpace(doc.ExplorationNotes) != "" {
-		requirement["explorationNotes"] = doc.ExplorationNotes
-	}
 	body := withField(req.Generate, "cases", cases)
-	body = withField(body, "requirements", []any{requirement})
+	if len(requirements) > 0 {
+		body = withField(body, "requirements", requirements)
+	}
 	body = withField(body, "casehubTask", r.subject(h))
 	t, err := r.srv.Submit(r.ctx, "generator", body)
 	if err != nil {

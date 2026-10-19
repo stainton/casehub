@@ -358,7 +358,7 @@ async function summarizeFolderTestReport(versionID,folderID){
   $('#fs-download').onclick=()=>{const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([reportMd],{type:'text/markdown;charset=utf-8'}));a.download=`${folder.Name}-测试总结报告.md`;a.click();setTimeout(()=>URL.revokeObjectURL(a.href),0);toast('测试总结报告已下载')};
   $('#fs-copy').onclick=async()=>{try{await navigator.clipboard.writeText(reportMd);toast('已复制 Markdown')}catch{toast('复制失败，请改用下载',true)}};
 }
-function folderMenu(v,f){let branch=editable(v);if(!branch){let items=[['搜索',()=>openSearch(v,f)],['重命名文件夹',()=>renameModal(v,f)],['输出测试报告',()=>exportFolderTestReport(v,f)],['总结测试报告',()=>summarizeFolderTestReport(v,f)],['脚本生成',()=>generateForFolder(v,f)],['复制飞书思维导图',()=>exportFeishuMindmap([{versionID:v,folderID:f}])]];if(f==='root')items.splice(1,0,['创建测试版本',versionModal]);else items.push(['删除空文件夹',()=>{if(confirm('删除该空文件夹？'))act('deleteFolder',{VersionID:v,FolderID:f})}]);return items}let items=[['查看详情',()=>setFocus({type:'folder',versionID:v,id:f})],['新建文件夹',()=>folderModal(v,f)],['新增用例',()=>caseModal(null,v,f)],['创建测试任务',()=>taskFromFolder(v,f)],['输出测试报告',()=>exportFolderTestReport(v,f)],['总结测试报告',()=>summarizeFolderTestReport(v,f)],['脚本生成',()=>generateForFolder(v,f)],['重命名文件夹',()=>renameModal(v,f)],['搜索此目录',()=>openSearch(v,f)],['导出目录',()=>exportCases(v,f)],['复制飞书思维导图',()=>exportFeishuMindmap([{versionID:v,folderID:f}])]];if(f!=='root')items.push(['移动到…',()=>moveFolderModal(v,f)],['合并文件夹到…',()=>mergeFolderModal(v,f)],['删除空文件夹',()=>{if(confirm('删除该空文件夹？'))act('deleteFolder',{VersionID:v,FolderID:f})}]);return items}
+function folderMenu(v,f){let branch=editable(v);if(!branch){let items=[['搜索',()=>openSearch(v,f)],['重命名文件夹',()=>renameModal(v,f)],['输出测试报告',()=>exportFolderTestReport(v,f)],['总结测试报告',()=>summarizeFolderTestReport(v,f)],['脚本生成',()=>generateForFolder(v,f)],['复制飞书思维导图',()=>exportFeishuMindmap([{versionID:v,folderID:f}])]];if(f==='root')items.splice(1,0,['创建测试版本',versionModal]);else items.push(['删除空文件夹',()=>{if(confirm('删除该空文件夹？'))act('deleteFolder',{VersionID:v,FolderID:f})}]);return items}let items=[['查看详情',()=>setFocus({type:'folder',versionID:v,id:f})],['新建文件夹',()=>folderModal(v,f)],['新增用例',()=>caseModal(null,v,f)],['创建测试任务',()=>taskFromFolder(v,f)],['输出测试报告',()=>exportFolderTestReport(v,f)],['总结测试报告',()=>summarizeFolderTestReport(v,f)],['脚本生成',()=>generateForFolder(v,f)],['AI 托管',()=>hostFolder(v,f)],['重命名文件夹',()=>renameModal(v,f)],['搜索此目录',()=>openSearch(v,f)],['导出目录',()=>exportCases(v,f)],['复制飞书思维导图',()=>exportFeishuMindmap([{versionID:v,folderID:f}])]];if(f!=='root')items.push(['移动到…',()=>moveFolderModal(v,f)],['合并文件夹到…',()=>mergeFolderModal(v,f)],['删除空文件夹',()=>{if(confirm('删除该空文件夹？'))act('deleteFolder',{VersionID:v,FolderID:f})}]);return items}
 function folderOptionsHTML(versionID,exclude=''){let fs=folders(versionID),roots=fs.filter(f=>!f.ParentID||!fs.some(x=>x.ID===f.ParentID));function node(f,depth){if(f.ID===exclude)return '';let children=fs.filter(x=>x.ParentID===f.ID);return `<option value="${f.ID}">${'　'.repeat(depth)}${esc(f.Name)}</option>`+children.map(ch=>node(ch,depth+1)).join('')}return roots.map(r=>node(r,0)).join('')}
 // 移动文件夹：目标下拉里去掉自身及其子文件夹。测试版本中的移动在合并到主线时同步到主线。
 function moveFolderModal(v,f){const folder=state.folders.find(x=>x.VersionID===v&&x.ID===f);showModal('移动文件夹',`<p class="meta">将「${esc(folder?.Name||'')}」连同其中的子文件夹和用例移动到：</p><label>目标文件夹<select name="TargetFolderID">${folderOptionsHTML(v,f)}</select></label>`,x=>act('moveFolder',{VersionID:v,FolderID:f,TargetFolderID:x.TargetFolderID}))}
@@ -515,7 +515,7 @@ for(const box of document.querySelectorAll('#content,#req-content,#auto-content,
   anchor.append(btn);box.append(anchor);
   box.addEventListener('scroll',()=>btn.classList.toggle('hidden',box.scrollTop<box.clientHeight/2),{passive:true});
 }
-$$('[data-bulk]').forEach(b=>b.onclick=()=>{if(b.dataset.bulk==='feishu'){exportFeishuMindmap([...selected.entries()].filter(([,ids])=>ids.size).map(([versionID,ids])=>({versionID,ids:[...ids]})));return}let entries=[...selected.entries()].find(([,s])=>s.size);if(!entries)return;let[v,ids]=[entries[0],[...entries[1]]];if(b.dataset.bulk==='export')exportSelected(v,ids);else if(b.dataset.bulk==='task')taskModal(v,ids);else if(b.dataset.bulk==='script')startGeneration(v,ids,`已选 ${ids.length} 条用例`);else if(b.dataset.bulk==='run')bulkRunModal(v,ids);else if(b.dataset.bulk==='move')moveCasesModal(v,ids);else if(b.dataset.bulk==='merge')mergeCasesModal(v,ids);else if(b.dataset.bulk==='delete'){if(confirm(`确定删除选中的 ${ids.length} 条用例？测试记录和历史也会一并删除，且无法恢复。`))act('deleteCases',{VersionID:v,CaseIDs:ids}).then(()=>{selected.delete(v);updateBulk()}).catch(()=>{})}});function exportSelected(v,ids){let data=cases(v).filter(c=>ids.includes(c.ID)).map(exportableCase),a=document.createElement('a');a.href=URL.createObjectURL(new Blob([JSON.stringify(data,null,2)],{type:'application/json'}));a.download='casehub-selected.json';a.click()}
+$$('[data-bulk]').forEach(b=>b.onclick=()=>{if(b.dataset.bulk==='feishu'){exportFeishuMindmap([...selected.entries()].filter(([,ids])=>ids.size).map(([versionID,ids])=>({versionID,ids:[...ids]})));return}let entries=[...selected.entries()].find(([,s])=>s.size);if(!entries)return;let[v,ids]=[entries[0],[...entries[1]]];if(b.dataset.bulk==='export')exportSelected(v,ids);else if(b.dataset.bulk==='task')taskModal(v,ids);else if(b.dataset.bulk==='script')startGeneration(v,ids,`已选 ${ids.length} 条用例`);else if(b.dataset.bulk==='host')hostCasesOf(v,ids,`已选 ${ids.length} 条用例`);else if(b.dataset.bulk==='run')bulkRunModal(v,ids);else if(b.dataset.bulk==='move')moveCasesModal(v,ids);else if(b.dataset.bulk==='merge')mergeCasesModal(v,ids);else if(b.dataset.bulk==='delete'){if(confirm(`确定删除选中的 ${ids.length} 条用例？测试记录和历史也会一并删除，且无法恢复。`))act('deleteCases',{VersionID:v,CaseIDs:ids}).then(()=>{selected.delete(v);updateBulk()}).catch(()=>{})}});function exportSelected(v,ids){let data=cases(v).filter(c=>ids.includes(c.ID)).map(exportableCase),a=document.createElement('a');a.href=URL.createObjectURL(new Blob([JSON.stringify(data,null,2)],{type:'application/json'}));a.download='casehub-selected.json';a.click()}
 let resizing=false,lastX=340,resizeVar='--side',resizeCollapse='#collapse';
 function bindResizer(handleSel,collapseSel,cssVar){$(handleSel).onmousedown=()=>{resizing=true;resizeVar=cssVar;resizeCollapse=collapseSel;$(handleSel).classList.add('dragging')}}
 bindResizer('#resize-left','#collapse','--side');
@@ -824,13 +824,13 @@ async function serviceRequest(path,options){
 function isAiDrawerOpen(doc){return aiDoc?.ID===doc.ID&&!$('#ai-drawer').classList.contains('hidden')}
 let aiDrawerMode='design'; // 'design'：AI 设计；'host'：AI 托管
 function openAiDrawer(doc,mode='design'){
-  aiDoc=doc;aiDrawerMode=mode;closeHostLog();
+  aiDoc=doc;aiDrawerMode=mode;hostCase=null;closeHostLog();
   $('#ai-drawer .panel-head strong').textContent=mode==='host'?'AI 托管':'AI 设计';
   $('#ai-drawer-doc').textContent=`${doc.ID} · ${doc.Title}`;
   $('#ai-drawer').classList.remove('hidden');
   renderAiDrawer(doc);
 }
-$('#ai-drawer-close').onclick=()=>{$('#ai-drawer').classList.add('hidden');closeHostLog()};
+$('#ai-drawer-close').onclick=()=>{$('#ai-drawer').classList.add('hidden');closeHostLog();hostCase=null};
 
 async function renderAiDrawer(doc){
   const body=$('#ai-drawer-body');
@@ -1393,14 +1393,16 @@ async function importAiResult(doc,result){
 // 页面只负责发起、显示进度（state.hostings，托管进行中时轮询 /api/hostings）、以及停下后的重试/放弃。
 const AI_HOST_STEPS=[['estimating','评估用例数量'],['designing','用例设计'],['importing','放入用例评审'],['reviewing','自动评审通过'],['archiving','归档到用例树'],['generating','生成自动化脚本'],['running','自动化执行']];
 // 这次托管包含的步骤：脚本生成、自动化执行是可选的。
-const hostSteps=h=>AI_HOST_STEPS.filter(([k])=>k==='generating'?h.Generate:k==='running'?h.Execute:true);
+// 从用例管理发起的托管（Source 'cases'）没有设计阶段，直接从生成脚本开始。
+const isCaseHost=h=>h?.Source==='cases';
+const hostSteps=h=>AI_HOST_STEPS.filter(([k])=>k==='generating'?h.Generate:k==='running'?h.Execute:!isCaseHost(h));
 // 执行结果统计：通过 / 失败 / 执行出错（执行任务本身失败）。
 function hostRunStats(h){const r=Object.values(h.Results||{});return {passed:r.filter(x=>x==='passed').length,failed:r.filter(x=>x==='failed').length,error:r.filter(x=>x==='error').length,done:r.length,total:h.Generated||0}}
 const hostRunText=x=>[`通过 ${x.passed}`,`失败 ${x.failed}`,...(x.error?[`执行出错 ${x.error}`]:[])].join(' · ');
 const hostingOf=doc=>state.hostings.find(h=>h.DocID===doc.ID)||null;
 const hostActive=h=>Boolean(h)&&!['done','stopped'].includes(h.Stage);
 const isHosting=doc=>hostActive(hostingOf(doc));
-let hostingEnabled=null;
+let hostingEnabled=null, hostingCases=null; // 能否托管需求（planner）/ 能否托管用例（generator）
 // 需求在需求树里的目录（从上到下）。需求树按 产品 / 产品版本 / 需求 组织时，正好用来预填托管的归档位置。
 function reqFolderPathNames(doc){
   const names=[];
@@ -1417,8 +1419,8 @@ function hostStepsHTML(h){
       :k==='running'&&st!=='todo'&&run.total?`：${st==='current'?`${run.done}/${run.total}，`:''}${hostRunText(run)}`:'';
     return `<li class="host-step ${st}"><span class="host-dot">${st==='done'?'✓':st==='failed'?'!':st==='current'?'●':'○'}</span>${esc(label)}${extra}</li>`;
   }).join('');
-  const v=version(h.VersionID);
-  return `<div class="card host-card"><h3>AI 托管 <small class="meta">归档到「${esc(v?.name||'已删除的版本')}」：${esc(hostArchivePath(h).join(' / '))}</small></h3><ol class="host-steps">${items}</ol>${h.Note?`<p class="meta">${esc(h.Note)}</p>`:''}${h.Stage==='stopped'?`<p class="meta host-error">托管已停止：${esc(h.Error||'')}</p>`:''}</div>`;
+  const v=version(h.VersionID),where=isCaseHost(h)?`「${esc(v?.name||'已删除的版本')}」：${esc(h.Label)} · ${h.CaseIDs?.length||0} 条用例`:`归档到「${esc(v?.name||'已删除的版本')}」：${esc(hostArchivePath(h).join(' / '))}`;
+  return `<div class="card host-card"><h3>AI 托管 <small class="meta">${where}</small></h3><ol class="host-steps">${items}</ol>${h.Note?`<p class="meta">${esc(h.Note)}</p>`:''}${h.Stage==='stopped'?`<p class="meta host-error">托管已停止：${esc(h.Error||'')}</p>`:''}</div>`;
 }
 // 设计和脚本生成阶段在托管视图里接上对应任务的进度流（和手动设计、生成同一个接口）。
 let hostLog=null;
@@ -1471,9 +1473,10 @@ function renderHostView(doc){
   };
 }
 function hostingUpdated(h){
-  const i=state.hostings.findIndex(x=>x.DocID===h.DocID);
+  const i=state.hostings.findIndex(x=>x.ID===h.ID||h.DocID&&x.DocID===h.DocID); // 需求的新托管替换它上一次的
   i<0?state.hostings.push(h):state.hostings.splice(i,1,h);
   syncAiButton();
+  if(isCaseHost(h)&&caseHostOpen()){hostCase={id:h.ID};renderCaseHostView()}
   const doc=state.reqDocs.find(d=>d.ID===h.DocID);
   if(doc&&isAiDrawerOpen(doc))renderHostView(doc);
   watchHostings();
@@ -1493,7 +1496,8 @@ function watchHostings(){
     syncAiButton();
     // 托管可能刚保存了需求缩写：只更新详情页上的标签，整页重绘会丢掉未保存的需求正文修改。
     if(reqFocus?.type==='doc'&&$('#req-doc-code')){const d=state.reqDocs.find(x=>x.ID===reqFocus.id);if(d)$('#req-doc-code').textContent=d.Code||'未设置'}
-    if(!aiDoc&&tcCurrent==='host'&&!$('#ai-drawer').classList.contains('hidden'))tcShowHosting();
+    if(!aiDoc&&!hostCase&&tcCurrent==='host'&&!$('#ai-drawer').classList.contains('hidden'))tcShowHosting();
+    if(caseHostOpen()&&hostCase.id){const h=state.hostings.find(x=>x.ID===hostCase.id);if(h&&hostSig(h)!==hostShown)renderCaseHostView()}
     if(aiDoc&&!$('#ai-drawer').classList.contains('hidden')){const h=hostingOf(aiDoc);if(h&&hostSig(h)!==hostShown&&(aiDrawerMode==='host'||hostActive(h)||moved))renderHostView(aiDoc)}
     if(!list.some(hostActive)){clearInterval(hostTimer);hostTimer=null}
   },3000);
@@ -1571,6 +1575,98 @@ async function renderHostForm(doc,{retry}={}){
       toast('已开始托管，可以关闭页面，CaseHub 会自动完成');
       hostingUpdated(h);
     }catch(err){btns.forEach(b=>b.disabled=false);toast(err.message,true)}
+  };
+}
+
+// ---- 用例托管：在用例管理里勾选用例或右键目录发起，流程同 AI 托管，只是没有设计阶段 ----
+// 服务端直接为这些用例生成自动化脚本（按用例编号前缀匹配需求文档作背景），勾选后再自动执行一次并保存测试记录。
+let hostCase=null; // AI 抽屉里的用例托管：{id} 已发起的，或 {draft:{versionID,caseIDs,label}} 待填写的
+const caseHostOpen=()=>Boolean(hostCase)&&!$('#ai-drawer').classList.contains('hidden');
+function openCaseHost(x){
+  aiDoc=null;closeHostLog();hostShown=null;hostCase=x;
+  const h=x.id&&state.hostings.find(y=>y.ID===x.id),d=h?{versionID:h.VersionID,label:h.Label}:x.draft;
+  $('#ai-drawer .panel-head strong').textContent='AI 托管';
+  $('#ai-drawer-doc').textContent=`${version(d.versionID)?.name||'已删除的版本'} · ${d.label}`;
+  $('#ai-drawer').classList.remove('hidden');
+  x.id?renderCaseHostView():renderCaseHostForm();
+}
+function hostCasesOf(vid,ids,label){
+  if(!editable(vid))return toast('只有测试版本里的用例可以托管',true);
+  if(!ids.length)return toast('没有可托管的用例',true);
+  openCaseHost({draft:{versionID:vid,caseIDs:ids,label}});
+}
+function hostFolder(vid,folderId){
+  const f=state.folders.find(x=>x.VersionID===vid&&x.ID===folderId);
+  if(!f)return;
+  const scope=[f.ID,...descendantFolders(f)];
+  hostCasesOf(vid,cases(vid).filter(c=>scope.includes(c.FolderID)).map(c=>c.ID),f.Name);
+}
+function renderCaseHostView(){
+  const h=state.hostings.find(x=>x.ID===hostCase?.id);
+  if(!h){closeHostLog();hostShown=null;hostCase=null;return tcShowHosting()}
+  hostShown=hostSig(h);
+  const done=h.Stage==='done',stopped=h.Stage==='stopped';
+  const status=h.Stage==='generating'?'正在为这些用例生成自动化脚本…':h.Stage==='running'?'脚本已生成，正在逐条自动执行，每条执行完都会保存测试记录…'
+    :done?`已完成：生成 ${h.Generated||0} 个脚本${h.Blocked?`，${h.Blocked} 条受阻未生成`:''}${h.Execute&&h.Generated?`，自动执行 ${hostRunText(hostRunStats(h))}`:''}。`:'';
+  const actions=done?'<button type="button" class="secondary" id="host-again">重新托管</button><button type="button" id="host-goto-auto">查看脚本</button>'
+    :stopped?'<button type="button" class="secondary" id="host-abandon">放弃托管</button><button type="button" id="host-resume">重试这一步</button>'
+    :'<button type="button" class="secondary" id="host-abandon">取消托管</button>';
+  const logTask=h.Stage==='generating'&&h.GenTaskID;
+  $('#ai-drawer-body').innerHTML=`${hostStepsHTML(h)}${status?`<p class="meta">${esc(status)}</p>`:''}${hostActive(h)?'<p class="meta">托管在 CaseHub 服务端执行，可以关闭抽屉或页面。</p>':''}${logTask?'<div id="ai-log" class="ai-log"></div>':''}<p class="drawer-actions">${actions}</p>`;
+  closeHostLog();if(logTask)openHostLog('generator',h.GenTaskID);
+  if(done){
+    $('#host-again').onclick=()=>openCaseHost({draft:{versionID:h.VersionID,caseIDs:h.CaseIDs.filter(id=>state.cases.some(c=>c.VersionID===h.VersionID&&c.ID===id)),label:h.Label}});
+    $('#host-goto-auto').onclick=()=>{setPage('automation');const id=h.CaseIDs.find(id=>scriptFor(h.VersionID,id));if(id)setAutoFocus({type:'script',versionID:h.VersionID,id})};
+  }
+  $('#host-abandon')&&($('#host-abandon').onclick=async()=>{
+    if(!confirm(stopped?'放弃托管？已经生成的脚本和测试记录都会保留。':'取消托管？正在进行的生成/执行任务会被取消，已经完成的部分会保留。'))return;
+    try{await serviceRequest(`/api/hostings/${h.ID}`,{method:'DELETE'})}catch(e){return toast(e.message,true)}
+    hostCase=null;await refresh();tcShowHosting();
+  });
+  if(stopped)$('#host-resume').onclick=async()=>{
+    try{hostingUpdated(await serviceRequest(`/api/hostings/${h.ID}/retry`,{method:'POST'}))}
+    catch(e){if(/重新填写/.test(e.message))return renderCaseHostForm({retry:h});toast(e.message,true)} // 生成任务需要测试账号，而账号从不保存
+  };
+}
+// retry：重启后丢了测试账号、需要重新提交生成任务的托管，只补生成参数。
+async function renderCaseHostForm({retry}={}){
+  if(hostingCases===null){try{hostingCases=Boolean((await serviceRequest('/api/hostings')).cases)}catch{hostingCases=false}}
+  let executor=false;try{executor=(await serviceRequest('/api/executor/status')).enabled}catch{}
+  try{await Promise.all([loadAgentDefaults('generator'),loadAssets()])}catch{}
+  if(!caseHostOpen())return;
+  closeHostLog();hostShown=null;
+  if(!hostingCases){$('#ai-drawer-body').innerHTML='<p class="meta">用例托管需要 CaseHub 配置脚本生成服务（generator），当前未配置。</p>';return}
+  const d=retry?{versionID:retry.VersionID,caseIDs:retry.CaseIDs,label:retry.Label}:hostCase.draft;
+  const picked=d.caseIDs.map(id=>state.cases.find(c=>c.VersionID===d.versionID&&c.ID===id)).filter(Boolean);
+  const usable=picked.filter(c=>(c.Steps||'').trim()),existing=usable.filter(c=>scriptFor(d.versionID,c.ID)).length;
+  if(!retry&&!usable.length){$('#ai-drawer-body').innerHTML='<p class="meta">选中的用例都没有执行步骤，无法生成脚本。</p>';return}
+  let last={};try{last=JSON.parse(localStorage.getItem('casehub-ai-host-last'))||{}}catch{}
+  const v=genValues('generator'),wantRun=last.withRun!==false;
+  const intro=retry?hostStepsHTML(retry):`<div class="card"><h3>AI 托管</h3><p class="meta">直接为这 ${usable.length} 条用例生成自动化脚本（按用例编号前缀附带对应的需求文档），勾选后再自动执行一次并保存测试记录，不需要逐步确认。${picked.length-usable.length?`另外 ${picked.length-usable.length} 条没有执行步骤，会跳过。`:''}${existing?`其中 ${existing} 条已有脚本，会重新生成（旧脚本保留在脚本历史里）。`:''}托管由 CaseHub 服务端执行，提交后可以关闭页面。</p></div>`;
+  $('#ai-drawer-body').innerHTML=`${intro}<form id="host-form" autocomplete="off"><label>被测系统 URL<input name="baseUrl" required placeholder="https://test.example.com" autocomplete="off" value="${esc(v.baseUrl||'')}"></label><label>补充说明（可选）<textarea name="instructions" placeholder="登录方式、数据约束、需要避免的操作等">${esc(v.instructions||'')}</textarea></label><label>测试账号 · 用户名（可选）<input name="testAccount" autocomplete="off" value="${esc(v.testAccount||'')}"></label><label>测试账号 · 密码（可选）<input name="testSecret" type="text" class="fake-password" autocomplete="off" spellcheck="false" value="${esc(v.testSecret||'')}"></label><fieldset class="ai-assets"><legend>生成脚本可使用的资产（可选）</legend>${assetsCache.length?assetsCache.map(a=>`<label class="ai-asset"><input type="checkbox" name="assetIds" value="${esc(a.id)}"${v.assetIds.includes(a.id)?' checked':''}> ${esc(assetTypeLabel(a.type))} · ${esc(a.name)} <small>${assetSize(a.size)}</small></label>`).join(''):'<small class="meta">还没有资产，可在头像菜单的「资产」里上传。</small>'}</fieldset><label>单用例生成时长（分钟）<input name="caseTimeoutMinutes" type="number" min="1" max="60" step="1" required value="${esc(v.caseTimeoutMinutes)}"></label>${retry?'':`<fieldset class="host-scope"><legend>托管范围</legend><label class="ai-asset"><input type="checkbox" checked disabled> 生成自动化脚本</label><label class="ai-asset"><input type="checkbox" name="withRun"${executor?(wantRun?' checked':''):' disabled'}> 生成后自动执行一次，并保存测试记录${executor?'':'（执行服务未配置）'}</label></fieldset>`}<p class="drawer-actions">${retry?'<button type="button" class="secondary" id="host-back">返回</button>':''}<button type="submit">${retry?'重新填写并生成':'开始托管'}</button></p></form>`;
+  const form=$('#host-form');
+  if(retry)$('#host-back').onclick=()=>renderCaseHostView();
+  form.onsubmit=async e=>{
+    e.preventDefault();
+    const data=new FormData(form),values=Object.fromEntries(data);values.assetIds=data.getAll('assetIds');values.baseUrl=String(values.baseUrl||'').trim();
+    const minutes=Number(values.caseTimeoutMinutes);
+    if(!Number.isInteger(minutes)||minutes<1||minutes>60)return toast('单用例生成时长需为 1–60 分钟的整数',true);
+    saveGenTarget({...loadGenTarget(),...values});
+    // 生成请求（不含用例和需求，由服务端按托管的用例补上）：和自动化页发起生成时一样的目标、说明、资产、账号和时限。
+    const {cases:_,...generate}=genPayload(d.versionID,[],{...values,reqDoc:''});
+    const withRun=Boolean(form.elements.withRun?.checked);
+    const btn=form.querySelector('button[type="submit"]');btn.disabled=true;
+    try{
+      let h;
+      if(retry)h=await serviceRequest(`/api/hostings/${retry.ID}/retry`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({generate})});
+      else{
+        try{localStorage.setItem('casehub-ai-host-last',JSON.stringify({...last,withRun}))}catch{}
+        h=await serviceRequest('/api/hostings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({Source:'cases',VersionID:d.versionID,CaseIDs:d.caseIDs,Label:d.label,Author:'本地用户',withRun,BaseURL:values.baseUrl,generate})});
+        selected.get(d.versionID)?.clear();updateBulk();renderVersions();
+      }
+      toast('已开始托管，可以关闭页面，CaseHub 会自动完成');
+      hostingUpdated(h);
+    }catch(err){btn.disabled=false;toast(err.message,true)}
   };
 }
 
@@ -2566,7 +2662,7 @@ async function resumeGenTasks(){
 // AI 托管和设计共用 AI 抽屉：托管的设计任务不出现在「设计」里（它的结果由服务端自动处理），在「AI 托管」里按需求查看。
 const TC_TABS=[['plan','Planner · 设计','#ai-drawer'],['host','AI 托管','#ai-drawer'],['gen','Generator · 生成/修复','#gen-drawer'],['run','Executor · 执行','#run-drawer']];
 // 「进行中」= 还没完成的托管，包括停下等人处理（重试/放弃）的；「已完成」= 已归档的。
-const tcHostings=()=>(state?.hostings||[]).filter(h=>state.reqDocs.some(d=>d.ID===h.DocID));
+const tcHostings=()=>(state?.hostings||[]).filter(h=>isCaseHost(h)||state.reqDocs.some(d=>d.ID===h.DocID));
 const hostUnfinished=h=>h.Stage!=='done';
 const tcPlannerDocs=()=>(state?.reqDocs||[]).filter(doc=>aiJobOf(doc)||isAiActive(doc));
 const tcActiveOf={plan:()=>tcPlannerDocs().filter(isAiActive).length,host:()=>tcHostings().filter(hostUnfinished).length,gen:()=>genRunning().length,run:()=>activeScriptRuns().length};
@@ -2614,19 +2710,20 @@ function hostStatusText(h){
 }
 // 托管列表：每份需求一行（最近一次托管），显示阶段和归档位置，点开进入该需求的托管视图（进度、重试、放弃）。
 function tcShowHosting(){
-  aiDoc=null;closeHostLog();hostShown=null;
+  aiDoc=null;hostCase=null;closeHostLog();hostShown=null;
   $('#ai-drawer-doc').textContent='';
   $('#ai-drawer .panel-head strong').textContent='AI 托管';
   $('#ai-drawer').classList.remove('hidden');
   const all=tcHostings(),list=all.filter(h=>tcShown('host',hostUnfinished(h))).sort((a,b)=>String(b.UpdatedAt).localeCompare(String(a.UpdatedAt)));
-  $('#ai-drawer-body').innerHTML=`<div class="tc-list">${list.length?list.map(h=>{const doc=state.reqDocs.find(d=>d.ID===h.DocID),v=version(h.VersionID);
-    return `<button type="button" class="tc-row tc-host${h.Stage==='stopped'?' stopped':''}" data-tc-host="${esc(h.DocID)}"><span>${esc(doc.Title)}<small class="meta">${esc(v?.name||'已删除的版本')}：${esc(hostArchivePath(h).join(' / '))}</small></span><small>${esc(hostStatusText(h))}${h.Stage==='done'&&h.CaseIDs?.length?` · ${h.CaseIDs.length} 条`:''}${h.Execute&&Object.keys(h.Results||{}).length?` · ${hostRunText(hostRunStats(h))}`:''}</small></button>`}).join('')
-    :(all.length?tcEmptyHTML('host'):'<p class="meta">暂无托管任务。在「需求管理」里打开需求文档，点「AI 托管」发起。</p>')}</div>`;
+  $('#ai-drawer-body').innerHTML=`<div class="tc-list">${list.length?list.map(h=>{const doc=state.reqDocs.find(d=>d.ID===h.DocID),v=version(h.VersionID),where=isCaseHost(h)?`${h.CaseIDs?.length||0} 条用例`:hostArchivePath(h).join(' / ');
+    return `<button type="button" class="tc-row tc-host${h.Stage==='stopped'?' stopped':''}" ${isCaseHost(h)?`data-tc-host-cases="${esc(h.ID)}"`:`data-tc-host="${esc(h.DocID)}"`}><span>${esc(isCaseHost(h)?h.Label:doc.Title)}<small class="meta">${esc(v?.name||'已删除的版本')}：${esc(where)}</small></span><small>${esc(hostStatusText(h))}${h.Stage==='done'&&!isCaseHost(h)&&h.CaseIDs?.length?` · ${h.CaseIDs.length} 条`:''}${h.Execute&&Object.keys(h.Results||{}).length?` · ${hostRunText(hostRunStats(h))}`:''}</small></button>`}).join('')
+    :(all.length?tcEmptyHTML('host'):'<p class="meta">暂无托管任务。在「需求管理」里打开需求文档点「AI 托管」，或在「用例管理」里勾选用例、右键目录发起。</p>')}</div>`;
   $$('#ai-drawer-body [data-tc-host]').forEach(b=>b.onclick=()=>{const doc=state.reqDocs.find(d=>d.ID===b.dataset.tcHost);if(doc)openAiDrawer(doc,'host')});
+  $$('#ai-drawer-body [data-tc-host-cases]').forEach(b=>b.onclick=()=>openCaseHost({id:b.dataset.tcHostCases}));
   tcAttach('host');
 }
 function tcShowPlanner(){
-  aiDoc=null;closeHostLog();
+  aiDoc=null;hostCase=null;closeHostLog();
   $('#ai-drawer .panel-head strong').textContent='AI 设计';
   $('#ai-drawer-doc').textContent='';
   $('#ai-drawer').classList.remove('hidden');

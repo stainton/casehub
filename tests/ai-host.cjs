@@ -1,5 +1,6 @@
 // 「AI 托管」浏览器回归：网页只负责发起，托管由 CaseHub 服务端执行 —— 提交后关掉浏览器，评估 → 设计 → 放入用例评审 →
 // 自动评审通过 → 归档到 全部用例/产品/产品版本/需求 仍然完成；停在某一步时重新打开页面可以「重试这一步」。
+// 最后从用例管理（右键目录、勾选用例）发起托管：没有设计阶段，直接生成脚本 → 自动执行。
 // 只对临时 CASEHUB_STORE=memory 服务运行；脚本自带一个假的 auto-test 服务，同时充当 planner、generator 和 executor：
 //   CASEHUB_STORE=memory PORT=18081 CASEHUB_PLANNER_URL=http://127.0.0.1:4598 CASEHUB_GENERATOR_URL=http://127.0.0.1:4598 CASEHUB_EXECUTOR_URL=http://127.0.0.1:4598 go run .
 // 生成和执行任务一提交就完成：生成的脚本断言用例标题，标题含「错误」的执行失败，其余通过。
@@ -226,6 +227,68 @@ async function openHostDrawer(page,docId){
     assert.match(await page.locator(`#ai-drawer-body [data-tc-host="${doc2}"]`).innerText(),/已完成 · 3 条 · 通过 2 · 失败 1/);
     await page.locator('.tc-tab[data-tc="plan"]').click();
     assert.equal(await page.locator('#ai-drawer .panel-head strong').innerText(),'AI 设计','switching back restores the planner header');
+
+    // 用例管理里发起托管：右键目录 →「AI 托管」，没有设计阶段，直接生成脚本 → 自动执行；用例编号前缀匹配需求文档。
+    await page.locator('#ai-drawer-close').click();
+    const VN4=`用例托管 ${Date.now()}`,plannerJobs=submissions.filter(x=>x.kind==='job').length;
+    const {vid4,fid4}=await page.evaluate(async([vn,code])=>{
+      let out=await act('createVersion',{Name:vn,Blank:true});
+      const vid=out.state.versions.find(x=>x.name===vn).id;
+      out=await act('createFolder',{VersionID:vid,ParentID:'root',Name:'登录回归'});
+      const fid=out.state.folders.find(f=>f.VersionID===vid&&f.Name==='登录回归').ID;
+      for(const [id,title,steps] of [[`TC-${code}-AUTH-FUNC-101`,'登录成功','1. 登录'],[`TC-${code}-AUTH-FUNC-102`,'错误密码提示','1. 输错密码'],['CASE-NOSTEP','没有步骤','']])
+        await act('createCase',{VersionID:vid,FolderID:fid,CaseID:id,Title:title,Steps:steps});
+      return {vid4:vid,fid4:fid};
+    },[VN4,REQ_CODE]);
+    await page.locator('.page-tab[data-app="cases"]').click();
+    await page.evaluate(([v,f])=>setFocus({type:'folder',versionID:v,id:f}),[vid4,fid4]);
+    await page.locator(`.folder-row[data-version="${vid4}"][data-folder="${fid4}"]`).first().click({button:'right'});
+    await page.locator('#context-menu button',{hasText:'AI 托管'}).click();
+    await page.locator('#host-form').waitFor();
+    assert.match(await page.locator('#ai-drawer-body').innerText(),/直接为这 2 条用例生成自动化脚本[\s\S]*另外 1 条没有执行步骤/);
+    assert.equal(await page.locator('#host-form [name="product"]').count(),0,'nothing to file: no archive target');
+    await page.locator('#host-form [name="baseUrl"]').fill('http://127.0.0.1:4500');
+    await page.locator('#host-form [name="testSecret"]').fill('case-s3cret');
+    await page.locator('#host-form [name="withRun"]').check();
+    await page.locator('#host-form button[type="submit"]').click();
+    const caseHosting=async()=>(await api('/api/hostings')).hostings.filter(x=>x.Source==='cases'&&x.VersionID===vid4);
+    for(const end=Date.now()+40000;;){const [x]=await caseHosting();if(x&&['done','stopped'].includes(x.Stage)){h=x;break}if(Date.now()>end)throw Error('case hosting did not finish');await new Promise(r=>setTimeout(r,200))}
+    assert.equal(h.Stage,'done',h.Error);
+    assert.equal(h.Label,'登录回归');
+    assert.equal(submissions.filter(x=>x.kind==='job').length,plannerJobs,'hosting cases does not design');
+    const gen4=submissions.filter(x=>x.kind==='generator').at(-1).input;
+    assert.deepEqual(gen4.cases.map(c=>c.id),[`TC-${REQ_CODE}-AUTH-FUNC-101`,`TC-${REQ_CODE}-AUTH-FUNC-102`]);
+    assert.equal(gen4.cases[0].requirement,docId,'the case code picks its requirement');
+    assert.equal(gen4.requirements[0].id,docId);
+    assert.equal(gen4.context.testData.password,'case-s3cret');
+    assert.deepEqual(Object.values(h.Results).sort(),['failed','passed']);
+    assert.ok(!JSON.stringify(await api('/api/state')).includes('case-s3cret'),'the test password is never stored');
+    await page.waitForFunction(()=>document.querySelectorAll('.host-step.done').length===2);
+    assert.equal(await page.locator('.host-step').count(),2,'only generation and run');
+    assert.match(await page.locator('#ai-drawer-body').innerText(),/已完成：生成 2 个脚本，自动执行 通过 1 · 失败 1/);
+
+    // 勾选用例 → 批量栏「AI 托管」：只生成脚本。
+    await page.locator('#ai-drawer-close').click();
+    await page.locator(`.case-row[data-version="${vid4}"][data-case="TC-${REQ_CODE}-AUTH-FUNC-101"] .case-check`).first().check();
+    await page.locator('#bulk [data-bulk="host"]').click();
+    await page.locator('#host-form').waitFor();
+    assert.match(await page.locator('#ai-drawer-body').innerText(),/这 1 条用例[\s\S]*其中 1 条已有脚本，会重新生成/);
+    await page.locator('#host-form [name="withRun"]').uncheck();
+    await page.locator('#host-form button[type="submit"]').click();
+    await page.waitForFunction(()=>document.querySelector('#ai-drawer-body')?.textContent.includes('已完成：生成 1 个脚本'));
+    assert.equal(await page.locator('#bulk').isHidden(),true,'the selection is cleared once hosted');
+    const hs=await caseHosting();
+    assert.equal(hs.length,2,'a hosting of fewer cases keeps the folder one');
+    assert.equal(hs.find(x=>x.Label==='已选 1 条用例')?.Execute,false);
+    // 任务中心的「AI 托管」页签同样列出用例托管，点开回到它的托管视图。
+    await page.locator('#open-task-center').click();
+    await page.locator('.tc-tab[data-tc="host"]').click();
+    await page.locator('[data-tc-filter="done"]').click();
+    const crow=page.locator(`#ai-drawer-body [data-tc-host-cases="${h.ID}"]`);
+    assert.match(await crow.innerText(),/登录回归[\s\S]*2 条用例/);
+    await crow.click();
+    await page.waitForFunction(()=>document.querySelectorAll('.host-step.done').length===2);
+    assert.equal(await page.locator('#ai-drawer-doc').innerText(),`${VN4} · 登录回归`);
     assert.deepEqual(errors,[]);
     console.log('ai host ok');
   }finally{await browser.close();planner.close()}

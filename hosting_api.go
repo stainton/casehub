@@ -84,7 +84,8 @@ func (a *api) hostingRoutes(m *http.ServeMux) {
 			jsonOut(w, 500, map[string]string{"error": err.Error()})
 			return
 		}
-		jsonOut(w, 200, map[string]any{"enabled": a.hosting != nil, "hostings": st.Hostings})
+		// enabled: a requirement can be hosted (planner); cases: cases can be hosted from 用例管理 (generator).
+		jsonOut(w, 200, map[string]any{"enabled": a.hosting != nil && a.dispatcher.Enabled("planner"), "cases": a.hosting != nil && a.dispatcher.Enabled("generator"), "hostings": st.Hostings})
 	})
 	if a.hosting == nil {
 		return
@@ -103,6 +104,9 @@ func (a *api) hostingRoutes(m *http.ServeMux) {
 	m.HandleFunc("POST /api/hostings", func(w http.ResponseWriter, r *http.Request) {
 		var in struct {
 			DocID, VersionID, Product, ProductVersion, Author string
+			// Source "cases" hosts CaseIDs of VersionID (Label names them) from script generation on.
+			Source, Label string
+			CaseIDs       []string
 			// Generate / Execute add script generation and one automated run of each script; BaseURL is the
 			// system under test the scripts run against.
 			// (Named apart from Request.Generate, the generator body: JSON keys match case-insensitively.)
@@ -115,7 +119,7 @@ func (a *api) hostingRoutes(m *http.ServeMux) {
 			refuse(w, errors.New("无效的 JSON 请求"))
 			return
 		}
-		h, err := a.hosting.Begin(r.Context(), core.Hosting{DocID: in.DocID, VersionID: in.VersionID, Product: in.Product, ProductVersion: in.ProductVersion, Generate: in.Generate, Execute: in.Execute, BaseURL: in.BaseURL}, in.Request, in.Author)
+		h, err := a.hosting.Begin(r.Context(), core.Hosting{DocID: in.DocID, VersionID: in.VersionID, Product: in.Product, ProductVersion: in.ProductVersion, Source: in.Source, Label: in.Label, CaseIDs: in.CaseIDs, Generate: in.Generate, Execute: in.Execute, BaseURL: in.BaseURL}, in.Request, in.Author)
 		reply(w, h, err)
 	})
 	m.HandleFunc("POST /api/hostings/{id}/retry", func(w http.ResponseWriter, r *http.Request) {

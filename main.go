@@ -27,7 +27,7 @@ type api struct {
 	service *core.Service
 	// dispatcher owns the planner/generator/healer/executor tasks; nil in tests that only exercise the state API.
 	dispatcher *dispatch.Dispatcher
-	// hosting runs AI 托管; nil when the planner is not configured.
+	// hosting runs AI 托管; nil when neither the planner nor the generator is configured.
 	hosting *hosting.Runner
 }
 
@@ -206,7 +206,8 @@ func main() {
 		log.Fatal(err)
 	}
 	var hostingRunner *hosting.Runner
-	if plannerEnabled && dispatcher.Enabled("planner") {
+	// A requirement's hosting needs the planner; hosting cases from 用例管理 only the generator.
+	if plannerEnabled && dispatcher.Enabled("planner") || dispatcher.Enabled("generator") {
 		hostingRunner = hosting.New(svc, servicesForHosting{proxy: plannerProxy, dispatcher: dispatcher})
 		if err := hostingRunner.Start(context.Background()); err != nil {
 			log.Fatal(err)

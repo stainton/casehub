@@ -655,3 +655,160 @@ func TestHostingKeepsTheAccountAcrossARetryBeforeGeneration(t *testing.T) {
 		t.Fatal("the generator request lost the account")
 	}
 }
+
+// hostCases puts the generator result's three cases into the test version (one without steps, one of
+// another requirement) and gives the fixture's requirement the code their IDs carry.
+func (f *fixture) hostCases(t *testing.T) {
+	t.Helper()
+	ctx := context.Background()
+	must := func(a core.Action) {
+		if _, err := f.svc.Apply(ctx, a); err != nil {
+			t.Fatalf("%s: %v", a.Type, err)
+		}
+	}
+	must(core.Action{Type: "setReqDocCode", DocID: f.docID, Code: "LOGIN"})
+	for _, c := range []struct{ id, title, steps string }{
+		{"TC-LOGIN-AUTH-FUNC-001", "正确密码登录成功", "1. 登录"},
+		{"TC-LOGIN-AUTH-FUNC-002", "错误密码登录失败", "1. 输错密码"},
+		{"TC-LOGIN-PWD-FUNC-001", "邮箱找回密码", "1. 找回"},
+		{"CASE-NOSTEPS", "只有标题", ""},
+	} {
+		must(core.Action{Type: "createCase", VersionID: f.vid, FolderID: "root", CaseID: c.id, Title: c.title, Steps: c.steps})
+	}
+}
+
+func (f *fixture) caseHosting(t *testing.T, id string) core.Hosting {
+	t.Helper()
+	st, _ := f.svc.State(context.Background())
+	for _, h := range st.Hostings {
+		if h.ID == id {
+			return h
+		}
+	}
+	t.Fatal("no hosting")
+	return core.Hosting{}
+}
+
+func (f *fixture) waitCaseStage(t *testing.T, id, stage string) core.Hosting {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		h := f.caseHosting(t, id)
+		if h.Stage == stage {
+			return h
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("stage = %s (%s), want %s", h.Stage, h.Error, stage)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+func TestHostingCasesFromTheCaseTreeSkipsTheDesign(t *testing.T) {
+	f := setup(t)
+	defer f.runner.Close()
+	f.planner.disabled["planner"] = true // hosting cases needs no planner
+	f.hostCases(t)
+	ctx := context.Background()
+	req := hosting.Request{Generate: f.fullRequest().Generate}
+	ids := []string{"TC-LOGIN-AUTH-FUNC-001", "TC-LOGIN-AUTH-FUNC-002", "TC-LOGIN-PWD-FUNC-001", "CASE-NOSTEPS"}
+	h, err := f.runner.Begin(ctx, core.Hosting{Source: core.HostingFromCases, VersionID: f.vid, CaseIDs: ids, Label: "登录目录", Execute: true, BaseURL: "http://sut"}, req, "alice")
+	if err != nil || h.Stage != core.HostingGenerating || !h.Generate || h.DocID != "" || h.Label != "登录目录" {
+		t.Fatalf("begin: %+v %v", h, err)
+	}
+	if _, err := f.runner.Begin(ctx, core.Hosting{Source: core.HostingFromCases, VersionID: f.vid, CaseIDs: ids[:1], BaseURL: "http://sut"}, req, ""); err == nil || !strings.Contains(err.Error(), "正在被其他托管处理") {
+		t.Fatalf("a case in a running hosting must not be hosted twice: %v", err)
+	}
+	f.planner.finishKind(t, "generator", generatorResult(map[string]string{"TC-LOGIN-AUTH-FUNC-002": "deviation"}), false)
+	f.planner.mu.Lock()
+	gen := f.planner.sent["generator"][0]
+	n := len(f.planner.sent["planner"])
+	f.planner.mu.Unlock()
+	if n != 0 {
+		t.Fatalf("hosting cases must not design: %d planner tasks", n)
+	}
+	cases := gen["cases"].([]any)
+	if len(cases) != 3 || cases[0].(map[string]any)["requirement"] != f.docID || !strings.Contains(string(mustJSON(gen["requirements"])), "登录成功跳转首页") {
+		t.Fatalf("generator request must carry the cases with steps and their requirement: %v", gen)
+	}
+	if gen["casehubTask"].(map[string]any)["subject"] != "hosting:"+h.ID {
+		t.Fatalf("subject: %v", gen["casehubTask"])
+	}
+	f.planner.finishRuns(t, 3, map[string]string{"邮箱找回密码": "fail"})
+	h = f.waitCaseStage(t, h.ID, core.HostingDone)
+	if h.Generated != 3 || h.Results["TC-LOGIN-PWD-FUNC-001"] != "failed" || len(f.records(t)) != 3 {
+		t.Fatalf("hosting: %+v, %d records", h, len(f.records(t)))
+	}
+	st, _ := f.svc.State(ctx)
+	defect := false
+	for _, i := range st.Issues {
+		defect = defect || i.RequirementID == f.docID && strings.Contains(i.Title, "错误密码没有提示")
+	}
+	if !defect {
+		t.Fatal("a deviation must be filed against the case's requirement")
+	}
+
+	// Hosting the same cases again replaces the finished record; a requirement's hosting needs the planner.
+	again, err := f.runner.Begin(ctx, core.Hosting{Source: core.HostingFromCases, VersionID: f.vid, CaseIDs: ids, BaseURL: "http://sut"}, req, "")
+	if err != nil || again.Label != "3 条用例" || again.Execute || len(again.CaseIDs) != 3 {
+		t.Fatalf("again: %+v %v", again, err)
+	}
+	if st, _ = f.svc.State(ctx); len(st.Hostings) != 1 {
+		t.Fatalf("%d hosting records, want the new one only", len(st.Hostings))
+	}
+	if _, err := f.runner.Begin(ctx, core.Hosting{DocID: f.docID, VersionID: f.vid, Product: "P", ProductVersion: "1"}, f.request(), ""); err == nil || !strings.Contains(err.Error(), "planner") {
+		t.Fatalf("a requirement's hosting without a planner: %v", err)
+	}
+}
+
+func TestHostingCasesRefusesWhatItCannotScript(t *testing.T) {
+	f := setup(t)
+	defer f.runner.Close()
+	f.hostCases(t)
+	ctx := context.Background()
+	req := hosting.Request{Generate: f.fullRequest().Generate}
+	for name, h := range map[string]core.Hosting{
+		"没有执行步骤": {Source: core.HostingFromCases, VersionID: f.vid, CaseIDs: []string{"CASE-NOSTEPS"}, BaseURL: "http://sut"},
+		"不存在":    {Source: core.HostingFromCases, VersionID: f.vid, CaseIDs: []string{"CASE-GONE"}, BaseURL: "http://sut"},
+		"URL":    {Source: core.HostingFromCases, VersionID: f.vid, CaseIDs: []string{"TC-LOGIN-AUTH-FUNC-001"}},
+		"请选择":    {Source: core.HostingFromCases, VersionID: f.vid, BaseURL: "http://sut"},
+		"main":   {Source: core.HostingFromCases, VersionID: "main", CaseIDs: []string{"TC-LOGIN-AUTH-FUNC-001"}, BaseURL: "http://sut"},
+	} {
+		if _, err := f.runner.Begin(ctx, h, req, ""); err == nil || name != "main" && !strings.Contains(err.Error(), name) {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+	if _, err := f.runner.Begin(ctx, core.Hosting{Source: core.HostingFromCases, VersionID: f.vid, CaseIDs: []string{"TC-LOGIN-AUTH-FUNC-001"}, BaseURL: "http://sut"}, hosting.Request{}, ""); err == nil {
+		t.Error("hosting cases without the generator request must be refused")
+	}
+}
+
+func TestHostingCasesAsksForTheAccountAgainAfterARestart(t *testing.T) {
+	f := setup(t)
+	f.hostCases(t)
+	ctx := context.Background()
+	// A closed runner records the hosting but never runs it: the restart below loses the account the
+	// generator request carries before anything was submitted.
+	f.runner.Close()
+	h, err := f.runner.Begin(ctx, core.Hosting{Source: core.HostingFromCases, VersionID: f.vid, CaseIDs: []string{"TC-LOGIN-AUTH-FUNC-001"}, BaseURL: "http://sut"}, hosting.Request{Generate: f.fullRequest().Generate}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.start()
+	defer f.runner.Close()
+	if err := f.runner.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	h = f.waitCaseStage(t, h.ID, core.HostingStopped)
+	if h.FailedAt != core.HostingGenerating || !strings.Contains(h.Error, "重新填写") {
+		t.Fatalf("stopped: %+v", h)
+	}
+	if _, err := f.runner.Retry(ctx, h.ID, nil); err == nil || !strings.Contains(err.Error(), "重新填写") {
+		t.Fatalf("retry without the account: %v", err)
+	}
+	if _, err := f.runner.Retry(ctx, h.ID, &hosting.Request{Generate: f.fullRequest().Generate}); err != nil {
+		t.Fatal(err)
+	}
+	f.planner.finishKind(t, "generator", generatorResult(nil), false)
+	f.waitCaseStage(t, h.ID, core.HostingDone)
+}
