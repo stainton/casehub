@@ -211,9 +211,10 @@ type PendingCase struct {
 // by (VersionID, CaseID) — the 自动化管理 page derives the script tree from the
 // case's own folder, so the two trees stay identically named and structured
 // without a second folder hierarchy to keep in sync. A script belongs to the
-// version its case lives in: it is not copied when a version is created and not
-// carried by sync/merge, because a generated spec is only meaningful for the
-// case text it was generated from, and it is deleted with its case or version.
+// version its case lives in and travels with the case exactly as the case does:
+// copied when a version is created or a new case is pulled, replaced by the
+// newer side on sync and merge (see copyScript), and deleted with its case or
+// version. It is a copy per version, never shared between versions.
 type Script struct {
 	// ID is stable per (VersionID, CaseID) so regenerating replaces in place.
 	ID, VersionID, CaseID string
@@ -234,6 +235,36 @@ type Script struct {
 	FromPreconditions, FromSteps, FromExpected string
 	JobID, CreatedBy, UpdatedBy                string
 	CreatedAt, UpdatedAt                       time.Time
+}
+
+// copyScript carries a case's script from one version to another the way the
+// case itself travels: a version that has none gets a copy, and one that has an
+// older one is overwritten, the replaced script kept as an archived version. A
+// script that is not newer than the destination's is left alone, so an old copy
+// never undoes a regeneration made on the other side. It reports whether the
+// destination changed.
+func copyScript(s *State, fromVersion, toVersion, caseID string) bool {
+	src, _ := scriptAt(s, fromVersion, caseID)
+	if src == nil {
+		return false
+	}
+	n := *src
+	n.VersionID = toVersion
+	n.Deviations = append([]RiskNote(nil), src.Deviations...)
+	n.MissingInputs = append([]string(nil), src.MissingInputs...)
+	dst, _ := scriptAt(s, toVersion, caseID)
+	if dst == nil {
+		n.ID = ID()
+		s.Scripts = append(s.Scripts, n)
+		return true
+	}
+	if !src.UpdatedAt.After(dst.UpdatedAt) {
+		return false
+	}
+	archiveScript(s, dst)
+	n.ID, n.CreatedBy, n.CreatedAt = dst.ID, dst.CreatedBy, dst.CreatedAt
+	*dst = n
+	return true
 }
 
 // ScriptVersion is a superseded copy of a Script. Regenerating or healing a
@@ -864,6 +895,7 @@ func createVersion(s *State, a Action) error {
 			n.CreatedBy = a.Author
 			n.UpdatedBy = a.Author
 			s.Cases = append(s.Cases, n)
+			copyScript(s, "main", v.ID, c.ID)
 		}
 	}
 	return nil
@@ -1422,6 +1454,14 @@ func syncVersion(s *State, a Action) ([]string, error) {
 			bc.Dirty = false
 		}
 	}
+	// Scripts follow their cases, whether or not the case text itself changed.
+	for _, mc := range mainCases {
+		if mc.VersionID == "main" && (wanted == nil || wanted[mc.ID]) {
+			if bc, _ := caseAt(s, v.ID, mc.ID); bc != nil {
+				copyScript(s, "main", v.ID, mc.ID)
+			}
+		}
+	}
 	v.BaseMainRevision = s.MainRevision
 	return conflicts, nil
 }
@@ -1487,6 +1527,7 @@ func mergeVersion(s *State, a Action) ([]string, error) {
 	for _, c := range s.Cases {
 		if c.VersionID == v.ID {
 			archiveCaseActivity(s, c)
+			copyScript(s, v.ID, "main", c.ID)
 		}
 	}
 	v.BaseMainRevision = s.MainRevision
@@ -1675,6 +1716,13 @@ func mergeFolder(s *State, a Action) ([]string, error) {
 	for _, c := range branchCases {
 		mergeCaseInto(s, c, s.MainRevision, resolvedFolders[c.FolderID], a.Author)
 	}
+	for _, c := range s.Cases {
+		if c.VersionID == v.ID && inSubtree[c.FolderID] {
+			if m, _ := caseAt(s, "main", c.ID); m != nil {
+				copyScript(s, v.ID, "main", c.ID)
+			}
+		}
+	}
 	return nil, nil
 }
 
@@ -1730,13 +1778,25 @@ func mergeCases(s *State, a Action) ([]string, int, error) {
 		}
 	}
 	if len(toMerge) == 0 {
-		return nil, archivedCases, nil
+		return nil, archivedCases + carryScripts(s, v.ID, a.CaseIDs), nil
 	}
 	s.MainRevision++
 	for _, c := range toMerge {
 		mergeCaseInto(s, c, s.MainRevision, target.ID, a.Author)
 	}
-	return nil, len(toMerge) + archivedCases, nil
+	return nil, len(toMerge) + archivedCases + carryScripts(s, v.ID, a.CaseIDs), nil
+}
+
+// carryScripts copies the scripts of the given branch cases to mainline, for the cases mainline holds,
+// and returns how many mainline scripts changed.
+func carryScripts(s *State, versionID string, caseIDs []string) int {
+	n := 0
+	for _, id := range caseIDs {
+		if m, _ := caseAt(s, "main", id); m != nil && copyScript(s, versionID, "main", id) {
+			n++
+		}
+	}
+	return n
 }
 
 // deleteCases removes one or more cases (single-row delete and bulk delete

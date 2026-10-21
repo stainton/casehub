@@ -1967,6 +1967,26 @@ $$('.page-tab').forEach(b=>b.onclick=()=>setPage(b.dataset.app));
 // 目录结构直接取用例当前所在的文件夹，所以两棵树天然同名同构，用例移动/改名后脚本树
 // 自动跟随。树上只显示已经生成过脚本的用例，空目录不出现。
 let autoFocus=null, autoSidebarWidth=null, scriptEdit=null;
+// 脚本树里勾选的脚本，键是 "版本ID:用例ID"。
+const scriptSelected=new Set();
+const scriptKey=(vid,caseID)=>`${vid}:${caseID}`;
+async function deleteScriptsOf(vid,ids,what){
+  if(!ids.length)return toast('没有可删除的脚本',true);
+  if(!confirm(`确定删除${what}（${ids.length} 个脚本）？只删除这个版本里的脚本，用例本身不受影响，可以重新生成。`))return;
+  try{await act('deleteScripts',{VersionID:vid,CaseIDs:ids});ids.forEach(id=>scriptSelected.delete(scriptKey(vid,id)));if(autoFocus&&autoFocus.versionID===vid&&(autoFocus.type==='script'?ids.includes(autoFocus.id):!scriptCaseIdsIn(vid,autoFocus.id).length))autoFocus=null;renderScriptTree();renderAutoFocus();toast('脚本已删除')}catch{}
+}
+function updateScriptBulk(){
+  const bar=$('#script-bulk');if(!bar)return;
+  const n=scriptSelected.size;bar.classList.toggle('hidden',!n);$('#script-bulk-count').textContent=`已选 ${n} 个脚本`;
+}
+async function deleteSelectedScripts(){
+  const byVersion=new Map();
+  for(const k of scriptSelected){const i=k.indexOf(':');const v=k.slice(0,i),c=k.slice(i+1);if(!byVersion.has(v))byVersion.set(v,[]);byVersion.get(v).push(c)}
+  const total=scriptSelected.size;
+  if(!total||!confirm(`确定删除所选的 ${total} 个脚本？用例本身不受影响，可以重新生成。`))return;
+  try{for(const [v,ids] of byVersion){await act('deleteScripts',{VersionID:v,CaseIDs:ids});ids.forEach(id=>scriptSelected.delete(scriptKey(v,id)))}autoFocus=null;toast('脚本已删除')}catch{}
+  renderScriptTree();renderAutoFocus();
+}
 const expandedScriptCode=new Set();
 const scriptRunResults=new Map();
 const SCRIPT_RUN_TERMINAL=['succeeded','failed','cancelled','completed'];
@@ -2027,14 +2047,14 @@ function scriptTreeHTML(vid){
   function node(f,depth){
     if(!has(f))return '';
     const own=byFolder.get(f.ID)||[],children=fs.filter(x=>x.ParentID===f.ID);
-    return `<div class="tree-row folder-row${autoFocus?.type==='folder'&&autoFocus.versionID===vid&&autoFocus.id===f.ID?' active':''}" style="padding-left:${8+depth*17}px" data-script-folder="${f.ID}" data-script-version="${vid}"><span class="chev">▾</span><span>📁</span><span class="label">${esc(f.Name)}</span></div><div>${own.map(s=>scriptRow(s,depth+1)).join('')}${children.map(ch=>node(ch,depth+1)).join('')}</div>`;
+    return `<div class="tree-row folder-row${autoFocus?.type==='folder'&&autoFocus.versionID===vid&&autoFocus.id===f.ID?' active':''}" style="padding-left:${8+depth*17}px" data-script-folder="${f.ID}" data-script-version="${vid}"><input class="script-folder-check" type="checkbox" aria-label="选择目录下全部脚本"><span class="chev">▾</span><span>📁</span><span class="label">${esc(f.Name)}</span></div><div>${own.map(s=>scriptRow(s,depth+1)).join('')}${children.map(ch=>node(ch,depth+1)).join('')}</div>`;
   }
   const roots=fs.filter(f=>!f.ParentID||!fs.some(x=>x.ID===f.ParentID));
   return roots.map(r=>node(r,0)).join('');
 }
 function scriptRow(s,depth){
   const label=`${s.CaseID} ${s.Title||caseOfScript(s)?.Title||''}`;
-  return `<div class="tree-row case-row${autoFocus?.type==='script'&&autoFocus.versionID===s.VersionID&&autoFocus.id===s.CaseID?' active':''}" style="padding-left:${8+depth*17}px" data-script-case="${s.CaseID}" data-script-version="${s.VersionID}" title="${esc(label)}"><span class="label">${esc(label)}</span>${scriptBadges(s)}</div>`;
+  return `<div class="tree-row case-row${autoFocus?.type==='script'&&autoFocus.versionID===s.VersionID&&autoFocus.id===s.CaseID?' active':''}" style="padding-left:${8+depth*17}px" data-script-case="${s.CaseID}" data-script-version="${s.VersionID}" title="${esc(label)}"><input class="script-check" type="checkbox" aria-label="选择 ${esc(s.CaseID)}"${scriptSelected.has(scriptKey(s.VersionID,s.CaseID))?' checked':''}><span class="label">${esc(label)}</span>${scriptBadges(s)}</div>`;
 }
 function renderScriptTree(){
   const box=$('#script-tree');
@@ -2042,7 +2062,7 @@ function renderScriptTree(){
   const withScripts=state.versions.filter(v=>scriptsIn(v.id).length);
   box.innerHTML=withScripts.map(v=>`<div class="version" data-version="${v.id}"><div class="version-title"><span class="chev">⌄</span><span>${esc(v.name)}</span><span class="badge">${scriptsIn(v.id).length} 个脚本</span></div><div class="version-body">${scriptTreeHTML(v.id)}</div></div>`).join('')
     ||'<p class="meta script-tree-empty">还没有生成脚本。在「用例管理」里右键目录或用例，选择「脚本生成」，生成结果会自动同步到这里。</p>';
-  bindScriptTree(box);
+  bindScriptTree(box);updateScriptBulk();
 }
 function bindScriptTree(root){
   root.querySelectorAll('.version-title').forEach(e=>{
@@ -2054,10 +2074,14 @@ function bindScriptTree(root){
     const key=`script:${e.dataset.scriptVersion}:${e.dataset.scriptFolder}`;
     if(closedFolders.has(key))e.classList.add('closed');
     e.querySelector('.chev').onclick=x=>{x.stopPropagation();const closed=e.classList.toggle('closed');closed?closedFolders.add(key):closedFolders.delete(key)};
+    const fcheck=e.querySelector('.script-folder-check'),fids=scriptCaseIdsIn(e.dataset.scriptVersion,e.dataset.scriptFolder);
+    fcheck.checked=fids.length>0&&fids.every(id=>scriptSelected.has(scriptKey(e.dataset.scriptVersion,id)));
+    fcheck.onclick=x=>{x.stopPropagation();fids.forEach(id=>x.target.checked?scriptSelected.add(scriptKey(e.dataset.scriptVersion,id)):scriptSelected.delete(scriptKey(e.dataset.scriptVersion,id)));renderScriptTree()};
     e.onclick=x=>{if(x.target.closest('.chev'))return;setAutoFocus({type:'folder',versionID:e.dataset.scriptVersion,id:e.dataset.scriptFolder})};
     e.oncontextmenu=x=>menu(x,scriptFolderMenu(e.dataset.scriptVersion,e.dataset.scriptFolder));
   });
   root.querySelectorAll('[data-script-case]').forEach(e=>{
+    e.querySelector('.script-check').onclick=x=>{x.stopPropagation();const k=scriptKey(e.dataset.scriptVersion,e.dataset.scriptCase);x.target.checked?scriptSelected.add(k):scriptSelected.delete(k);renderScriptTree()};
     e.onclick=()=>setAutoFocus({type:'script',versionID:e.dataset.scriptVersion,id:e.dataset.scriptCase});
     e.oncontextmenu=x=>menu(x,scriptMenu(e.dataset.scriptVersion,e.dataset.scriptCase));
   });
@@ -2074,14 +2098,14 @@ function scriptFolderMenu(vid,folderId){
   return [['查看详情',()=>setAutoFocus({type:'folder',versionID:vid,id:folderId})],
     [`重新生成（${ids.length}）`,()=>ids.length?startGeneration(vid,ids,`重新生成 · ${state.folders.find(x=>x.VersionID===vid&&x.ID===folderId)?.Name||''}`):toast('该目录下没有脚本',true)],
     ['在用例管理中打开',()=>{setPage('cases');setFocus({type:'folder',versionID:vid,id:folderId})}],
-    ['删除目录下的脚本',()=>{if(ids.length&&confirm(`确定删除该目录下的 ${ids.length} 个脚本？用例本身不受影响，可以重新生成。`))act('deleteScripts',{VersionID:vid,CaseIDs:ids}).then(()=>{if(autoFocus?.type==='script')autoFocus=null;toast('脚本已删除')}).catch(()=>{})},'danger']];
+    ['删除目录下的脚本',()=>deleteScriptsOf(vid,ids,'该目录下的脚本'),'danger']];
 }
 function scriptMenu(vid,caseID){
   return [['查看详情',()=>setAutoFocus({type:'script',versionID:vid,id:caseID})],
     ['重新生成',()=>startGeneration(vid,[caseID],caseID)],
     [hasHealing(vid,caseID)?'修复中 · 查看进度':'修复脚本',()=>startHealing(vid,caseID),'',!scriptFor(vid,caseID)?.Code],
     ['在用例管理中打开',()=>openCaseFromScript(vid,caseID)],
-    ['删除脚本',()=>{if(confirm('确定删除这个脚本？用例本身不受影响，可以重新生成。'))act('deleteScripts',{VersionID:vid,CaseIDs:[caseID]}).then(()=>{if(autoFocus?.id===caseID)autoFocus=null;toast('脚本已删除')}).catch(()=>{})},'danger']];
+    ['删除脚本',()=>deleteScriptsOf(vid,[caseID],'这个脚本'),'danger']];
 }
 function openCaseFromScript(vid,caseID){
   if(!state.cases.some(c=>c.VersionID===vid&&c.ID===caseID))return toast('对应用例已不存在',true);
@@ -2146,7 +2170,8 @@ function renderAutoFocus(){
     const ids=scriptCaseIdsIn(f.VersionID,f.ID),scripts=ids.map(id=>scriptFor(f.VersionID,id));
     const regenerating=hasGenerationForCases(f.VersionID,ids);
     $('#auto-empty').classList.add('hidden');box.classList.remove('hidden');
-    box.innerHTML=`<div class="detail-head"><div><div class="eyebrow">脚本目录 · ${esc(version(f.VersionID)?.name||'')}</div><h1>📁 ${esc(f.Name)}</h1></div><div class="detail-actions"><button id="auto-folder-regen"${ids.length?'':' disabled'} class="${regenerating?'ai-running':''}">${regenerating?'重新生成中':'重新生成全部'}</button></div></div><div class="card meta-grid"><span>脚本 <b>${ids.length}</b></span><span>已生成 <b>${scripts.filter(s=>s.Status!=='blocked').length}</b></span><span>受阻 <b>${scripts.filter(s=>s.Status==='blocked').length}</b></span><span>已过时 <b>${scripts.filter(scriptStale).length}</b></span></div>`;
+    box.innerHTML=`<div class="detail-head"><div><div class="eyebrow">脚本目录 · ${esc(version(f.VersionID)?.name||'')}</div><h1>📁 ${esc(f.Name)}</h1></div><div class="detail-actions"><button id="auto-folder-regen"${ids.length?'':' disabled'} class="${regenerating?'ai-running':''}">${regenerating?'重新生成中':'重新生成全部'}</button><button id="auto-folder-delete" class="secondary danger"${ids.length?'':' disabled'}>删除目录下的脚本</button></div></div><div class="card meta-grid"><span>脚本 <b>${ids.length}</b></span><span>已生成 <b>${scripts.filter(s=>s.Status!=='blocked').length}</b></span><span>受阻 <b>${scripts.filter(s=>s.Status==='blocked').length}</b></span><span>已过时 <b>${scripts.filter(scriptStale).length}</b></span></div>`;
+    $('#auto-folder-delete').onclick=()=>deleteScriptsOf(f.VersionID,ids,`目录「${f.Name}」下的脚本`);
     const btn=$('#auto-folder-regen');
     if(btn)btn.onclick=()=>{if(regenerating)openGenerationProgress(f.VersionID,ids);else startGeneration(f.VersionID,ids,`重新生成 · ${f.Name}`)};
     return;
@@ -2167,11 +2192,12 @@ function renderAutoFocus(){
   const runCard=run?`<div class="card"><h3>脚本运行</h3><p class="meta">${run.status==='completed'?'已完成并保存为测试记录':esc(run.stage||run.status||'运行中')}</p><p class="drawer-actions"><button type="button" class="secondary" id="script-run-progress">查看执行进度</button></p>${run.result?`<div id="script-run-markdown"></div><p class="drawer-actions"><button type="button" class="secondary" id="script-run-download">下载 Markdown 测试记录</button></p>`:''}</div>`:'';
   const lastRun=[...state.records].filter(record=>record.VersionID===s.VersionID&&record.CaseID===s.CaseID&&record.Submitted).sort((a,b)=>String(b.UpdatedAt||b.CreatedAt).localeCompare(String(a.UpdatedAt||a.CreatedAt)))[0];
   const infoCard=`<div class="card script-info-card"><div class="meta-grid"><span>状态 <b>${scriptStatusName(s)}${stale?' · 已过时':''}</b></span><span>文件 <b>${esc(s.FileName)}</b></span><span>脚本版本 <b>r${s.Revision||0}</b></span><span>代码指纹 <b>${scriptFingerprint(s.Code||'')}</b></span><span>更新时间 <b>${fmt(s.UpdatedAt)}</b></span><span>生成者 <b>${esc(s.UpdatedBy||'—')}</b></span><span>最后执行时间 <b>${lastRun?fmt(lastRun.UpdatedAt||lastRun.CreatedAt):'未执行'}</b></span><span>最后执行结果 <b>${lastRun?resultName(lastRun.Result):'未执行'}</b></span></div>${s.Summary&&!blocked?`<div class="script-summary"><h3>脚本验证的内容</h3><p>${esc(s.Summary)}</p></div>`:''}</div>`;
-  box.innerHTML=`<div class="detail-head"><div><div class="eyebrow">${esc(s.CaseID)} · ${esc(version(s.VersionID)?.name||'')}</div><h1>${esc(s.Title||c?.Title||s.CaseID)}</h1></div><div class="detail-actions"><button class="secondary" id="script-open-case">查看用例</button>${blocked?'':`<button id="script-run">运行脚本</button>`}<button id="script-heal" class="${healing?'ai-running':'secondary'}"${s.Code?'':' disabled'}>${healing?'修复中 · 查看进度':'修复脚本'}</button><button id="script-regen" class="${regenerating?'ai-running':''}">${regenerating?'重新生成中':'重新生成'}</button></div></div>${infoCard}${staleHint}${deviations}${body}${scriptHistoryHTML(s)}${runCard}`;
+  box.innerHTML=`<div class="detail-head"><div><div class="eyebrow">${esc(s.CaseID)} · ${esc(version(s.VersionID)?.name||'')}</div><h1>${esc(s.Title||c?.Title||s.CaseID)}</h1></div><div class="detail-actions"><button class="secondary" id="script-open-case">查看用例</button>${blocked?'':`<button id="script-run">运行脚本</button>`}<button id="script-heal" class="${healing?'ai-running':'secondary'}"${s.Code?'':' disabled'}>${healing?'修复中 · 查看进度':'修复脚本'}</button><button id="script-regen" class="${regenerating?'ai-running':''}">${regenerating?'重新生成中':'重新生成'}</button><button id="script-delete" class="secondary danger">删除脚本</button></div></div>${infoCard}${staleHint}${deviations}${body}${scriptHistoryHTML(s)}${runCard}`;
   $$('#auto-detail [data-script-version-copy]').forEach(b=>b.onclick=()=>{const v=state.scriptVersions.find(x=>x.ID===b.dataset.scriptVersionCopy);if(v)navigator.clipboard?.writeText(v.Code).then(()=>toast('已复制历史版本代码'),()=>toast('复制失败',true))});
   $('#script-open-case').onclick=()=>openCaseFromScript(s.VersionID,s.CaseID);
   const regen=()=>{if(regenerating)openGenerationProgress(s.VersionID,[s.CaseID]);else startGeneration(s.VersionID,[s.CaseID],s.CaseID)};
   $('#script-regen').onclick=regen;
+  $('#script-delete').onclick=()=>deleteScriptsOf(s.VersionID,[s.CaseID],'这个脚本');
   $('#script-heal').onclick=()=>startHealing(s.VersionID,s.CaseID);
 	$('#script-run')?.addEventListener('click',()=>runScriptModal(s));
   $('#script-run-progress')?.addEventListener('click',()=>openScriptRunProgress(run.jobId));
@@ -2220,6 +2246,8 @@ function setAutoSidebarCollapsed(collapsed){
   updateAutoEmptyHint();
 }
 $('#auto-collapse').onclick=()=>setAutoSidebarCollapsed(true);
+$('#script-bulk-delete').onclick=deleteSelectedScripts;
+$('#script-bulk-clear').onclick=()=>{scriptSelected.clear();renderScriptTree()};
 $('#auto-expand').onclick=$('#auto-empty-expand').onclick=()=>setAutoSidebarCollapsed(false);
 
 // ---- 脚本生成抽屉（对接 auto-test generator HTTP 服务）------------------------
