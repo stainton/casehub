@@ -275,11 +275,13 @@ func reorganizeMainline(s *State, a Action) error {
 	}
 	for i := range s.Scripts {
 		if n, ok := renamed(s.Scripts[i].VersionID, s.Scripts[i].CaseID); ok {
+			s.Scripts[i].FileName = renamedSpecFile(s.Scripts[i].FileName, s.Scripts[i].CaseID, n)
 			s.Scripts[i].CaseID = n
 		}
 	}
 	for i := range s.ScriptVersions {
 		if n, ok := renamed(s.ScriptVersions[i].VersionID, s.ScriptVersions[i].CaseID); ok {
+			s.ScriptVersions[i].FileName = renamedSpecFile(s.ScriptVersions[i].FileName, s.ScriptVersions[i].CaseID, n)
 			s.ScriptVersions[i].CaseID = n
 		}
 	}
@@ -345,6 +347,16 @@ func checkScopeLimits(s *State, scope string, sc *ReorgScope) error {
 
 // pruneEmptyMainFolders deletes every mainline folder (but the root) with no case anywhere beneath it — the old
 // version-named folders once their cases have moved out.
+// renamedSpecFile keeps a script's default file name (<case ID>.spec.ts, what saveScript uses when the generator
+// gave none) in step with its case. The automation tree itself needs nothing more: it files each script under
+// its case's folder, so the script moves with the case. A name the generator chose is left alone.
+func renamedSpecFile(fileName, oldID, newID string) string {
+	if fileName == oldID+".spec.ts" {
+		return newID + ".spec.ts"
+	}
+	return fileName
+}
+
 func pruneEmptyMainFolders(s *State) {
 	parent, used := map[string]string{}, map[string]bool{"root": true}
 	for _, f := range s.Folders {

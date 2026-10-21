@@ -83,7 +83,18 @@ func TestReorganizeMainlineRebuildsFoldersAndRenamesCases(t *testing.T) {
 	st := apply(t, svc, core.Action{Type: "archiveVersion", VersionID: branchID(t, st0(t, svc), "V1")})
 	st = apply(t, svc, core.Action{Type: "archiveVersion", VersionID: branchID(t, st, "V2")})
 	before := st.MainRevision
+	apply(t, svc, core.Action{Type: "saveScript", VersionID: "main", CaseID: v1, ScriptCode: "test('x',()=>{})"})
 	st = apply(t, svc, core.Action{Type: "reorganizeMainline", Reorganize: plan})
+	// The automation tree files a script under its case's folder, so the script follows the case and its default file name.
+	scripts := 0
+	for _, sc := range st.Scripts {
+		if sc.VersionID == "main" && sc.CaseID == "TC-AIGC-ASYNC-FUNC-001" && sc.FileName == sc.CaseID+".spec.ts" {
+			scripts++
+		}
+	}
+	if scripts != 1 {
+		t.Fatalf("script of %s did not follow the case (%d)", v1, scripts)
+	}
 
 	expect := func(st core.State, want map[string]string) {
 		t.Helper()
