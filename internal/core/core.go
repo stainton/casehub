@@ -150,16 +150,23 @@ type Issue struct {
 // KnowledgeFolder / KnowledgeDoc: the knowledge base holds hand-written
 // constraints and supplementary information as markdown documents in a folder
 // tree, the same shape as requirement documents. Product defects belong to
-// Issue, not here.
+// Issue, not here. Its top level is the global library (knowledgeRoot) plus one
+// library per mainline product, kept in step by syncProductKnowledge.
 type KnowledgeFolder struct {
 	ID, ParentID, Name, CreatedBy string
 	CreatedAt                     time.Time
+	// Product is the mainline folder (a child of 全部用例) a product library
+	// stands for; empty for every other folder. Its name follows that folder.
+	Product string
 }
 
 type KnowledgeDoc struct {
 	ID, FolderID, Title, Content string
 	CreatedBy, UpdatedBy         string
 	CreatedAt, UpdatedAt         time.Time
+	// Generated marks a product library's case-tree document: it is rebuilt
+	// from mainline and cannot be edited or deleted by hand.
+	Generated bool
 }
 
 // LegacyKnowledgeItem is the flat entry an earlier version stored. It is only
@@ -568,9 +575,10 @@ func (s *Service) State(ctx context.Context) (State, error) {
 		err = s.repo.Save(ctx, st)
 	}
 	normalizeState(&st)
+	synced := err == nil && syncProductKnowledge(&st, "system")
 	if changed, migrationErr := s.migrateRecordImages(ctx, &st); migrationErr != nil {
 		return State{}, migrationErr
-	} else if changed {
+	} else if changed || synced {
 		if err = s.repo.Save(ctx, st); err != nil {
 			return State{}, err
 		}
@@ -751,6 +759,7 @@ func (s *Service) Apply(ctx context.Context, a Action) (Result, error) {
 	if err != nil {
 		return Result{State: st}, err
 	}
+	syncProductKnowledge(&st, a.Author)
 	if err = s.repo.Save(ctx, st); err != nil {
 		return Result{}, err
 	}
@@ -2350,7 +2359,10 @@ func ensureKnowledge(s *State) {
 		s.KnowledgeDocs = []KnowledgeDoc{}
 	}
 	if f, _ := knowledgeFolderAt(s, knowledgeRoot); f == nil {
-		s.KnowledgeFolders = append([]KnowledgeFolder{{ID: knowledgeRoot, Name: "全部知识", CreatedBy: "system", CreatedAt: now()}}, s.KnowledgeFolders...)
+		s.KnowledgeFolders = append([]KnowledgeFolder{{ID: knowledgeRoot, Name: "全局库", CreatedBy: "system", CreatedAt: now()}}, s.KnowledgeFolders...)
+	} else if f.Name == "全部知识" {
+		// The root used to hold everything; with product libraries beside it, it is the global library.
+		f.Name = "全局库"
 	}
 	for _, item := range s.KnowledgeItems {
 		folderID, name := "kb-constraint", "约束"
@@ -2384,6 +2396,9 @@ func renameKnowledgeFolder(s *State, a Action) error {
 	if f == nil {
 		return errors.New("文件夹不存在")
 	}
+	if f.Product != "" {
+		return errors.New("产品库的名称跟随主线产品目录，不能单独修改")
+	}
 	if strings.TrimSpace(a.Name) == "" {
 		return errors.New("文件夹名称不能为空")
 	}
@@ -2398,6 +2413,9 @@ func deleteKnowledgeFolder(s *State, a Action) error {
 	}
 	if f.ID == knowledgeRoot {
 		return errors.New("不能删除根目录")
+	}
+	if f.Product != "" {
+		return errors.New("产品库跟随主线产品目录，不能删除")
 	}
 	for _, x := range s.KnowledgeFolders {
 		if x.ParentID == f.ID {
@@ -2441,6 +2459,9 @@ func editKnowledgeDoc(s *State, a Action) error {
 	if d == nil {
 		return errors.New("知识库文档不存在")
 	}
+	if d.Generated {
+		return errors.New("产品用例库文档由主线自动生成，不能手工编辑")
+	}
 	if err := validateKnowledgeDoc(a); err != nil {
 		return err
 	}
@@ -2450,9 +2471,12 @@ func editKnowledgeDoc(s *State, a Action) error {
 }
 
 func deleteKnowledgeDoc(s *State, a Action) error {
-	_, i := knowledgeDocAt(s, a.DocID)
-	if i < 0 {
+	d, i := knowledgeDocAt(s, a.DocID)
+	if d == nil {
 		return errors.New("知识库文档不存在")
+	}
+	if d.Generated {
+		return errors.New("产品用例库文档由主线自动生成，不能删除")
 	}
 	s.KnowledgeDocs = append(s.KnowledgeDocs[:i], s.KnowledgeDocs[i+1:]...)
 	return nil

@@ -1869,11 +1869,13 @@ const kbFolder=id=>state.knowledgeFolders.find(f=>f.ID===id);
 const kbChildren=id=>state.knowledgeFolders.filter(f=>f.ParentID===id);
 const kbDocsIn=id=>state.knowledgeDocs.filter(d=>d.FolderID===id);
 const kbDoc=id=>state.knowledgeDocs.find(d=>d.ID===id);
-const kbRoots=()=>state.knowledgeFolders.filter(f=>!f.ParentID||!state.knowledgeFolders.some(x=>x.ID===f.ParentID));
+// 顶层：全局库（kb-root）在最前，其后是每个主线产品（「全部用例」下的一级目录）各一个产品库。
+const kbRoots=()=>state.knowledgeFolders.filter(f=>!f.ParentID||!state.knowledgeFolders.some(x=>x.ID===f.ParentID)).sort((a,b)=>(b.ID==='kb-root')-(a.ID==='kb-root'));
+const kbFolderIcon=f=>f.ID==='kb-root'?'🌐':f.Product?'📦':'📁';
 function kbDescendants(f){const out=[];(function walk(id){kbChildren(id).forEach(x=>{out.push(x.ID);walk(x.ID)})})(f.ID);return out}
 function kbTreeHTML(){
-  const docRow=(d,depth)=>`<div class="tree-row case-row${kbFocus?.type==='doc'&&kbFocus.id===d.ID?' active':''}" style="padding-left:${8+depth*17}px" data-kb-doc="${esc(d.ID)}"><span class="label">📄 ${esc(d.Title)}</span></div>`;
-  const node=(f,depth)=>`<div class="tree-row folder-row${kbFocus?.type==='folder'&&kbFocus.id===f.ID?' active':''}" style="padding-left:${8+depth*17}px" data-kb-folder="${esc(f.ID)}"><span class="chev">▾</span><span>📁</span><span class="label">${esc(f.Name)}</span></div><div>${kbDocsIn(f.ID).map(d=>docRow(d,depth+1)).join('')}${kbChildren(f.ID).map(c=>node(c,depth+1)).join('')}</div>`;
+  const docRow=(d,depth)=>`<div class="tree-row case-row${kbFocus?.type==='doc'&&kbFocus.id===d.ID?' active':''}" style="padding-left:${8+depth*17}px" data-kb-doc="${esc(d.ID)}"><span class="label">${d.Generated?'🗂️':'📄'} ${esc(d.Title)}</span></div>`;
+  const node=(f,depth)=>`<div class="tree-row folder-row${kbFocus?.type==='folder'&&kbFocus.id===f.ID?' active':''}" style="padding-left:${8+depth*17}px" data-kb-folder="${esc(f.ID)}"><span class="chev">▾</span><span>${kbFolderIcon(f)}</span><span class="label">${esc(f.Name)}</span></div><div>${kbDocsIn(f.ID).map(d=>docRow(d,depth+1)).join('')}${kbChildren(f.ID).map(c=>node(c,depth+1)).join('')}</div>`;
   return kbRoots().map(r=>node(r,0)).join('')||'<p class="meta">暂无知识库文档</p>';
 }
 function renderKnowledgeList(){
@@ -1897,7 +1899,7 @@ function renderKnowledgeFocus(){
     if(!f){kbFocus=null;return renderKnowledgeFocus()}
     disposeKbEditor();kbShown=null;
     const sub=kbDescendants(f),count=state.knowledgeDocs.filter(x=>x.FolderID===f.ID||sub.includes(x.FolderID)).length;
-    detail.innerHTML=`<div class="detail-head"><div><div class="eyebrow">知识库文件夹</div><h1>📁 ${esc(f.Name)}</h1></div><div class="detail-actions"><button type="button" class="secondary" id="kb-new-folder">新建文件夹</button><button type="button" id="kb-new-doc">新增文档</button></div></div><div class="card meta-grid"><span>文档 <b>${count}</b></span><span>子文件夹 <b>${sub.length}</b></span><span>创建者 <b>${esc(f.CreatedBy)}</b></span><span>创建时间 <b>${fmt(f.CreatedAt)}</b></span></div>`;
+    detail.innerHTML=`<div class="detail-head"><div><div class="eyebrow">${f.ID==='kb-root'?'全局库 · 适用于所有产品':f.Product?`产品库 · 跟随主线「全部用例 / ${esc(f.Name)}」`:'知识库文件夹'}</div><h1>${kbFolderIcon(f)} ${esc(f.Name)}</h1></div><div class="detail-actions"><button type="button" class="secondary" id="kb-new-folder">新建文件夹</button><button type="button" id="kb-new-doc">新增文档</button></div></div><div class="card meta-grid"><span>文档 <b>${count}</b></span><span>子文件夹 <b>${sub.length}</b></span><span>创建者 <b>${esc(f.CreatedBy)}</b></span><span>创建时间 <b>${fmt(f.CreatedAt)}</b></span></div>`;
     $('#kb-new-folder').onclick=()=>kbFolderModal(f.ID);$('#kb-new-doc').onclick=()=>kbDocModal(f.ID);
     return;
   }
@@ -1907,6 +1909,12 @@ function renderKnowledgeFocus(){
   const sig=`${doc.ID}|${doc.UpdatedAt}|${doc.Title}`;
   if(kbEditor&&kbShown===sig&&$('#kb-editor')?.isConnected)return;
   disposeKbEditor();kbShown=sig;
+  if(doc.Generated){
+    // 产品用例库：由主线自动生成，每次合并或重整后同步，只读展示。
+    detail.innerHTML=`<div class="detail-head"><div><div class="eyebrow">${esc(doc.ID)} · 主线自动生成，只读</div><h1>${esc(doc.Title)}</h1></div></div><div class="card meta-grid"><span>更新者 <b>${esc(doc.UpdatedBy)}</b></span><span>更新时间 <b>${fmt(doc.UpdatedAt)}</b></span></div><div class="card"><div id="kb-editor"></div></div>`;
+    kbEditor=toastui.Editor.factory({el:$('#kb-editor'),viewer:true,initialValue:doc.Content||'',usageStatistics:false});
+    return;
+  }
   detail.innerHTML=`<div class="detail-head"><div><div class="eyebrow">${esc(doc.ID)}</div><h1>${esc(doc.Title)}</h1></div><div class="detail-actions"><button type="button" class="secondary" id="kb-rename">重命名</button><button type="button" class="secondary" id="kb-delete">删除</button><button type="button" id="kb-save">保存</button></div></div><div class="card meta-grid"><span>创建者 <b>${esc(doc.CreatedBy)}</b></span><span>创建时间 <b>${fmt(doc.CreatedAt)}</b></span><span>更新者 <b>${esc(doc.UpdatedBy)}</b></span><span>更新时间 <b>${fmt(doc.UpdatedAt)}</b></span></div><div class="card"><div id="kb-editor"></div></div>`;
   kbEditor=new toastui.Editor({el:$('#kb-editor'),height:'520px',initialEditType:'wysiwyg',previewStyle:'tab',initialValue:doc.Content||'',language:'zh-CN',theme:document.documentElement.classList.contains('dark')?'dark':'light',usageStatistics:false});
   $('#kb-rename').onclick=()=>kbRenameDocModal(doc);
@@ -1927,8 +1935,8 @@ function currentKbFolderTarget(){
   if(kbFocus?.type==='doc'){const d=kbDoc(kbFocus.id);if(d)return d.FolderID}
   return kbRoots()[0]?.ID||'';
 }
-function kbFolderMenu(id){const items=[['查看详情',()=>setKbFocus({type:'folder',id})],['新建文件夹',()=>kbFolderModal(id)],['新增文档',()=>kbDocModal(id)],['重命名文件夹',()=>kbRenameFolderModal(id)]];if(id!=='kb-root')items.push(['删除空文件夹',()=>{if(confirm('确定删除这个空文件夹？'))act('deleteKnowledgeFolder',{FolderID:id}).then(()=>{if(kbFocus?.id===id)kbFocus=null;renderKnowledgeFocus()}).catch(()=>{})}]);return items}
-function kbDocMenu(id){const doc=kbDoc(id);return [['查看详情',()=>setKbFocus({type:'doc',id})],['重命名',()=>kbRenameDocModal(doc)],['删除',()=>deleteKbDoc(doc)]]}
+function kbFolderMenu(id){const items=[['查看详情',()=>setKbFocus({type:'folder',id})],['新建文件夹',()=>kbFolderModal(id)],['新增文档',()=>kbDocModal(id)]];if(kbFolder(id)?.Product)return items;items.push(['重命名文件夹',()=>kbRenameFolderModal(id)]);if(id!=='kb-root')items.push(['删除空文件夹',()=>{if(confirm('确定删除这个空文件夹？'))act('deleteKnowledgeFolder',{FolderID:id}).then(()=>{if(kbFocus?.id===id)kbFocus=null;renderKnowledgeFocus()}).catch(()=>{})}]);return items}
+function kbDocMenu(id){const doc=kbDoc(id);if(doc?.Generated)return [['查看详情',()=>setKbFocus({type:'doc',id})]];return [['查看详情',()=>setKbFocus({type:'doc',id})],['重命名',()=>kbRenameDocModal(doc)],['删除',()=>deleteKbDoc(doc)]]}
 function kbFolderModal(parent){showModal('新建文件夹',`<label>文件夹名称<input name="Name" required></label>`,x=>act('createKnowledgeFolder',{...x,ParentID:parent}))}
 function kbRenameFolderModal(id){const f=kbFolder(id);showModal('重命名文件夹',`<label>文件夹名称<input name="Name" required value="${esc(f.Name)}"></label>`,x=>act('renameKnowledgeFolder',{...x,FolderID:id}))}
 function kbDocModal(folderId){showModal('新增知识库文档',`<label>标题<input name="Title" required></label>`,async x=>{const before=new Set(state.knowledgeDocs.map(d=>d.ID));await act('createKnowledgeDoc',{...x,FolderID:folderId,Content:''});const made=state.knowledgeDocs.find(d=>!before.has(d.ID));if(made)setKbFocus({type:'doc',id:made.ID})})}

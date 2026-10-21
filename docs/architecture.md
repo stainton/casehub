@@ -78,7 +78,7 @@ CaseHub 的业务数据是**一个 `State` 文档**（`internal/core/core.go`）
 | `Scripts` / `ScriptVersions` | 每条用例的 Playwright 脚本及历史版本 |
 | `Issues` | 问题单（人工创建，或由 planner / generator 发现的缺陷自动上报） |
 | `ProductExperiences` | 按被测系统 origin 保存的产品级探索经验 |
-| `KnowledgeFolders` / `KnowledgeDocs` | 知识库 |
+| `KnowledgeFolders` / `KnowledgeDocs` | 知识库：全局库（`kb-root`）+ 每个主线产品一个产品库（`Product` 指向「全部用例」下的一级目录），产品库里的用例库文档（`Generated`）由 `syncProductKnowledge` 在每个 action 之后按主线重建 |
 | `Hostings` | AI 托管的进度记录 |
 
 所有修改都走 `POST /api/action`，请求体是一个 `Action`（`Type` 加上各类型用到的字段）。`Service.Apply` 在一把进程内的锁下执行 **加载 → 修改 → 保存**：

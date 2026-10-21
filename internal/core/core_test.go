@@ -1440,12 +1440,12 @@ func TestKnowledgeFoldersAndDocs(t *testing.T) {
 		t.Fatalf("folder not created under the root: %+v", state.KnowledgeFolders)
 	}
 	state = apply(t, service, core.Action{Type: "createKnowledgeDoc", FolderID: folder.ID, Title: " 新需求需检查飞书推送 ", Content: "每个新需求都要覆盖飞书推送", Author: "alice"})
-	if len(state.KnowledgeDocs) != 1 || state.KnowledgeDocs[0].Title != "新需求需检查飞书推送" || !strings.HasPrefix(state.KnowledgeDocs[0].ID, "KB-") {
+	if docs := handWrittenDocs(state); len(docs) != 1 || docs[0].Title != "新需求需检查飞书推送" || !strings.HasPrefix(docs[0].ID, "KB-") {
 		t.Fatalf("unexpected docs %+v", state.KnowledgeDocs)
 	}
-	doc := state.KnowledgeDocs[0]
+	doc := handWrittenDocs(state)[0]
 	state = apply(t, service, core.Action{Type: "editKnowledgeDoc", DocID: doc.ID, Title: doc.Title, Content: "补充：推送走内部机器人", Author: "bob"})
-	if got := state.KnowledgeDocs[0]; got.Content != "补充：推送走内部机器人" || got.UpdatedBy != "bob" || got.CreatedBy != "alice" {
+	if got := handWrittenDocs(state)[0]; got.Content != "补充：推送走内部机器人" || got.UpdatedBy != "bob" || got.CreatedBy != "alice" {
 		t.Fatalf("edit not applied: %+v", got)
 	}
 	// An empty body is fine (a document is created empty, then edited), a 100k-character Chinese body too.
@@ -1469,13 +1469,34 @@ func TestKnowledgeFoldersAndDocs(t *testing.T) {
 		}
 	}
 	state = apply(t, service, core.Action{Type: "renameKnowledgeFolder", FolderID: folder.ID, Name: "约束"})
-	for _, d := range state.KnowledgeDocs {
+	for _, d := range handWrittenDocs(state) {
 		apply(t, service, core.Action{Type: "deleteKnowledgeDoc", DocID: d.ID})
 	}
 	state = apply(t, service, core.Action{Type: "deleteKnowledgeFolder", FolderID: folder.ID})
-	if len(state.KnowledgeDocs) != 0 || len(state.KnowledgeFolders) != 1 || state.KnowledgeFolders[0].ID != "kb-root" {
+	if folders := handWrittenFolders(state); len(handWrittenDocs(state)) != 0 || len(folders) != 1 || folders[0].ID != "kb-root" {
 		t.Fatalf("only the root should remain: %+v %+v", state.KnowledgeFolders, state.KnowledgeDocs)
 	}
+}
+
+// handWrittenDocs / handWrittenFolders leave out the product libraries mainline generates.
+func handWrittenDocs(state core.State) []core.KnowledgeDoc {
+	var out []core.KnowledgeDoc
+	for _, d := range state.KnowledgeDocs {
+		if !d.Generated {
+			out = append(out, d)
+		}
+	}
+	return out
+}
+
+func handWrittenFolders(state core.State) []core.KnowledgeFolder {
+	var out []core.KnowledgeFolder
+	for _, f := range state.KnowledgeFolders {
+		if f.Product == "" {
+			out = append(out, f)
+		}
+	}
+	return out
 }
 
 func TestLegacyKnowledgeItemsBecomeDocs(t *testing.T) {
@@ -1491,7 +1512,7 @@ func TestLegacyKnowledgeItemsBecomeDocs(t *testing.T) {
 	service := core.NewService(repo)
 	check := func(state core.State) {
 		t.Helper()
-		if len(state.KnowledgeItems) != 0 || len(state.KnowledgeDocs) != 2 {
+		if len(state.KnowledgeItems) != 0 || len(handWrittenDocs(state)) != 2 {
 			t.Fatalf("legacy entries were not carried over: %+v", state)
 		}
 		folders := map[string]string{}
@@ -1501,7 +1522,7 @@ func TestLegacyKnowledgeItemsBecomeDocs(t *testing.T) {
 		if folders["kb-root"] == "" || folders["kb-constraint"] != "约束" || folders["kb-note"] != "补充信息" {
 			t.Fatalf("unexpected folders %+v", folders)
 		}
-		for _, d := range state.KnowledgeDocs {
+		for _, d := range handWrittenDocs(state) {
 			want := map[string]string{"KB20261012083643": "kb-constraint", "KB20261012083644": "kb-note"}[d.ID]
 			if d.FolderID != want || d.Content == "" {
 				t.Fatalf("doc %+v is in the wrong folder", d)
