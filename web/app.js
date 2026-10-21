@@ -2047,14 +2047,14 @@ function scriptTreeHTML(vid){
   function node(f,depth){
     if(!has(f))return '';
     const own=byFolder.get(f.ID)||[],children=fs.filter(x=>x.ParentID===f.ID);
-    return `<div class="tree-row folder-row${autoFocus?.type==='folder'&&autoFocus.versionID===vid&&autoFocus.id===f.ID?' active':''}" style="padding-left:${8+depth*17}px" data-script-folder="${f.ID}" data-script-version="${vid}"><input class="script-folder-check" type="checkbox" aria-label="选择目录下全部脚本"><span class="chev">▾</span><span>📁</span><span class="label">${esc(f.Name)}</span></div><div>${own.map(s=>scriptRow(s,depth+1)).join('')}${children.map(ch=>node(ch,depth+1)).join('')}</div>`;
+    return `<div class="tree-row folder-row${autoFocus?.type==='folder'&&autoFocus.versionID===vid&&autoFocus.id===f.ID?' active':''}" style="padding-left:${8+depth*17}px" data-script-folder="${f.ID}" data-script-version="${vid}"><input class="script-folder-check" type="checkbox" aria-label="选择目录下全部脚本"><span class="chev">▾</span><span>📁</span><span class="label">${esc(f.Name)}</span><button type="button" class="script-del" title="删除目录下的脚本" aria-label="删除目录下的脚本">🗑</button></div><div>${own.map(s=>scriptRow(s,depth+1)).join('')}${children.map(ch=>node(ch,depth+1)).join('')}</div>`;
   }
   const roots=fs.filter(f=>!f.ParentID||!fs.some(x=>x.ID===f.ParentID));
   return roots.map(r=>node(r,0)).join('');
 }
 function scriptRow(s,depth){
   const label=`${s.CaseID} ${s.Title||caseOfScript(s)?.Title||''}`;
-  return `<div class="tree-row case-row${autoFocus?.type==='script'&&autoFocus.versionID===s.VersionID&&autoFocus.id===s.CaseID?' active':''}" style="padding-left:${8+depth*17}px" data-script-case="${s.CaseID}" data-script-version="${s.VersionID}" title="${esc(label)}"><input class="script-check" type="checkbox" aria-label="选择 ${esc(s.CaseID)}"${scriptSelected.has(scriptKey(s.VersionID,s.CaseID))?' checked':''}><span class="label">${esc(label)}</span>${scriptBadges(s)}</div>`;
+  return `<div class="tree-row case-row${autoFocus?.type==='script'&&autoFocus.versionID===s.VersionID&&autoFocus.id===s.CaseID?' active':''}" style="padding-left:${8+depth*17}px" data-script-case="${s.CaseID}" data-script-version="${s.VersionID}" title="${esc(label)}"><input class="script-check" type="checkbox" aria-label="选择 ${esc(s.CaseID)}"${scriptSelected.has(scriptKey(s.VersionID,s.CaseID))?' checked':''}><span class="label">${esc(label)}</span>${scriptBadges(s)}<button type="button" class="script-del" title="删除脚本" aria-label="删除脚本">🗑</button></div>`;
 }
 function renderScriptTree(){
   const box=$('#script-tree');
@@ -2076,11 +2076,13 @@ function bindScriptTree(root){
     e.querySelector('.chev').onclick=x=>{x.stopPropagation();const closed=e.classList.toggle('closed');closed?closedFolders.add(key):closedFolders.delete(key)};
     const fcheck=e.querySelector('.script-folder-check'),fids=scriptCaseIdsIn(e.dataset.scriptVersion,e.dataset.scriptFolder);
     fcheck.checked=fids.length>0&&fids.every(id=>scriptSelected.has(scriptKey(e.dataset.scriptVersion,id)));
+    e.querySelector('.script-del').onclick=x=>{x.stopPropagation();deleteScriptsOf(e.dataset.scriptVersion,fids,`目录「${e.querySelector('.label').textContent}」下的脚本`)};
     fcheck.onclick=x=>{x.stopPropagation();fids.forEach(id=>x.target.checked?scriptSelected.add(scriptKey(e.dataset.scriptVersion,id)):scriptSelected.delete(scriptKey(e.dataset.scriptVersion,id)));renderScriptTree()};
     e.onclick=x=>{if(x.target.closest('.chev'))return;setAutoFocus({type:'folder',versionID:e.dataset.scriptVersion,id:e.dataset.scriptFolder})};
     e.oncontextmenu=x=>menu(x,scriptFolderMenu(e.dataset.scriptVersion,e.dataset.scriptFolder));
   });
   root.querySelectorAll('[data-script-case]').forEach(e=>{
+    e.querySelector('.script-del').onclick=x=>{x.stopPropagation();deleteScriptsOf(e.dataset.scriptVersion,[e.dataset.scriptCase],'这个脚本')};
     e.querySelector('.script-check').onclick=x=>{x.stopPropagation();const k=scriptKey(e.dataset.scriptVersion,e.dataset.scriptCase);x.target.checked?scriptSelected.add(k):scriptSelected.delete(k);renderScriptTree()};
     e.onclick=()=>setAutoFocus({type:'script',versionID:e.dataset.scriptVersion,id:e.dataset.scriptCase});
     e.oncontextmenu=x=>menu(x,scriptMenu(e.dataset.scriptVersion,e.dataset.scriptCase));

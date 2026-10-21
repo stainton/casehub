@@ -298,3 +298,4 @@ button.avatar{padding:0;color:#fff;cursor:pointer;border:1px solid #ffffff40}
 .tc-list .tc-host>small{flex:none}
 .tc-list .tc-host.stopped>small{color:var(--danger)}
 .host-scope{display:grid;gap:4px}
+.script-del{margin-left:auto;padding:2px 6px;background:transparent;color:var(--danger);border:1px solid transparent;font-size:12px;line-height:1}.script-del:hover{background:var(--surface2);border-color:var(--line);filter:none}#script-tree .tree-row .result{margin-left:6px}
