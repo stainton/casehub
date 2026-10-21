@@ -533,7 +533,7 @@ function resetRecordEditor(initialValue='') {
   if(recordEditor){recordEditor.setMarkdown(initialValue);return}
   recordEditor=new toastui.Editor({el:$('#record-editor'),height:'360px',initialEditType:'wysiwyg',previewStyle:'tab',initialValue,language:'zh-CN',theme:document.documentElement.classList.contains('dark')?'dark':'light',usageStatistics:false,autofocus:false});
 }
-function historyAction(action){return {create:'新增',edit:'编辑',merge:'合并',move:'移动'}[action]||action}
+function historyAction(action){return {create:'新增',edit:'编辑',merge:'合并',move:'移动',reorganize:'重整'}[action]||action}
 function renderHistoryRoute(){
   if(!state)return;
   const params=new URLSearchParams(location.hash.slice(1)),id=params.get('history');

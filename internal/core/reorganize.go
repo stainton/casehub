@@ -5,14 +5,18 @@ package core
 //
 // Test versions used to get a folder named after the version (V1, V2 …), and every version's design invented its
 // own module codes, so mainline holds the same function filed and numbered several times. The auto-test planner,
-// in organize mode, explores the products and classifies mainline's cases into 产品 / 模块 / optional sub-levels;
-// reorganizeMainline applies that classification in one destructive action: it rebuilds mainline's folders under
-// 全部用例 / <产品> / …, renames each case TC-<产品>-<模块>-<类别>-NNN together with everything on mainline that
-// names it (history, records, scripts, tasks), and deletes every mainline folder left without cases.
+// in organize mode, explores the products, reads what each case tests and classifies it by product, function path
+// (模块 / 子功能 …) and test category; reorganizeMainline applies that in one destructive action:
+//   - each case moves to 全部用例 / <产品> / <模块> / <子功能> … / <类别名>, missing folders created, existing reused;
+//   - every leaf folder it touches gets one numbering rule: all of its cases, including ones an earlier batch put
+//     there, are renumbered TC-<产品>-<功能缩写>-<类别>-001…N, so a folder never mixes ID schemes;
+//   - everything on mainline that names a renamed case (history, records, scripts, tasks) follows it;
+//   - every mainline folder left without cases is deleted.
 
 import (
 	"errors"
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 	"unicode/utf8"
@@ -28,11 +32,11 @@ type Reorganization struct {
 }
 
 type ReorgAssignment struct {
-	CaseID     string   `json:"caseId"`
-	Product    string   `json:"product"`
-	ModuleCode string   `json:"moduleCode"`
-	Folders    []string `json:"folders"`
-	Category   string   `json:"category"`
+	CaseID       string   `json:"caseId"`
+	Product      string   `json:"product"`
+	FunctionCode string   `json:"functionCode"`
+	Path         []string `json:"path"`
+	Category     string   `json:"category"`
 }
 
 const reorgMaxDepth = 4
@@ -64,74 +68,28 @@ func reorganizeMainline(s *State, a Action) error {
 		}
 		products[p.Code] = name
 	}
-	seen := map[string]bool{}
+	inBatch := map[string]bool{}
 	for _, x := range r.Assignments {
-		if seen[x.CaseID] {
+		if inBatch[x.CaseID] {
 			return fmt.Errorf("用例 %s 被归类了两次", x.CaseID)
 		}
-		seen[x.CaseID] = true
+		inBatch[x.CaseID] = true
 		if c, _ := caseAt(s, "main", x.CaseID); c == nil {
 			return fmt.Errorf("主线不存在用例 %s，请重新运行重整", x.CaseID)
 		}
 		if _, ok := products[x.Product]; !ok {
 			return fmt.Errorf("用例 %s 的产品 %s 不在产品列表里", x.CaseID, x.Product)
 		}
-		if !codeRE.MatchString(x.ModuleCode) || testCategoryNames[x.Category] == "" {
-			return fmt.Errorf("用例 %s 的模块缩写或测试类别无效", x.CaseID)
+		if !codeRE.MatchString(x.FunctionCode) || testCategoryNames[x.Category] == "" {
+			return fmt.Errorf("用例 %s 的功能缩写或测试类别无效", x.CaseID)
 		}
-		if len(x.Folders) == 0 || len(x.Folders) > reorgMaxDepth {
-			return fmt.Errorf("用例 %s 的目录层级应为 1–%d 级", x.CaseID, reorgMaxDepth)
+		if len(x.Path) == 0 || len(x.Path) > reorgMaxDepth {
+			return fmt.Errorf("用例 %s 的功能路径应为 1–%d 级", x.CaseID, reorgMaxDepth)
 		}
-		for _, f := range x.Folders {
+		for _, f := range x.Path {
 			if f = strings.TrimSpace(f); f == "" || strings.Contains(f, "/") || utf8.RuneCountInString(f) > 50 {
 				return fmt.Errorf("用例 %s 的目录名「%s」无效", x.CaseID, f)
 			}
-		}
-	}
-
-	// IDs in use anywhere else stay taken: archived versions and the review area keep their copies, and a case not
-	// in this batch keeps its ID. Numbering continues after the highest number already used for a prefix, so a
-	// later batch never reuses one, and a case already carrying its target prefix keeps its ID (a re-run is a no-op).
-	taken := map[string]bool{}
-	for _, c := range s.Cases {
-		if c.VersionID != "main" || !seen[c.ID] {
-			taken[c.ID] = true
-		}
-	}
-	for _, c := range s.PendingCases {
-		taken[c.ID] = true
-	}
-	next := map[string]int{}
-	nextID := func(prefix string) string {
-		n, ok := next[prefix]
-		if !ok {
-			for id := range taken {
-				if rest, ok := strings.CutPrefix(id, prefix+"-"); ok && caseNumberSuffix.MatchString(rest) {
-					if v, err := strconv.Atoi(rest); err == nil && v > n {
-						n = v
-					}
-				}
-			}
-		}
-		for {
-			n++
-			if id := fmt.Sprintf("%s-%03d", prefix, n); !taken[id] {
-				next[prefix] = n
-				return id
-			}
-		}
-	}
-	prefixOf := func(x ReorgAssignment) string { return "TC-" + x.Product + "-" + x.ModuleCode + "-" + x.Category }
-	rename := map[string]string{}
-	for _, x := range r.Assignments { // keepers first, so no renamed case is numbered onto one
-		if rest, ok := strings.CutPrefix(x.CaseID, prefixOf(x)+"-"); ok && caseNumberSuffix.MatchString(rest) {
-			rename[x.CaseID], taken[x.CaseID] = x.CaseID, true
-		}
-	}
-	for _, x := range r.Assignments {
-		if _, kept := rename[x.CaseID]; !kept {
-			rename[x.CaseID] = nextID(prefixOf(x))
-			taken[rename[x.CaseID]] = true
 		}
 	}
 
@@ -145,21 +103,114 @@ func reorganizeMainline(s *State, a Action) error {
 		s.Folders = append(s.Folders, f)
 		return f.ID
 	}
+	// One leaf folder (product / path / category) stands for exactly one ID prefix, and the other way round.
+	leafOf := map[string]string{}                                      // case ID -> leaf folder
+	prefixOf, leafOfPrefix := map[string]string{}, map[string]string{} // leaf -> prefix, prefix -> leaf
+	var leaves []string
+	for _, x := range r.Assignments {
+		folder := ensure("root", products[x.Product])
+		for _, name := range x.Path {
+			folder = ensure(folder, strings.TrimSpace(name))
+		}
+		folder = ensure(folder, testCategoryNames[x.Category])
+		prefix := "TC-" + x.Product + "-" + x.FunctionCode + "-" + x.Category
+		if p, ok := prefixOf[folder]; ok && p != prefix {
+			return fmt.Errorf("目录「%s」同时被归为 %s 和 %s，一个目录只能有一种编号", strings.Join(x.Path, " / "), p, prefix)
+		}
+		if l, ok := leafOfPrefix[prefix]; ok && l != folder {
+			return fmt.Errorf("功能缩写 %s 被用在了两个不同的功能目录上", x.FunctionCode)
+		}
+		if _, ok := prefixOf[folder]; !ok {
+			leaves = append(leaves, folder)
+		}
+		prefixOf[folder], leafOfPrefix[prefix], leafOf[x.CaseID] = prefix, folder, folder
+	}
+	touched := map[string]bool{}
+	for _, l := range leaves {
+		touched[l] = true
+	}
+	// IDs that stay: the review area, and mainline cases neither in this batch nor in a touched leaf. Archived
+	// versions keep their old copies and are not consulted (a reopened one must not be merged again).
+	taken := map[string]bool{}
+	for _, c := range s.PendingCases {
+		taken[c.ID] = true
+	}
+	for _, c := range s.Cases {
+		if c.VersionID != "main" || inBatch[c.ID] || touched[c.FolderID] {
+			continue
+		}
+		taken[c.ID] = true
+		for prefix := range leafOfPrefix {
+			if strings.HasPrefix(c.ID, prefix+"-") {
+				return fmt.Errorf("编号前缀 %s 已被其他目录的用例 %s 使用，请把它们放进同一批重新运行重整", prefix, c.ID)
+			}
+		}
+	}
+	// Each touched leaf is numbered from 001: the cases already there first, in their current numeric order, then
+	// this batch's cases in the order the planner returned them.
+	suffix := func(id string) int {
+		if i := strings.LastIndex(id, "-"); i >= 0 {
+			if n, err := strconv.Atoi(id[i+1:]); err == nil {
+				return n
+			}
+		}
+		return 1 << 30
+	}
+	rename := map[string]string{}
+	for _, leaf := range leaves {
+		var resident []string
+		for _, c := range s.Cases {
+			if c.VersionID == "main" && c.FolderID == leaf && !inBatch[c.ID] {
+				resident = append(resident, c.ID)
+			}
+		}
+		sort.SliceStable(resident, func(i, j int) bool {
+			if a, b := suffix(resident[i]), suffix(resident[j]); a != b {
+				return a < b
+			}
+			return resident[i] < resident[j]
+		})
+		members := resident
+		for _, x := range r.Assignments {
+			if leafOf[x.CaseID] == leaf {
+				members = append(members, x.CaseID)
+			}
+		}
+		n := 0
+		for _, id := range members {
+			for {
+				n++
+				if next := fmt.Sprintf("%s-%03d", prefixOf[leaf], n); !taken[next] {
+					rename[id] = next
+					break
+				}
+			}
+		}
+	}
+
 	s.MainRevision++
 	t := now()
 	var histories []History
-	for _, x := range r.Assignments {
-		folder := ensure("root", products[x.Product])
-		for _, name := range x.Folders {
-			folder = ensure(folder, strings.TrimSpace(name))
+	for i := range s.Cases {
+		c := &s.Cases[i]
+		newID, renamed := rename[c.ID]
+		if c.VersionID != "main" || !renamed {
+			continue
 		}
-		c, _ := caseAt(s, "main", x.CaseID)
+		folder := c.FolderID
+		if l, ok := leafOf[c.ID]; ok {
+			folder = l
+		}
+		if newID == c.ID && folder == c.FolderID && !inBatch[c.ID] {
+			continue // a resident that keeps its number; a batch case is always recorded, it marks the case as classified
+		}
 		before := *c
-		c.ID, c.FolderID, c.Revision, c.UpdatedBy, c.UpdatedAt = rename[x.CaseID], folder, s.MainRevision, a.Author, t
+		c.ID, c.FolderID, c.Revision, c.UpdatedBy, c.UpdatedAt = newID, folder, s.MainRevision, a.Author, t
 		after := *c
 		histories = append(histories, History{ID: ID(), CaseID: c.ID, VersionID: "main", SourceVersionID: "main", Action: "reorganize", Author: a.Author, Before: &before, After: &after, CreatedAt: t})
 	}
 	// Everything else on mainline that names a renamed case follows it (a case's ID is how all of these find it).
+	// The map is applied once per entry, so swapped numbers inside a folder cannot chain.
 	renamed := func(versionID, id string) (string, bool) {
 		if versionID != "main" {
 			return "", false
