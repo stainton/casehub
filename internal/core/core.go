@@ -363,6 +363,8 @@ type Action struct {
 	Hosting   *Hosting         `json:",omitempty"`
 	Planner   *PlannerResult   `json:",omitempty"`
 	Generator *GeneratorResult `json:",omitempty"`
+	// reorganizeMainline (reorganize.go, temporary): the planner's organize result to apply to mainline.
+	Reorganize *Reorganization `json:",omitempty"`
 }
 
 // CaseRevision is one case rewritten by "AI 修正需求". Scope is "pending" (review area) or
@@ -734,6 +736,8 @@ func (s *Service) Apply(ctx context.Context, a Action) (Result, error) {
 		err = deleteFolder(&st, a)
 	case "moveCases":
 		err = moveCases(&st, a)
+	case "reorganizeMainline":
+		err = reorganizeMainline(&st, a)
 	default:
 		var ok bool
 		if ok, err = applyHosting(&st, a); !ok {
