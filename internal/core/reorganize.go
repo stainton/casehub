@@ -29,6 +29,17 @@ type Reorganization struct {
 		Name string `json:"name"`
 	} `json:"products"`
 	Assignments []ReorgAssignment `json:"assignments"`
+	// Scope is set by 重整此目录: the folder being divided further and the person's limits for what may appear below it.
+	Scope *ReorgScope `json:"scope,omitempty"`
+}
+
+// ReorgScope: every case stays beneath 全部用例 / <product> / <path…>; below that folder at most MaxDepth function
+// levels, and no function folder with more than MaxChildren function sub-folders (category folders not counted).
+type ReorgScope struct {
+	Product     string   `json:"product"`
+	Path        []string `json:"path"`
+	MaxChildren int      `json:"maxChildren"`
+	MaxDepth    int      `json:"maxDepth"`
 }
 
 type ReorgAssignment struct {
@@ -89,6 +100,40 @@ func reorganizeMainline(s *State, a Action) error {
 		for _, f := range x.Path {
 			if f = strings.TrimSpace(f); f == "" || strings.Contains(f, "/") || utf8.RuneCountInString(f) > 50 {
 				return fmt.Errorf("用例 %s 的目录名「%s」无效", x.CaseID, f)
+			}
+		}
+	}
+
+	scopeFolder := ""
+	if sc := r.Scope; sc != nil {
+		if sc.MaxChildren == 0 {
+			sc.MaxChildren = 8
+		}
+		if sc.MaxDepth == 0 {
+			sc.MaxDepth = 2
+		}
+		if sc.MaxChildren < 1 || sc.MaxChildren > 30 || sc.MaxDepth < 1 || len(sc.Path)+sc.MaxDepth > reorgMaxDepth {
+			return fmt.Errorf("子目录数量上限应为 1–30，深度应为 1–%d", reorgMaxDepth-len(sc.Path))
+		}
+		name, ok := products[sc.Product]
+		if !ok {
+			return fmt.Errorf("目录重整的产品 %s 不在产品列表里", sc.Product)
+		}
+		scopeFolder = mainChild("root", name, s)
+		for _, n := range sc.Path {
+			if scopeFolder != "" {
+				scopeFolder = mainChild(scopeFolder, n, s)
+			}
+		}
+		if scopeFolder == "" {
+			return errors.New("要重整的目录已经不在主线上，请重新运行")
+		}
+		for _, x := range r.Assignments {
+			if x.Product != sc.Product || len(x.Path) < len(sc.Path) || strings.Join(x.Path[:len(sc.Path)], "/") != strings.Join(sc.Path, "/") {
+				return fmt.Errorf("用例 %s 被归到了要重整的目录之外", x.CaseID)
+			}
+			if len(x.Path)-len(sc.Path) > sc.MaxDepth {
+				return fmt.Errorf("用例 %s 的目录比深度上限 %d 层更深", x.CaseID, sc.MaxDepth)
 			}
 		}
 	}
@@ -247,7 +292,55 @@ func reorganizeMainline(s *State, a Action) error {
 	}
 	s.Histories = append(s.Histories, histories...)
 	pruneEmptyMainFolders(s)
+	if r.Scope != nil {
+		return checkScopeLimits(s, scopeFolder, r.Scope)
+	}
 	return nil
+}
+
+func mainChild(parent, name string, s *State) string {
+	for _, f := range s.Folders {
+		if f.VersionID == "main" && f.ParentID == parent && f.Name == name {
+			return f.ID
+		}
+	}
+	return ""
+}
+
+// checkScopeLimits verifies the divided folder as it now stands — including any case this run did not move — so
+// the limits hold for the folder, not just for this batch. Category folders (功能测试 …) are not function levels.
+// An error discards the whole action.
+func checkScopeLimits(s *State, scope string, sc *ReorgScope) error {
+	category := map[string]bool{}
+	for _, n := range testCategoryNames {
+		category[n] = true
+	}
+	var walk func(id string, depth int) error
+	walk = func(id string, depth int) error {
+		var children []Folder
+		for _, f := range s.Folders {
+			if f.VersionID == "main" && f.ParentID == id && !category[f.Name] {
+				children = append(children, f)
+			}
+		}
+		if len(children) > sc.MaxChildren {
+			name := strings.Join(sc.Path, " / ")
+			if f, _ := folderAt(s, "main", id); f != nil {
+				name = f.Name
+			}
+			return fmt.Errorf("目录「%s」重整后会有 %d 个子目录，超过上限 %d", name, len(children), sc.MaxChildren)
+		}
+		for _, f := range children {
+			if depth+1 > sc.MaxDepth {
+				return fmt.Errorf("目录「%s」超过了深度上限 %d 层", f.Name, sc.MaxDepth)
+			}
+			if err := walk(f.ID, depth+1); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	return walk(scope, 0)
 }
 
 // pruneEmptyMainFolders deletes every mainline folder (but the root) with no case anywhere beneath it — the old

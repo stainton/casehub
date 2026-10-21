@@ -270,3 +270,61 @@ func TestReorganizeMainlineDividesAFolderFurther(t *testing.T) {
 		t.Fatalf("the case left in the divided folder must be renumbered from 001: %v", got)
 	}
 }
+
+// 重整此目录 with limits: the folder as it ends up — not just this batch — may not exceed the sub-folder count or
+// depth, and a refused run changes nothing.
+func TestReorganizeMainlineHoldsFolderLimits(t *testing.T) {
+	svc := core.NewService(store.NewMemory())
+	products := [][2]string{{"AIGC", "AIGC 平台"}}
+	st := apply(t, svc, core.Action{Type: "createVersion", Name: "seed", Blank: true})
+	v := branchID(t, st, "seed")
+	titles := []string{"a", "b", "c", "d"}
+	for _, title := range titles {
+		apply(t, svc, core.Action{Type: "createCase", VersionID: v, FolderID: "root", Title: title})
+	}
+	apply(t, svc, core.Action{Type: "merge", VersionID: v})
+	st = apply(t, svc, core.Action{Type: "archiveVersion", VersionID: v})
+	var all []core.ReorgAssignment
+	for _, title := range titles {
+		all = append(all, asg(caseIDByTitle(t, st, "main", title), "AIGC", "ASRCH", "FUNC", "资产区", "搜索"))
+	}
+	st = apply(t, svc, core.Action{Type: "reorganizeMainline", Reorganize: reorg(products, all...)})
+	id := func(title string) string { return caseIDByTitle(t, st0(t, svc), "main", title) }
+	scoped := func(limits core.ReorgScope, xs ...core.ReorgAssignment) *core.Reorganization {
+		r := reorg(products, xs...)
+		limits.Product, limits.Path = "AIGC", []string{"资产区", "搜索"}
+		r.Scope = &limits
+		return r
+	}
+	refused := map[string]*core.Reorganization{
+		"three sub-folders over 2": scoped(core.ReorgScope{MaxChildren: 2, MaxDepth: 2},
+			asg(id("a"), "AIGC", "K1", "FUNC", "资产区", "搜索", "一"), asg(id("b"), "AIGC", "K2", "FUNC", "资产区", "搜索", "二"),
+			asg(id("c"), "AIGC", "K3", "FUNC", "资产区", "搜索", "三")),
+		"two levels over 1": scoped(core.ReorgScope{MaxChildren: 8, MaxDepth: 1},
+			asg(id("a"), "AIGC", "K1", "FUNC", "资产区", "搜索", "一", "甲")),
+		"outside the folder": scoped(core.ReorgScope{},
+			asg(id("a"), "AIGC", "K1", "FUNC", "资产区", "排序")),
+		// The batch alone is fine, but a case it did not move keeps an old sub-folder that now makes three.
+		"old sub-folder counts too": func() *core.Reorganization {
+			apply(t, svc, core.Action{Type: "reorganizeMainline", Reorganize: reorg(products, asg(id("d"), "AIGC", "OLD", "FUNC", "资产区", "搜索", "旧"))})
+			return scoped(core.ReorgScope{MaxChildren: 2, MaxDepth: 2},
+				asg(id("a"), "AIGC", "K1", "FUNC", "资产区", "搜索", "一"), asg(id("b"), "AIGC", "K2", "FUNC", "资产区", "搜索", "二"))
+		}(),
+	}
+	for name, plan := range refused {
+		before := st0(t, svc)
+		if _, err := svc.Apply(context.Background(), core.Action{Type: "reorganizeMainline", Reorganize: plan}); err == nil {
+			t.Errorf("%s: want an error", name)
+		}
+		if after := st0(t, svc); len(after.Folders) != len(before.Folders) || len(after.Histories) != len(before.Histories) {
+			t.Errorf("%s: a refused run must change nothing", name)
+		}
+	}
+	// Within the limits (defaults 8 / 2) it applies.
+	st = apply(t, svc, core.Action{Type: "reorganizeMainline", Reorganize: scoped(core.ReorgScope{},
+		asg(id("a"), "AIGC", "K1", "FUNC", "资产区", "搜索", "一", "甲"), asg(id("b"), "AIGC", "K2", "FUNC", "资产区", "搜索", "二"),
+		asg(id("c"), "AIGC", "ASRCH", "FUNC", "资产区", "搜索"), asg(id("d"), "AIGC", "ASRCH", "FUNC", "资产区", "搜索"))})
+	if got := mainPaths(st)["TC-AIGC-K1-FUNC-001"]; got != "全部用例/AIGC 平台/资产区/搜索/一/甲/功能测试" {
+		t.Fatalf("scoped run within limits: %v", mainPaths(st))
+	}
+}

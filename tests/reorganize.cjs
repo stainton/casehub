@@ -138,11 +138,16 @@ function fakePlanner(){
     });
     await page.locator('.context-menu button',{hasText:'重整此目录'}).click();
     await page.locator('#reorg-title').getByText('重整目录：AIGC 平台 / 资产区 / 一键同步').waitFor();
+    assert.equal(await page.locator('#reorg-form [name="maxChildren"]').inputValue(),'8','默认最多 8 个子目录');
+    assert.equal(await page.locator('#reorg-form [name="maxDepth"]').inputValue(),'2','默认再分 2 层');
+    await page.locator('#reorg-form [name="maxChildren"]').fill('2');
+    await page.locator('#reorg-form [name="maxDepth"]').fill('1');
     await page.locator('#reorg-form [name="secret"]').fill('test-secret');
     await page.locator('#reorg-form button[type="submit"]').click();
     await page.locator('#reorg-apply').waitFor();
     const scoped=submissions.at(-1).organize;
-    assert.deepEqual(scoped.scope,{product:'AIGC',path:['资产区','一键同步']});
+    assert.deepEqual(scoped.scope,{product:'AIGC',path:['资产区','一键同步'],maxChildren:2,maxDepth:1});
+    await page.locator('#reorg-body').getByText('每个目录最多 2 个子目录，最多再分 1 层').waitFor();
     assert.deepEqual(scoped.cases.map(c=>c.title).sort(),[`菜单同步中断后重试 ${stamp}`,`资产菜单同步 ${stamp}`]);
     assert.deepEqual(scoped.products.map(p=>p.code),['AIGC']);
     assert.ok(scoped.functions.some(f=>f.code==='ASYNC'&&f.path.join('/')==='资产区/一键同步'),'目录本身的缩写随请求带过去');
