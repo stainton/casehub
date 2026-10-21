@@ -899,9 +899,17 @@ function aiFormValues(form){const data=new FormData(form),x=Object.fromEntries(d
 // 合并在服务端去重，同一结果重复处理（刷新后再次导入）不会产生重复内容。
 function productExperienceFor(baseUrl){let origin='';try{origin=new URL(baseUrl).origin}catch{return ''}return state.productExperiences.find(x=>x.Origin===origin)?.Notes||''}
 async function saveProductExperience(result){const p=result?.productExperience;if(p?.origin&&p.notes?.trim())await act('recordProductExploration',{Origin:p.origin,ExplorationNotes:p.notes})}
+// 产品用例库：知识库里跟随主线自动生成的该产品用例树，交给 planner 作为组织结构参考。产品取需求所在目录的倒数第二级（与 AI 托管的归档规则一致）。
+function caseLibraryFor(doc,product){
+  const path=reqFolderPathNames(liveReqDoc(doc));product=(product||(path.length>=2?path[path.length-2]:'')).trim();
+  if(!product)return '';
+  const lib=state.knowledgeFolders.find(f=>f.Product&&f.Name===product);
+  return lib?state.knowledgeDocs.find(d=>d.Generated&&d.FolderID===lib.ID)?.Content||'':'';
+}
 function aiRequirementPayload(doc,values,code){
   const d=liveReqDoc(doc);code=code||d.Code||'';
-  return {requirements:[{id:d.ID,title:d.Title,content:d.Content||'',...(code?{code}:{})}],instructions:[values.instructions||'',reqRefContext(doc)].filter(Boolean).join('\n\n'),...(d.ExplorationNotes?.trim()?{explorationNotes:d.ExplorationNotes}: {})};
+  const caseLibrary=caseLibraryFor(doc,values.product);
+  return {requirements:[{id:d.ID,title:d.Title,content:d.Content||'',...(code?{code}:{})}],...(caseLibrary?{caseLibrary}:{}),instructions:[values.instructions||'',reqRefContext(doc)].filter(Boolean).join('\n\n'),...(d.ExplorationNotes?.trim()?{explorationNotes:d.ExplorationNotes}: {})};
 }
 function aiEstimateStatusText(est){
   const seconds=Math.floor((Date.now()-est.startedAt)/1000);
@@ -1130,8 +1138,8 @@ async function startAiJob(doc,values,caseCount,code,timeoutMinutes,{continueFrom
     // 只更新详情页上的缩写标签：整页 renderReqFocus 会重建编辑器，丢掉未保存的需求正文修改。
     if(reqFocus?.type==='doc'&&reqFocus.id===doc.ID&&$('#req-doc-code'))$('#req-doc-code').textContent=code;
   }
-  const {requirements,instructions,explorationNotes}=aiRequirementPayload(doc,values,code),productExperience=productExperienceFor(values.baseUrl);
-  const payload={requirements,target:{baseUrl:values.baseUrl},context:{instructions,...(explorationNotes?{explorationNotes}:{}),...(productExperience?{productExperience}:{}),...(values.assetIds?.length?{assetIds:values.assetIds}:{})},caseCount,timeoutMs:timeoutMinutes*60000,
+  const {requirements,instructions,explorationNotes,caseLibrary}=aiRequirementPayload(doc,values,code),productExperience=productExperienceFor(values.baseUrl);
+  const payload={requirements,target:{baseUrl:values.baseUrl},context:{instructions,...(caseLibrary?{caseLibrary}:{}),...(explorationNotes?{explorationNotes}:{}),...(productExperience?{productExperience}:{}),...(values.assetIds?.length?{assetIds:values.assetIds}:{})},caseCount,timeoutMs:timeoutMinutes*60000,
     ...(continueFrom?{continueFrom}:{}),casehubTask:{subject:`req:${doc.ID}`}};
   if(values.testAccount||values.testSecret)payload.context.testData={username:values.testAccount||'',password:values.testSecret||''};
   const job=await serviceRequest('/api/planner/jobs',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
@@ -1544,9 +1552,9 @@ async function renderHostForm(doc,{retry}={}){
     if(!Number.isInteger(timeoutMinutes)||timeoutMinutes<AI_MIN_TIMEOUT_MIN||timeoutMinutes>AI_MAX_TIMEOUT_MIN)return toast(`任务超时时间需为 ${AI_MIN_TIMEOUT_MIN}–${AI_MAX_TIMEOUT_MIN} 分钟的整数`,true);
     try{localStorage.setItem(AI_TIMEOUT_KEY,String(timeoutMinutes))}catch{}
     // 评估和设计请求的组成和手动设计完全一样（引用需求的上下文、探索记录、产品经验、资产、测试账号），由服务端补上评估出的数量和缩写。
-    const {requirements,instructions,explorationNotes}=aiRequirementPayload(doc,values),productExperience=productExperienceFor(values.baseUrl);
+    const {requirements,instructions,explorationNotes,caseLibrary}=aiRequirementPayload(doc,{...values,product:String(data.get('product')||'')}),productExperience=productExperienceFor(values.baseUrl);
     const estimate={requirements,context:{instructions}};
-    const job={requirements,target:{baseUrl:values.baseUrl},context:{instructions,...(explorationNotes?{explorationNotes}:{}),...(productExperience?{productExperience}:{}),...(values.assetIds.length?{assetIds:values.assetIds}:{})},timeoutMs:timeoutMinutes*60000};
+    const job={requirements,target:{baseUrl:values.baseUrl},context:{instructions,...(caseLibrary?{caseLibrary}:{}),...(explorationNotes?{explorationNotes}:{}),...(productExperience?{productExperience}:{}),...(values.assetIds.length?{assetIds:values.assetIds}:{})},timeoutMs:timeoutMinutes*60000};
     if(values.testAccount||values.testSecret)job.context.testData={username:values.testAccount,password:values.testSecret};
     // 脚本生成请求（不含用例，服务端归档后补上用例和需求）：和自动化页发起生成时一样的目标、说明、资产、账号和时限。
     const withScripts=Boolean(form.elements.withScripts?.checked)||retryGen,withRun=Boolean(form.elements.withRun?.checked);
