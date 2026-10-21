@@ -46,6 +46,10 @@ type Version struct {
 	// Archived marks a finished test version: it is kept for reference but read-only until unarchived.
 	Archived         bool      `json:"archived"`
 	ArchivedAt       time.Time `json:"archivedAt"`
+	// ScriptsArchived is the same idea for 自动化管理: the version's scripts move to its archive tab and become
+	// read-only. It is independent of Archived, so finishing scripts never touches the version's cases.
+	ScriptsArchived   bool      `json:"scriptsArchived"`
+	ScriptsArchivedAt time.Time `json:"scriptsArchivedAt"`
 	BaseMainRevision int64     `json:"baseMainRevision"`
 	CreatedBy        string    `json:"createdBy"`
 	CreatedAt        time.Time `json:"createdAt"`
@@ -245,7 +249,7 @@ type Script struct {
 // destination changed.
 func copyScript(s *State, fromVersion, toVersion, caseID string) bool {
 	src, _ := scriptAt(s, fromVersion, caseID)
-	if src == nil {
+	if src == nil || requireScriptsOpen(s, toVersion) != nil {
 		return false
 	}
 	n := *src
@@ -767,6 +771,10 @@ func (s *Service) Apply(ctx context.Context, a Action) (Result, error) {
 		err = archiveVersion(&st, a, true)
 	case "unarchiveVersion":
 		err = archiveVersion(&st, a, false)
+	case "archiveScripts":
+		err = archiveScripts(&st, a, true)
+	case "unarchiveScripts":
+		err = archiveScripts(&st, a, false)
 	case "deleteVersion":
 		err = deleteVersion(&st, a)
 	case "deleteCases":
@@ -837,6 +845,40 @@ func archiveVersion(s *State, a Action, archive bool) error {
 	}
 	return nil
 }
+// archiveScripts moves a test version's scripts into (or back out of) the 自动化管理 archive.
+func archiveScripts(s *State, a Action, archive bool) error {
+	v, err := branchOf(s, a.VersionID)
+	if err != nil {
+		return err
+	}
+	if v.ScriptsArchived == archive {
+		return nil
+	}
+	if archive {
+		has := false
+		for _, x := range s.Scripts {
+			has = has || x.VersionID == v.ID
+		}
+		if !has {
+			return errors.New("该版本还没有脚本")
+		}
+	}
+	v.ScriptsArchived = archive
+	v.ScriptsArchivedAt = time.Time{}
+	if archive {
+		v.ScriptsArchivedAt = now()
+	}
+	return nil
+}
+
+// requireScriptsOpen is for every change to a version's scripts: archived scripts are read-only until reopened.
+func requireScriptsOpen(s *State, versionID string) error {
+	if v, _ := versionAt(s, versionID); v != nil && v.ScriptsArchived {
+		return errors.New("该版本的脚本已归档，请先在自动化管理里重新打开")
+	}
+	return nil
+}
+
 func createVersion(s *State, a Action) error {
 	if strings.TrimSpace(a.Name) == "" {
 		return errors.New("版本名称不能为空")
@@ -1109,6 +1151,9 @@ func saveScript(s *State, a Action) error {
 	if c == nil {
 		return errors.New("用例不存在")
 	}
+	if err := requireScriptsOpen(s, a.VersionID); err != nil {
+		return err
+	}
 	status := strings.TrimSpace(a.ScriptStatus)
 	if status == "" {
 		status = "generated"
@@ -1241,6 +1286,9 @@ func editScript(s *State, a Action) error {
 	if v, _ := versionAt(s, a.VersionID); v == nil {
 		return errors.New("版本不存在")
 	}
+	if err := requireScriptsOpen(s, a.VersionID); err != nil {
+		return err
+	}
 	code := strings.TrimSpace(a.ScriptCode)
 	if code == "" || len(code) > 120000 {
 		return errors.New("脚本内容不能为空且不能超过 120000 字符")
@@ -1266,6 +1314,9 @@ func editScript(s *State, a Action) error {
 func deleteScripts(s *State, a Action) error {
 	if len(a.CaseIDs) == 0 {
 		return errors.New("请选择脚本")
+	}
+	if err := requireScriptsOpen(s, a.VersionID); err != nil {
+		return err
 	}
 	ids := make(map[string]bool, len(a.CaseIDs))
 	for _, id := range a.CaseIDs {

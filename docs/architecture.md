@@ -115,7 +115,7 @@ if err == nil { repo.Save(st) }
 
 有几类数据是由 AI 根据用例文本生成的：阅读友好版（`TestCase.Simplified*`）和脚本（`Script`）。它们都保存了**生成时的原文快照**（`SimplifiedFrom*`、`Script.From*`），由服务端从用例当前文本取，不信任调用方传的值。前端只要把快照和用例当前文本做字符串比较，就能判断生成结果是否已过时，不需要哈希或版本号。
 
-脚本按 `(VersionID, CaseID)` 一一对应用例，和用例一样每个版本一份、随用例流转（`copyScript`）：创建版本、同步时从主线复制下来，合并时回到主线；两边都有时以 `UpdatedAt` 较新的为准，被替换的旧脚本存进 `ScriptVersions`。删除用例或版本时一并删除；重新生成时旧脚本同样存进 `ScriptVersions`。
+脚本按 `(VersionID, CaseID)` 一一对应用例，和用例一样每个版本一份、随用例流转（`copyScript`）：创建版本、同步时从主线复制下来，合并时回到主线；两边都有时以 `UpdatedAt` 较新的为准，被替换的旧脚本存进 `ScriptVersions`。删除用例或版本时一并删除；重新生成时旧脚本同样存进 `ScriptVersions`。自动化管理里的版本可以单独归档（`Version.ScriptsArchived`，`archiveScripts` / `unarchiveScripts`）：脚本移到「归档版本」页签，只读，创建/编辑/删除脚本和同步、合并都不会再改它，重新打开后恢复；它和用例管理里的版本归档（`Version.Archived`）互相独立。
 
 ### 3.4 store：Repository 的三种实现
 
