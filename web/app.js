@@ -503,7 +503,7 @@ async function saveRecord(type){
 }
 function resultName(x){return({passed:'通过',failed:'失败',blocked:'阻塞'}[x]||'未执行')}
 function toast(msg,bad=false){let t=$('#toast');t.textContent=msg;t.style.background=bad?'#991b1b':'#172033';t.classList.remove('hidden');clearTimeout(t._timer);t._timer=setTimeout(()=>t.classList.add('hidden'),3200)}
-$('#create-version').onclick=versionModal;$('#theme').onclick=()=>{document.documentElement.classList.toggle('dark');localStorage.setItem('casehub-theme',document.documentElement.classList.contains('dark')?'dark':'light');if(recordEditor){$('#record-editor').classList.toggle('toastui-editor-dark',document.documentElement.classList.contains('dark'));renderRecordHistory()}if(reqEditor)$('#req-editor').classList.toggle('toastui-editor-dark',document.documentElement.classList.contains('dark'));$('#script-run-markdown')?.classList.toggle('toastui-editor-dark',document.documentElement.classList.contains('dark'));$$('.issue-viewer,#issue-detail .toastui-editor-defaultUI').forEach(el=>el.classList.toggle('toastui-editor-dark',document.documentElement.classList.contains('dark')))};$('#collapse').onclick=()=>setSidebarCollapsed(true);$('#expand').onclick=$('#empty-expand').onclick=()=>setSidebarCollapsed(false);
+$('#create-version').onclick=versionModal;$('#theme').onclick=()=>{document.documentElement.classList.toggle('dark');localStorage.setItem('casehub-theme',document.documentElement.classList.contains('dark')?'dark':'light');applyKbTheme();if(recordEditor){$('#record-editor').classList.toggle('toastui-editor-dark',document.documentElement.classList.contains('dark'));renderRecordHistory()}if(reqEditor)$('#req-editor').classList.toggle('toastui-editor-dark',document.documentElement.classList.contains('dark'));$('#script-run-markdown')?.classList.toggle('toastui-editor-dark',document.documentElement.classList.contains('dark'));$$('.issue-viewer,#issue-detail .toastui-editor-defaultUI').forEach(el=>el.classList.toggle('toastui-editor-dark',document.documentElement.classList.contains('dark')))};$('#collapse').onclick=()=>setSidebarCollapsed(true);$('#expand').onclick=$('#empty-expand').onclick=()=>setSidebarCollapsed(false);
 $$('[data-view]').forEach(b=>b.onclick=()=>{$$('[data-view]').forEach(x=>x.classList.toggle('active',x===b));view=b.dataset.view;if(view!=='cases'){selected.clear();updateBulk()}$('#case-view').classList.toggle('hidden',view!=='cases');$('#task-view').classList.toggle('hidden',view!=='tasks');$('#archive-view').classList.toggle('hidden',view!=='archive');updateEmptyHint()});document.addEventListener('click',e=>{if(!e.target.closest('#context-menu'))$('#context-menu').classList.add('hidden')});
 $('#modal-close').onclick=$('#modal-cancel').onclick=()=>$('#modal').close();$('#modal-form').onsubmit=async e=>{e.preventDefault();try{await modalSave(Object.fromEntries(new FormData(e.target)));$('#modal').close()}catch{}};$('#drawer-close').onclick=closeRecordDrawer;$('#run-drawer-close').onclick=()=>$('#run-drawer').classList.add('hidden');$('#record-version').onchange=()=>{recordHistoryLimit=3;$('#record-history').replaceChildren();renderRecordHistory()};$('#record-form').onsubmit=async e=>{e.preventDefault();try{await saveRecord('submitRecord')}catch{}};$('#save-draft').onclick=()=>saveRecord('saveRecord').catch(()=>{});$('#close-search').onclick=()=>{$('#search-panel').classList.add('hidden');$('#workspace').style.gridTemplateColumns='var(--side) 5px minmax(0,1fr)'};$('#run-search').onclick=runSearch;
 // 所有详情区（四个工作区的内容区和右侧抽屉）各自滚动：滚过半屏后右下角出现"回到顶部"，点击滚回顶部。
@@ -525,7 +525,7 @@ bindResizer('#issue-resize-left',null,'--issue-side');
 bindResizer('#kb-resize-left',null,'--kb-side');
 document.onmousemove=e=>{if(resizing){lastX=e.clientX;document.documentElement.style.setProperty(resizeVar,Math.max(0,Math.min(600,e.clientX))+'px')}};
 document.onmouseup=()=>{if(resizing&&lastX<70&&resizeCollapse)$(resizeCollapse).click();else if(resizing&&lastX<220)document.documentElement.style.setProperty(resizeVar,'220px');resizing=false;$$('.resizer').forEach(r=>r.classList.remove('dragging'))};
-document.documentElement.classList.toggle('dark',localStorage.getItem('casehub-theme')==='dark');
+{const saved=localStorage.getItem('casehub-theme');document.documentElement.classList.toggle('dark',saved?saved==='dark':!!window.matchMedia?.('(prefers-color-scheme: dark)').matches)}
 window.addEventListener('hashchange',renderHistoryRoute);
 refresh().then(()=>{watchHostings();return restoreServerTasks()}).then(resumeGenTasks).catch(e=>toast(e.message,true));
 
@@ -1889,6 +1889,7 @@ function setKbFocus(x){
   openAncestors(closedKbFolders,state.knowledgeFolders,start,id=>id);
   kbFocus=x;kbShown=null;renderKnowledgeList();renderKnowledgeFocus();
 }
+function applyKbTheme(){const dark=document.documentElement.classList.contains('dark');$$('#kb-editor .toastui-editor-defaultUI').forEach(el=>el.classList.toggle('toastui-editor-dark',dark));$('#kb-editor')?.classList.toggle('toastui-editor-dark',dark)}
 function disposeKbEditor(){kbEditor?.destroy();kbEditor=null}
 function renderKnowledgeFocus(){
   const empty=$('#kb-empty'),detail=$('#kb-detail');if(!empty||!detail)return;
@@ -1912,11 +1913,11 @@ function renderKnowledgeFocus(){
   if(doc.Generated){
     // 产品用例库：由主线自动生成，每次合并或重整后同步，只读展示。
     detail.innerHTML=`<div class="detail-head"><div><div class="eyebrow">${esc(doc.ID)} · 主线自动生成，只读</div><h1>${esc(doc.Title)}</h1></div></div><div class="card meta-grid"><span>更新者 <b>${esc(doc.UpdatedBy)}</b></span><span>更新时间 <b>${fmt(doc.UpdatedAt)}</b></span></div><div class="card"><div id="kb-editor"></div></div>`;
-    kbEditor=toastui.Editor.factory({el:$('#kb-editor'),viewer:true,initialValue:doc.Content||'',usageStatistics:false});
+    kbEditor=toastui.Editor.factory({el:$('#kb-editor'),viewer:true,initialValue:doc.Content||'',usageStatistics:false});applyKbTheme();
     return;
   }
   detail.innerHTML=`<div class="detail-head"><div><div class="eyebrow">${esc(doc.ID)}</div><h1>${esc(doc.Title)}</h1></div><div class="detail-actions"><button type="button" class="secondary" id="kb-rename">重命名</button><button type="button" class="secondary" id="kb-delete">删除</button><button type="button" id="kb-save">保存</button></div></div><div class="card meta-grid"><span>创建者 <b>${esc(doc.CreatedBy)}</b></span><span>创建时间 <b>${fmt(doc.CreatedAt)}</b></span><span>更新者 <b>${esc(doc.UpdatedBy)}</b></span><span>更新时间 <b>${fmt(doc.UpdatedAt)}</b></span></div><div class="card"><div id="kb-editor"></div></div>`;
-  kbEditor=new toastui.Editor({el:$('#kb-editor'),height:'520px',initialEditType:'wysiwyg',previewStyle:'tab',initialValue:doc.Content||'',language:'zh-CN',theme:document.documentElement.classList.contains('dark')?'dark':'light',usageStatistics:false});
+  kbEditor=new toastui.Editor({el:$('#kb-editor'),height:'520px',initialEditType:'wysiwyg',previewStyle:'tab',initialValue:doc.Content||'',language:'zh-CN',theme:document.documentElement.classList.contains('dark')?'dark':'light',usageStatistics:false});applyKbTheme();
   $('#kb-rename').onclick=()=>kbRenameDocModal(doc);
   $('#kb-delete').onclick=()=>deleteKbDoc(doc);
   $('#kb-save').onclick=e=>saveKbDoc(doc,e.currentTarget);
