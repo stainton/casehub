@@ -39,7 +39,7 @@ type ReorgAssignment struct {
 	Category     string   `json:"category"`
 }
 
-const reorgMaxDepth = 4
+const reorgMaxDepth = 6
 
 func reorganizeMainline(s *State, a Action) error {
 	r := a.Reorganize

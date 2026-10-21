@@ -203,7 +203,7 @@ func TestReorganizeMainlineRejectsInvalidPlans(t *testing.T) {
 		"bad code":        reorg([][2]string{{"a-b", "x"}}, ok),
 		"bad category":    reorg(products, asg("CASE-0001", "AIGC", "LOGIN", "X", "登录")),
 		"slash":           reorg(products, asg("CASE-0001", "AIGC", "LOGIN", "FUNC", "a/b")),
-		"too deep":        reorg(products, asg("CASE-0001", "AIGC", "LOGIN", "FUNC", "a", "b", "c", "d", "e")),
+		"too deep":        reorg(products, asg("CASE-0001", "AIGC", "LOGIN", "FUNC", "a", "b", "c", "d", "e", "f", "g")),
 		"no path":         reorg(products, asg("CASE-0001", "AIGC", "LOGIN", "FUNC")),
 	} {
 		if _, err := svc.Apply(context.Background(), core.Action{Type: "reorganizeMainline", Reorganize: plan}); err == nil {
@@ -231,4 +231,42 @@ func caseIn(st core.State, versionID, id string) *core.TestCase {
 		}
 	}
 	return nil
+}
+
+// 重整此目录: an existing leaf is divided further; cases moved down get their own folder and prefix, the one left
+// behind is renumbered from 001, and nothing outside the folder changes.
+func TestReorganizeMainlineDividesAFolderFurther(t *testing.T) {
+	svc := core.NewService(store.NewMemory())
+	products := [][2]string{{"AIGC", "AIGC 平台"}}
+	st := apply(t, svc, core.Action{Type: "createVersion", Name: "seed", Blank: true})
+	v := branchID(t, st, "seed")
+	for _, title := range []string{"关键词搜索", "标签筛选", "搜索框展示"} {
+		apply(t, svc, core.Action{Type: "createCase", VersionID: v, FolderID: "root", Title: title})
+	}
+	apply(t, svc, core.Action{Type: "merge", VersionID: v})
+	st = apply(t, svc, core.Action{Type: "archiveVersion", VersionID: v})
+	id := func(st core.State, title string) string { return caseIDByTitle(t, st, "main", title) }
+	st = apply(t, svc, core.Action{Type: "reorganizeMainline", Reorganize: reorg(products,
+		asg(id(st, "关键词搜索"), "AIGC", "ASRCH", "FUNC", "资产区", "搜索"),
+		asg(id(st, "标签筛选"), "AIGC", "ASRCH", "FUNC", "资产区", "搜索"),
+		asg(id(st, "搜索框展示"), "AIGC", "ASRCH", "FUNC", "资产区", "搜索"),
+		asg("CASE-0001", "AIGC", "LOGIN", "FUNC", "登录"))})
+	st = apply(t, svc, core.Action{Type: "reorganizeMainline", Reorganize: reorg(products,
+		asg(id(st, "关键词搜索"), "AIGC", "AKEY", "FUNC", "资产区", "搜索", "关键词搜索"),
+		asg(id(st, "标签筛选"), "AIGC", "ATAG", "FUNC", "资产区", "搜索", "标签筛选"),
+		asg(id(st, "搜索框展示"), "AIGC", "ASRCH", "FUNC", "资产区", "搜索"))})
+	got := mainPaths(st)
+	for cid, path := range map[string]string{
+		"TC-AIGC-AKEY-FUNC-001":  "全部用例/AIGC 平台/资产区/搜索/关键词搜索/功能测试",
+		"TC-AIGC-ATAG-FUNC-001":  "全部用例/AIGC 平台/资产区/搜索/标签筛选/功能测试",
+		"TC-AIGC-ASRCH-FUNC-001": "全部用例/AIGC 平台/资产区/搜索/功能测试",
+		"TC-AIGC-LOGIN-FUNC-001": "全部用例/AIGC 平台/登录/功能测试",
+	} {
+		if got[cid] != path {
+			t.Fatalf("%s at %q, want %q (all: %v)", cid, got[cid], path, got)
+		}
+	}
+	if id(st, "搜索框展示") != "TC-AIGC-ASRCH-FUNC-001" {
+		t.Fatalf("the case left in the divided folder must be renumbered from 001: %v", got)
+	}
 }

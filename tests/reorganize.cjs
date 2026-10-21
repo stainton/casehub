@@ -20,7 +20,13 @@ function fakePlanner(){
       const jobId=randomUUID(),at=new Date().toISOString();
       // 按用例测的功能细分：登录 → 登录；批量 → 资产区/批量操作；其余 → 资产区/一键同步，其中“中断”的是可靠性测试。
       // 来自 V1、V2 两个版本目录、测同一功能的用例落到同一个目录。
-      const assignments=input.organize.cases.map(c=>/登录/.test(c.title)?{caseId:c.id,product:'AIGC',functionCode:'LOGIN',path:['登录'],category:'FUNC'}
+      // 目录重整（organize.scope）：只在该目录下往下分——“中断”的进 异常恢复，其余留在目录本身（沿用它已定下的缩写）。
+      // 像真实 planner 一样把相对路径拼回完整路径。
+      const scope=input.organize.scope,settled=p=>(input.organize.functions||[]).find(f=>f.product===scope.product&&f.path.join('/')===p.join('/'))?.code;
+      const assignments=scope?input.organize.cases.map(c=>/中断/.test(c.title)
+        ?{caseId:c.id,product:scope.product,functionCode:'ASYNCREC',path:[...scope.path,'异常恢复'],category:'REL'}
+        :{caseId:c.id,product:scope.product,functionCode:settled(scope.path)||'NEWCODE',path:scope.path,category:'FUNC'})
+      :input.organize.cases.map(c=>/登录/.test(c.title)?{caseId:c.id,product:'AIGC',functionCode:'LOGIN',path:['登录'],category:'FUNC'}
         :/批量/.test(c.title)?{caseId:c.id,product:'AIGC',functionCode:'ABATCH',path:['资产区','批量操作'],category:'FUNC'}
         :{caseId:c.id,product:'AIGC',functionCode:'ASYNC',path:['资产区','一键同步'],category:/中断/.test(c.title)?'REL':'FUNC'});
       const entry={job:{id:jobId,kind:'planner',status:'succeeded',stage:'completed',createdAt:at,updatedAt:at,finishedAt:at,lastEventId:1},
@@ -123,6 +129,31 @@ function fakePlanner(){
     // 这一轮已经结束：再选「重新细分」就是新的一轮。
     await page.locator('#reorg-form [name="scope"]').selectOption('all');
     await page.locator('#reorg-scope').getByText('将开始新一轮重新细分').waitFor();
+    await page.locator('#reorg-close').click();
+
+    // 重整此目录：在 资产区 / 一键同步 上右键，只把这个目录下的用例交给 planner，在它下面再分一层。
+    await page.evaluate(()=>{
+      const f=state.folders.find(x=>x.VersionID==='main'&&x.Name==='一键同步');
+      document.querySelector(`.folder-row[data-version="main"][data-folder="${f.ID}"]`).dispatchEvent(new MouseEvent('contextmenu',{bubbles:true,cancelable:true,clientX:20,clientY:20}));
+    });
+    await page.locator('.context-menu button',{hasText:'重整此目录'}).click();
+    await page.locator('#reorg-title').getByText('重整目录：AIGC 平台 / 资产区 / 一键同步').waitFor();
+    await page.locator('#reorg-form [name="secret"]').fill('test-secret');
+    await page.locator('#reorg-form button[type="submit"]').click();
+    await page.locator('#reorg-apply').waitFor();
+    const scoped=submissions.at(-1).organize;
+    assert.deepEqual(scoped.scope,{product:'AIGC',path:['资产区','一键同步']});
+    assert.deepEqual(scoped.cases.map(c=>c.title).sort(),[`菜单同步中断后重试 ${stamp}`,`资产菜单同步 ${stamp}`]);
+    assert.deepEqual(scoped.products.map(p=>p.code),['AIGC']);
+    assert.ok(scoped.functions.some(f=>f.code==='ASYNC'&&f.path.join('/')==='资产区/一键同步'),'目录本身的缩写随请求带过去');
+    await page.locator('#reorg-apply').click();
+    await page.locator('#reorg-body').getByText('这个目录已经重整完').waitFor();
+    const deeper=await page.evaluate(stamp=>Object.fromEntries(cases('main').filter(c=>c.Title.endsWith(stamp)).map(c=>[c.Title.split(' ')[0],[c.ID,folderPathNames('main',c.FolderID).join('/')]])),stamp);
+    assert.deepEqual(deeper,{
+      '资产菜单同步':['TC-AIGC-ASYNC-FUNC-001','全部用例/AIGC 平台/资产区/一键同步/功能测试'],
+      '菜单同步中断后重试':['TC-AIGC-ASYNCREC-REL-001','全部用例/AIGC 平台/资产区/一键同步/异常恢复/可靠性测试'],
+      '批量同步':[after.cases.find(c=>c.title===`批量同步 ${stamp}`).id,'全部用例/AIGC 平台/资产区/批量操作/功能测试']});
+    assert.ok(!(await page.evaluate(()=>folders('main').some(f=>f.Name==='可靠性测试'&&folderPathNames('main',f.ID).join('/')==='全部用例/AIGC 平台/资产区/一键同步/可靠性测试'))),'拆空的类别目录被删除');
     // 归档版本保留旧编号。
     const archived=await page.evaluate(n=>cases(state.versions.find(v=>v.name===n).id).map(c=>c.ID),names[0]);
     assert.ok(archived.every(id=>!id.startsWith('TC-AIGC-')));
