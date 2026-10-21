@@ -1,36 +1,38 @@
 // 「用例重整」（功能 AM，临时）的浏览器回归：未完成的测试版本挡住重整；探索归类 → 预览 → 应用后主线按 产品/模块 重建、
 // 用例改编号、空出来的版本目录被删掉。脚本自带一个假的 planner 服务（真实的 HTTP 形状，不调用模型），启动 CaseHub 时用
-// CASEHUB_PLANNER_URL 指向它。只对临时 CASEHUB_STORE=memory 服务运行。
+// CASEHUB_PLANNER_URL 指向它（organizer 默认同址，也可以用 CASEHUB_ORGANIZER_URL 单独指定）。只对临时 CASEHUB_STORE=memory 服务运行。
 const {chromium}=require(process.env.PLAYWRIGHT_MODULE||'playwright');
 const assert=require('node:assert/strict');
 const http=require('node:http');
 const {randomUUID}=require('node:crypto');
+// 重整由 auto-test 的 organizer 完成（默认和 planner 同一个地址）：假服务在同一端口上同时扮演两者。
 
 const PLANNER_PORT=Number(process.env.CASEHUB_FAKE_PLANNER_PORT||4598);
-const submissions=[];
+const submissions=[];let plannerHits=0; // 重整只交给 organizer，planner 一次也不该收到
 function fakePlanner(){
   const jobs=new Map();
   const json=(res,status,body)=>{res.writeHead(status,{'Content-Type':'application/json','Access-Control-Allow-Origin':'*'});res.end(JSON.stringify(body))};
   const read=req=>new Promise(resolve=>{let body='';req.on('data',c=>body+=c);req.on('end',()=>resolve(JSON.parse(body)))});
   return http.createServer(async(req,res)=>{
     const path=new URL(req.url,'http://fake').pathname,[,,,,id,resource]=path.split('/'); // 派发时带 ?queue=false
-    if(req.method==='POST'&&path==='/v1/planner/jobs'){
+    if(req.method==='POST'&&path==='/v1/planner/jobs'){plannerHits++;return json(res,400,{error:{code:'INVALID_REQUEST',message:'planner does not organize'}})}
+    if(req.method==='POST'&&path==='/v1/organizer/jobs'){
       const input=await read(req);
       submissions.push(input);
       const jobId=randomUUID(),at=new Date().toISOString();
       // 按用例测的功能细分：登录 → 登录；批量 → 资产区/批量操作；其余 → 资产区/一键同步，其中“中断”的是可靠性测试。
       // 来自 V1、V2 两个版本目录、测同一功能的用例落到同一个目录。
-      // 目录重整（organize.scope）：只在该目录下往下分——“中断”的进 异常恢复，其余留在目录本身（沿用它已定下的缩写）。
+      // 目录重整（scope）：只在该目录下往下分——“中断”的进 异常恢复，其余留在目录本身（沿用它已定下的缩写）。
       // 像真实 planner 一样把相对路径拼回完整路径。
-      const scope=input.organize.scope,settled=p=>(input.organize.functions||[]).find(f=>f.product===scope.product&&f.path.join('/')===p.join('/'))?.code;
-      const assignments=scope?input.organize.cases.map(c=>/中断/.test(c.title)
+      const scope=input.scope,settled=p=>(input.functions||[]).find(f=>f.product===scope.product&&f.path.join('/')===p.join('/'))?.code;
+      const assignments=scope?input.cases.map(c=>/中断/.test(c.title)
         ?{caseId:c.id,product:scope.product,functionCode:'ASYNCREC',path:[...scope.path,'异常恢复'],category:'REL'}
         :{caseId:c.id,product:scope.product,functionCode:settled(scope.path)||'NEWCODE',path:scope.path,category:'FUNC'})
-      :input.organize.cases.map(c=>/登录/.test(c.title)?{caseId:c.id,product:'AIGC',functionCode:'LOGIN',path:['登录'],category:'FUNC'}
+      :input.cases.map(c=>/登录/.test(c.title)?{caseId:c.id,product:'AIGC',functionCode:'LOGIN',path:['登录'],category:'FUNC'}
         :/批量/.test(c.title)?{caseId:c.id,product:'AIGC',functionCode:'ABATCH',path:['资产区','批量操作'],category:'FUNC'}
         :{caseId:c.id,product:'AIGC',functionCode:'ASYNC',path:['资产区','一键同步'],category:/中断/.test(c.title)?'REL':'FUNC'});
       const entry={job:{id:jobId,kind:'planner',status:'succeeded',stage:'completed',createdAt:at,updatedAt:at,finishedAt:at,lastEventId:1},
-        result:{mode:'organize',products:input.organize.products.map(({code,name})=>({code,name})),functions:[],assignments,unassigned:[],explorationNotes:'',limitations:[{risk:'low',summary:'未进入回收站页面'}]}};
+        result:{mode:'organize',products:input.products.map(({code,name})=>({code,name})),functions:[],assignments,unassigned:[],explorationNotes:'',limitations:[{risk:'low',summary:'未进入回收站页面'}]}};
       jobs.set(jobId,entry);
       res.setHeader('Location',`/v1/planner/jobs/${jobId}`);
       return json(res,202,{...entry.job,status:'queued',stage:'queued'});
@@ -90,10 +92,10 @@ function fakePlanner(){
     await page.locator('#reorg-apply').waitFor();
     const sent=submissions.at(-1);
     const mainCount=await page.evaluate(()=>cases('main').length);
-    assert.equal(sent.organize.cases.length,mainCount,'本批包含所有未重整的主线用例');
+    assert.equal(sent.cases.length,mainCount,'本批包含所有未重整的主线用例');
     assert.equal(sent.requirements,undefined);
     assert.equal(sent.casehubTask,undefined,'CaseHub 自己的字段不转发给节点');
-    assert.equal(await page.evaluate(async()=>(await serviceRequest('/api/tasks?kind=planner&subject=reorganize:main')).tasks.length>0),true);
+    assert.equal(await page.evaluate(async()=>(await serviceRequest('/api/tasks?kind=organizer&subject=reorganize:main')).tasks.length>0),true);
     assert.ok(!(await page.evaluate(()=>localStorage.getItem('casehub-reorg-form'))).includes('test-secret'),'密码不落浏览器存储');
     await page.locator('#reorg-body').getByText('未进入回收站页面').waitFor();
 
@@ -121,8 +123,8 @@ function fakePlanner(){
     await page.locator('#reorg-form [name="secret"]').fill('test-secret');
     await page.locator('#reorg-form button[type="submit"]').click();
     await page.locator('#reorg-apply').waitFor();
-    assert.equal(submissions.at(-1).organize.cases.length,mainCount,'重新细分时已重整的用例也在本批');
-    assert.ok(submissions.at(-1).organize.functions.length===0,'本批之外没有已定下的功能');
+    assert.equal(submissions.at(-1).cases.length,mainCount,'重新细分时已重整的用例也在本批');
+    assert.ok(submissions.at(-1).functions.length===0,'本批之外没有已定下的功能');
     await page.locator('#reorg-apply').click();
     await page.locator('#reorg-body').getByText('所有用例都已重整').waitFor();
     assert.deepEqual(await page.evaluate(()=>cases('main').map(c=>c.ID).sort()),after.cases.map(c=>c.id).sort(),'同样的归类再应用一次，编号不变');
@@ -145,7 +147,7 @@ function fakePlanner(){
     await page.locator('#reorg-form [name="secret"]').fill('test-secret');
     await page.locator('#reorg-form button[type="submit"]').click();
     await page.locator('#reorg-apply').waitFor();
-    const scoped=submissions.at(-1).organize;
+    const scoped=submissions.at(-1);
     assert.deepEqual(scoped.scope,{product:'AIGC',path:['资产区','一键同步'],maxChildren:2,maxDepth:1});
     await page.locator('#reorg-body').getByText('每个目录最多 2 个子目录，最多再分 1 层').waitFor();
     assert.deepEqual(scoped.cases.map(c=>c.title).sort(),[`菜单同步中断后重试 ${stamp}`,`资产菜单同步 ${stamp}`]);
@@ -162,6 +164,7 @@ function fakePlanner(){
     // 归档版本保留旧编号。
     const archived=await page.evaluate(n=>cases(state.versions.find(v=>v.name===n).id).map(c=>c.ID),names[0]);
     assert.ok(archived.every(id=>!id.startsWith('TC-AIGC-')));
+    assert.equal(plannerHits,0,'planner 不接重整任务');
     assert.deepEqual(errors,[]);
     console.log('reorganize: ok');
   }finally{

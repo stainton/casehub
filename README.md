@@ -93,6 +93,7 @@ http://<可访问的节点 IP>:30080
 | `CASEHUB_HEALER_URL` | 同 `CASEHUB_GENERATOR_URL` | auto-test healer（脚本修复）地址；默认由 generator 服务提供 |
 | `CASEHUB_AUTOMATION_URL` | — | 可选的单进程 auto-test automation 服务地址；未单独设置 `CASEHUB_PLANNER_URL` / `CASEHUB_GENERATOR_URL` 时，planner、generator、healer 都通过此地址访问 |
 | `CASEHUB_GENERAL_AGENT_URL` | `http://localhost:4503` | auto-test general-agent 服务地址；Kubernetes 中为 `http://general-agent:4503` |
+| `CASEHUB_ORGANIZER_URL` | 同 `CASEHUB_PLANNER_URL` | 用例重整（临时功能）的 auto-test organizer 地址；它和 planner 在同一进程/Pod 里，一般不用单独设置 |
 | `CASEHUB_EXECUTOR_URL` | `http://localhost:4504` | auto-test executor 服务地址 |
 | `CASEHUB_TASK_QUEUE_TIMEOUT` | `30m` | 任务排队这么久仍没有执行节点接收，则以 `NO_NODE_AVAILABLE` 失败 |
 | `CASEHUB_TASK_RETENTION` | `168h` | 已结束任务（含进度、结果、会话包、诊断包）保留时长 |
@@ -185,6 +186,8 @@ Kubernetes 部署中，planner、generator（同时提供 healer）、executor �
 「AI 托管」的浏览器回归（提交后关掉浏览器，服务端仍完成 评估 → 设计 → 自动评审 → 归档到 产品/版本/需求；停下后在页面上重试）：`node tests/ai-host.cjs`，同样自带假的 planner 服务，启动方式同上；最后一段从用例管理（右键目录、勾选用例）发起托管。服务端流程（含 CaseHub 重启后续跑、继续失败的设计、脚本生成与执行、只重跑执行出错的脚本、放弃、托管用例）另有 `go test ./internal/hosting/`。浏览器回归的假服务同时充当 generator 和 executor，启动 CaseHub 时把 `CASEHUB_GENERATOR_URL`、`CASEHUB_EXECUTOR_URL` 也指向它。
 
 「AI 修正需求」浏览器回归（详情页按钮 / 右键菜单、变更确认、需求与关联用例一起保存、用例打标与确认）：`node tests/req-ai-revise.cjs`，通用 AI 服务由脚本拦截成固定结果，不调用模型；只对 `CASEHUB_STORE=memory PORT=18081 go run .` 启动的临时服务运行。
+
+「用例重整」（临时功能）的浏览器回归：`node tests/reorganize.cjs`，脚本自带一个假的 organizer 服务（与假 planner 同一端口，默认 127.0.0.1:4598），启动临时服务时把 `CASEHUB_PLANNER_URL` 指向它即可（organizer 默认同址）。
 
 自动化管理与脚本生成的浏览器回归：`node tests/automation.cjs`，脚本自带一个假的 generator 服务（默认 127.0.0.1:4599，`CASEHUB_FAKE_GENERATOR_PORT` 可改），不需要 auto-test 在场，也不调用模型；启动临时服务时把 `CASEHUB_GENERATOR_URL` 指向它：`CASEHUB_STORE=memory PORT=18081 CASEHUB_GENERATOR_URL=http://127.0.0.1:4599 go run .`。
 

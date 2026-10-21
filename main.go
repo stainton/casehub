@@ -183,6 +183,8 @@ func main() {
 		return p
 	}
 	plannerPool, generatorPool, healerPool := pool("planner", plannerURL), pool("generator", generatorURL), pool("healer", healerURL)
+	// The organizer (用例重整, temporary) runs in the planner's pods by default, with the planner's configuration.
+	organizerPool := pool("organizer", env("CASEHUB_ORGANIZER_URL", plannerURL))
 	executorPool := pool("executor", env("CASEHUB_EXECUTOR_URL", "http://localhost:4504"))
 	generalAgentPool := pool("general-agent", env("CASEHUB_GENERAL_AGENT_URL", "http://localhost:4503"))
 	proxy := func(p *dispatch.Pool, name string, settings upstream.Settings, assets *upstream.Assets) (http.Handler, bool) {
@@ -196,11 +198,13 @@ func main() {
 	healerProxy, healerEnabled := proxy(healerPool, "healer", agentSettingsOf(svc, "healer"), lookup)
 	executorProxy, executorEnabled := proxy(executorPool, "executor", agentSettingsOf(svc, "planner"), nil)
 	generalAgentProxy, generalAgentEnabled := proxy(generalAgentPool, "general-agent", agentSettingsOf(svc, "general-agent"), nil)
+	organizerProxy, organizerEnabled := proxy(organizerPool, "organizer", agentSettingsOf(svc, "planner"), nil)
 	dispatcher := dispatch.New(taskStore, []*dispatch.Kind{
 		{Name: "planner", Pool: plannerPool, Settings: agentSettingsOf(svc, "planner"), Assets: lookup, Continuable: true},
 		{Name: "generator", Pool: generatorPool, Settings: agentSettingsOf(svc, "generator"), Assets: lookup},
 		{Name: "healer", Pool: healerPool, Settings: agentSettingsOf(svc, "healer"), Assets: lookup},
 		{Name: "executor", Pool: executorPool, Settings: agentSettingsOf(svc, "planner")},
+		{Name: "organizer", Pool: organizerPool, Settings: agentSettingsOf(svc, "planner"), Continuable: true},
 	}, dispatchConfig())
 	if err := dispatcher.Start(context.Background()); err != nil {
 		log.Fatal(err)
@@ -213,13 +217,14 @@ func main() {
 			log.Fatal(err)
 		}
 	}
-	log.Printf("CaseHub listening on :%s (store=%s, planner=%v, generator=%v, healer=%v, executor=%v, general-agent=%v; nodes: %s)", port, kind, plannerEnabled, generatorEnabled, healerEnabled, executorEnabled, generalAgentEnabled, dispatcher)
+	log.Printf("CaseHub listening on :%s (store=%s, planner=%v, generator=%v, healer=%v, executor=%v, general-agent=%v, organizer=%v; nodes: %s)", port, kind, plannerEnabled, generatorEnabled, healerEnabled, executorEnabled, generalAgentEnabled, organizerEnabled, dispatcher)
 	log.Fatal(http.ListenAndServe(":"+port, routes(&api{service: svc, dispatcher: dispatcher, hosting: hostingRunner},
 		service{name: "planner", proxy: plannerProxy, enabled: plannerEnabled},
 		service{name: "generator", proxy: generatorProxy, enabled: generatorEnabled},
 		service{name: "healer", proxy: healerProxy, enabled: healerEnabled},
 		service{name: "executor", proxy: executorProxy, enabled: executorEnabled},
-		service{name: "general-agent", proxy: generalAgentProxy, enabled: generalAgentEnabled})))
+		service{name: "general-agent", proxy: generalAgentProxy, enabled: generalAgentEnabled},
+		service{name: "organizer", proxy: organizerProxy, enabled: organizerEnabled})))
 }
 
 // dispatchConfig reads the task queue's limits; each is a Go duration such as 30m or 168h.

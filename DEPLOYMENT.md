@@ -47,6 +47,7 @@ AI 设计（planner）、脚本生成（generator）、脚本修复（healer）�
 | `CASEHUB_HEALER_URL` | 同 generator | `dns+http://generator-nodes:4502`（healer 运行在 generator 进程中） |
 | `CASEHUB_EXECUTOR_URL` | `http://localhost:4504` | `dns+http://executor-nodes:4504` |
 | `CASEHUB_GENERAL_AGENT_URL` | `http://localhost:4503` | `http://general-agent:4503`（只有同步调用，不经过任务队列） |
+| `CASEHUB_ORGANIZER_URL` | 同 `CASEHUB_PLANNER_URL` | 一般不用设：用例重整（临时功能）的 organizer 跑在 planner Pod 里，任务走 `/api/organizer/jobs`，使用 planner 的 agent 配置 |
 | `CASEHUB_AUTOMATION_URL` | — | 只在使用单进程 automation 时设置；未单独设置 planner、generator 地址时，三类任务都发往这里 |
 
 CaseHub 与 auto-test 不在同一 namespace 时，`dns+` 地址要写完整域名，例如 `dns+http://planner-nodes.<namespace>.svc.cluster.local:4501`。
