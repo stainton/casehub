@@ -161,9 +161,9 @@ function reorgForm(note=''){
     const excerpt=c=>[c.Preconditions&&`前置：${c.Preconditions}`,c.Steps&&`步骤：${c.Steps}`,c.Expected&&`预期：${c.Expected}`].filter(Boolean).join(' ').replace(/\s+/g,' ').slice(0,excerptChars);
     const organize={products,cases:batch.map(c=>({id:c.ID,title:c.Title,folder:reorgFolderOf(c),excerpt:excerpt(c)})),functions:reorgSettledFunctions(products,batch),
       ...(reorgTarget?{scope:{product:reorgTarget.product,path:reorgTarget.path,...limits}}:{})};
-    const productExperience=productExperienceFor(products[0].baseUrl);
+    const productExperience=productExperienceFor(products[0].baseUrl),constraints=constraintsFor(products.map(p=>p.name));
     reorgPayload={...organize,target:{baseUrl:products[0].baseUrl},timeoutMs:timeout*60000,
-      context:{...(v.instructions.trim()?{instructions:v.instructions.trim()}:{}),...(v.account||v.secret?{testData:{username:v.account||'',password:v.secret||''}}:{}),...(productExperience?{productExperience}:{})},
+      context:{...(constraints?{constraints}:{}),...(v.instructions.trim()?{instructions:v.instructions.trim()}:{}),...(v.account||v.secret?{testData:{username:v.account||'',password:v.secret||''}}:{}),...(productExperience?{productExperience}:{})},
       casehubTask:{subject:REORG_SUBJECT,...(reorgTarget?{meta:{folderID:reorgTarget.folderID,...limits}}:{})}};
     await reorgSubmit(reorgPayload);
   };

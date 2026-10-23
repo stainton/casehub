@@ -168,9 +168,27 @@ type KnowledgeDoc struct {
 	ID, FolderID, Title, Content string
 	CreatedBy, UpdatedBy         string
 	CreatedAt, UpdatedAt         time.Time
-	// Generated marks a product library's case-tree document: it is rebuilt
-	// from mainline and cannot be edited or deleted by hand.
+	// Generated marks the read-only case-tree document earlier versions kept in
+	// each product library; syncProductKnowledge deletes any it finds.
 	Generated bool
+	// Kind says what the document is for: KnowledgeConstraint rules every agent
+	// working on cases must follow (they are sent with each AI request), or
+	// KnowledgeReference background that is only stored. Empty means reference.
+	Kind string
+}
+
+const (
+	KnowledgeConstraint = "constraint"
+	KnowledgeReference  = "reference"
+)
+
+// knowledgeKind normalises a stored or submitted kind; anything unknown, and
+// every generated document, is a reference.
+func knowledgeKind(kind string) string {
+	if kind == KnowledgeConstraint {
+		return KnowledgeConstraint
+	}
+	return KnowledgeReference
 }
 
 // LegacyKnowledgeItem is the flat entry an earlier version stored. It is only
@@ -369,6 +387,8 @@ type Action struct {
 	Blank                bool
 	Resolved, NotIssue   bool
 	DocID, Content, Code string
+	// Kind is a knowledge document's kind (constraint or reference).
+	Kind string
 	// IDPrefix (REQ-MODULE-CATEGORY) numbers a created pending case TC-<prefix>-NNN whatever folder it goes in.
 	IDPrefix                          string
 	IssueID, RequirementID, RootCause string
@@ -2561,7 +2581,7 @@ func createKnowledgeDoc(s *State, a Action) error {
 		return err
 	}
 	t := now()
-	s.KnowledgeDocs = append(s.KnowledgeDocs, KnowledgeDoc{ID: "KB-" + strings.ToUpper(ID()[:6]), FolderID: a.FolderID, Title: strings.TrimSpace(a.Title), Content: a.Content, CreatedBy: a.Author, UpdatedBy: a.Author, CreatedAt: t, UpdatedAt: t})
+	s.KnowledgeDocs = append(s.KnowledgeDocs, KnowledgeDoc{ID: "KB-" + strings.ToUpper(ID()[:6]), FolderID: a.FolderID, Title: strings.TrimSpace(a.Title), Content: a.Content, Kind: knowledgeKind(a.Kind), CreatedBy: a.Author, UpdatedBy: a.Author, CreatedAt: t, UpdatedAt: t})
 	return nil
 }
 
@@ -2570,13 +2590,14 @@ func editKnowledgeDoc(s *State, a Action) error {
 	if d == nil {
 		return errors.New("知识库文档不存在")
 	}
-	if d.Generated {
-		return errors.New("产品用例库文档由主线自动生成，不能手工编辑")
-	}
 	if err := validateKnowledgeDoc(a); err != nil {
 		return err
 	}
 	d.Title, d.Content = strings.TrimSpace(a.Title), a.Content
+	// An edit that does not name a kind (renaming, saving the text) keeps the document's kind.
+	if a.Kind != "" {
+		d.Kind = knowledgeKind(a.Kind)
+	}
 	d.UpdatedBy, d.UpdatedAt = a.Author, now()
 	return nil
 }
@@ -2585,9 +2606,6 @@ func deleteKnowledgeDoc(s *State, a Action) error {
 	d, i := knowledgeDocAt(s, a.DocID)
 	if d == nil {
 		return errors.New("知识库文档不存在")
-	}
-	if d.Generated {
-		return errors.New("产品用例库文档由主线自动生成，不能删除")
 	}
 	s.KnowledgeDocs = append(s.KnowledgeDocs[:i], s.KnowledgeDocs[i+1:]...)
 	return nil

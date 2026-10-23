@@ -304,3 +304,4 @@ button.avatar{padding:0;color:#fff;cursor:pointer;border:1px solid #ffffff40}
 .tc-inline{padding:12px;margin:0 0 8px;border:1px solid var(--line);border-top:0;border-radius:0 0 8px 8px;background:var(--surface)}
 .tc-list .tc-row .tc-status.ok{color:#16a34a;font-weight:600}
 .tc-list .tc-row .tc-status.fail{color:var(--danger);font-weight:600}
+.inline-field{display:inline-flex;align-items:center;gap:6px;margin-right:8px;font-size:13px}.inline-field select{width:auto}

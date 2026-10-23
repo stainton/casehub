@@ -913,17 +913,27 @@ function aiFormValues(form){const data=new FormData(form),x=Object.fromEntries(d
 // 合并在服务端去重，同一结果重复处理（刷新后再次导入）不会产生重复内容。
 function productExperienceFor(baseUrl){let origin='';try{origin=new URL(baseUrl).origin}catch{return ''}return state.productExperiences.find(x=>x.Origin===origin)?.Notes||''}
 async function saveProductExperience(result){const p=result?.productExperience;if(p?.origin&&p.notes?.trim())await act('recordProductExploration',{Origin:p.origin,ExplorationNotes:p.notes})}
-// 产品用例库：知识库里跟随主线自动生成的该产品用例树，交给 planner 作为组织结构参考。产品取需求所在目录的倒数第二级（与 AI 托管的归档规则一致）。
-function caseLibraryFor(doc,product){
-  const path=reqFolderPathNames(liveReqDoc(doc));product=(product||(path.length>=2?path[path.length-2]:'')).trim();
-  if(!product)return '';
-  const lib=state.knowledgeFolders.find(f=>f.Product&&f.Name===product);
-  return lib?state.knowledgeDocs.find(d=>d.Generated&&d.FolderID===lib.ID)?.Content||'':'';
+// 知识库「约束」类文档：agent 干活必须遵守的规则，随每个 AI 请求的 context.constraints 下发（设计、生成、修复、用例重整）。
+// 全局库的约束对所有产品生效；产品库的约束只在该产品的工作里下发。products 是本次工作涉及的产品名（主线「全部用例」下的一级目录名）。
+function kbLibraryOf(doc){let f=state.knowledgeFolders.find(x=>x.ID===doc.FolderID);for(let i=0;f&&f.ParentID&&i<200;i++)f=state.knowledgeFolders.find(x=>x.ID===f.ParentID)||{ID:f.ParentID};return f}
+function constraintsFor(products=[]){
+  const names=new Set(products.map(x=>String(x||'').trim()).filter(Boolean)),parts=[];
+  for(const d of state.knowledgeDocs){
+    if(d.Kind!=='constraint'||!(d.Content||'').trim())continue;
+    const lib=kbLibraryOf(d),scope=lib?.ID==='kb-root'?'全局':lib?.Product&&names.has(lib.Name)?`产品：${lib.Name}`:'';
+    if(scope)parts.push(`## [${scope}] ${d.Title}\n\n${d.Content.trim()}`);
+  }
+  return parts.length?`# 约束（必须遵守）\n\n${parts.join('\n\n')}`.slice(0,190000):'';
 }
+// 需求所在目录的倒数第二级就是产品（与 AI 托管的归档规则一致）。
+const productOfDoc=(doc,product)=>{const path=reqFolderPathNames(liveReqDoc(doc));return (product||(path.length>=2?path[path.length-2]:'')).trim()};
+// 用例所在的产品：它在版本目录树里「全部用例」下的一级目录。
+const productOfCase=(vid,c)=>folderPathNames(vid,c.FolderID)[1]||'';
+const constraintsForCases=(vid,ids)=>constraintsFor(ids.map(id=>state.cases.find(c=>c.VersionID===vid&&c.ID===id)).filter(Boolean).map(c=>productOfCase(vid,c)));
 function aiRequirementPayload(doc,values,code){
   const d=liveReqDoc(doc);code=code||d.Code||'';
-  const caseLibrary=caseLibraryFor(doc,values.product);
-  return {requirements:[{id:d.ID,title:d.Title,content:d.Content||'',...(code?{code}:{})}],...(caseLibrary?{caseLibrary}:{}),instructions:[values.instructions||'',reqRefContext(doc)].filter(Boolean).join('\n\n'),...(d.ExplorationNotes?.trim()?{explorationNotes:d.ExplorationNotes}: {})};
+  const constraints=constraintsFor([productOfDoc(doc,values.product)]);
+  return {requirements:[{id:d.ID,title:d.Title,content:d.Content||'',...(code?{code}:{})}],...(constraints?{constraints}:{}),instructions:[values.instructions||'',reqRefContext(doc)].filter(Boolean).join('\n\n'),...(d.ExplorationNotes?.trim()?{explorationNotes:d.ExplorationNotes}: {})};
 }
 function aiEstimateStatusText(est){
   const seconds=Math.floor((Date.now()-est.startedAt)/1000);
@@ -1152,8 +1162,8 @@ async function startAiJob(doc,values,caseCount,code,timeoutMinutes,{continueFrom
     // 只更新详情页上的缩写标签：整页 renderReqFocus 会重建编辑器，丢掉未保存的需求正文修改。
     if(reqFocus?.type==='doc'&&reqFocus.id===doc.ID&&$('#req-doc-code'))$('#req-doc-code').textContent=code;
   }
-  const {requirements,instructions,explorationNotes,caseLibrary}=aiRequirementPayload(doc,values,code),productExperience=productExperienceFor(values.baseUrl);
-  const payload={requirements,target:{baseUrl:values.baseUrl},context:{instructions,...(caseLibrary?{caseLibrary}:{}),...(explorationNotes?{explorationNotes}:{}),...(productExperience?{productExperience}:{}),...(values.assetIds?.length?{assetIds:values.assetIds}:{})},caseCount,timeoutMs:timeoutMinutes*60000,
+  const {requirements,instructions,explorationNotes,constraints}=aiRequirementPayload(doc,values,code),productExperience=productExperienceFor(values.baseUrl);
+  const payload={requirements,target:{baseUrl:values.baseUrl},context:{instructions,...(constraints?{constraints}:{}),...(explorationNotes?{explorationNotes}:{}),...(productExperience?{productExperience}:{}),...(values.assetIds?.length?{assetIds:values.assetIds}:{})},caseCount,timeoutMs:timeoutMinutes*60000,
     ...(continueFrom?{continueFrom}:{}),casehubTask:{subject:`req:${doc.ID}`}};
   if(values.testAccount||values.testSecret)payload.context.testData={username:values.testAccount||'',password:values.testSecret||''};
   const job=await serviceRequest('/api/planner/jobs',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
@@ -1579,15 +1589,15 @@ async function renderHostForm(doc,{retry}={}){
     if(!Number.isInteger(timeoutMinutes)||timeoutMinutes<AI_MIN_TIMEOUT_MIN||timeoutMinutes>AI_MAX_TIMEOUT_MIN)return toast(`任务超时时间需为 ${AI_MIN_TIMEOUT_MIN}–${AI_MAX_TIMEOUT_MIN} 分钟的整数`,true);
     try{localStorage.setItem(AI_TIMEOUT_KEY,String(timeoutMinutes))}catch{}
     // 评估和设计请求的组成和手动设计完全一样（引用需求的上下文、探索记录、产品经验、资产、测试账号），由服务端补上评估出的数量和缩写。
-    const {requirements,instructions,explorationNotes,caseLibrary}=aiRequirementPayload(doc,{...values,product:String(data.get('product')||'')}),productExperience=productExperienceFor(values.baseUrl);
+    const {requirements,instructions,explorationNotes,constraints}=aiRequirementPayload(doc,{...values,product:String(data.get('product')||'')}),productExperience=productExperienceFor(values.baseUrl);
     const estimate={requirements,context:{instructions}};
-    const job={requirements,target:{baseUrl:values.baseUrl},context:{instructions,...(caseLibrary?{caseLibrary}:{}),...(explorationNotes?{explorationNotes}:{}),...(productExperience?{productExperience}:{}),...(values.assetIds.length?{assetIds:values.assetIds}:{})},timeoutMs:timeoutMinutes*60000};
+    const job={requirements,target:{baseUrl:values.baseUrl},context:{instructions,...(constraints?{constraints}:{}),...(explorationNotes?{explorationNotes}:{}),...(productExperience?{productExperience}:{}),...(values.assetIds.length?{assetIds:values.assetIds}:{})},timeoutMs:timeoutMinutes*60000};
     if(values.testAccount||values.testSecret)job.context.testData={username:values.testAccount,password:values.testSecret};
     // 脚本生成请求（不含用例，服务端归档后补上用例和需求）：和自动化页发起生成时一样的目标、说明、资产、账号和时限。
     const withScripts=Boolean(form.elements.withScripts?.checked)||retryGen,withRun=Boolean(form.elements.withRun?.checked);
     const caseTimeoutMinutes=Number(data.get('caseTimeoutMinutes')||60);
     if(withScripts&&(!Number.isInteger(caseTimeoutMinutes)||caseTimeoutMinutes<1||caseTimeoutMinutes>60))return toast('单用例生成时长需为 1–60 分钟的整数',true);
-    const generate=withScripts?{target:{baseUrl:values.baseUrl},context:{...(values.instructions.trim()?{instructions:values.instructions.trim()}:{}),...(productExperience?{productExperience}:{}),...(values.assetIds.length?{assetIds:values.assetIds}:{}),...(job.context.testData?{testData:job.context.testData}:{})},caseTimeoutMs:caseTimeoutMinutes*60000}:undefined;
+    const generate=withScripts?{target:{baseUrl:values.baseUrl},context:{...(constraints?{constraints}:{}),...(values.instructions.trim()?{instructions:values.instructions.trim()}:{}),...(productExperience?{productExperience}:{}),...(values.assetIds.length?{assetIds:values.assetIds}:{}),...(job.context.testData?{testData:job.context.testData}:{})},caseTimeoutMs:caseTimeoutMinutes*60000}:undefined;
     aiEstimates.set(doc.ID,{status:'draft',values}); // 手动设计/下次托管沿用填过的表单（密码只留在内存）
     saveAiForm(doc,values,est?.count||AI_DEFAULT_CASE_COUNT,liveReqDoc(doc).Code||'');
     const btns=form.querySelectorAll('button[type="submit"]');btns.forEach(b=>b.disabled=true);
@@ -1690,6 +1700,8 @@ async function renderCaseHostForm({retry}={}){
     saveGenTarget({...loadGenTarget(),...values});
     // 生成请求（不含用例和需求，由服务端按托管的用例补上）：和自动化页发起生成时一样的目标、说明、资产、账号和时限。
     const {cases:_,...generate}=genPayload(d.versionID,[],{...values,reqDoc:''});
+    const caseConstraints=constraintsForCases(d.versionID,d.caseIDs);
+    if(caseConstraints)generate.context.constraints=caseConstraints;
     const withRun=Boolean(form.elements.withRun?.checked);
     const btn=form.querySelector('button[type="submit"]');btn.disabled=true;
     try{
@@ -1898,7 +1910,7 @@ $('#create-issue').onclick=$('#issue-empty-create').onclick=startIssueCreate;
 
 // ---- 知识库 ------------------------------------------------------------------
 // 和需求文档同构：文件夹树 + Markdown 文档，同样落在 CaseHub 数据库的 state 里。存放人工整理的约束和补充信息；
-// 产品缺陷不放这里（问题单管理）。目前只用于存储，内容不会随 AI 请求发送。
+// 产品缺陷不放这里（问题单管理）。每份文档有「类型」：约束（agent 工作时必须遵守，随 AI 请求的 context.constraints 下发，见 constraintsFor）或参考（只存储）。
 let kbFocus=null,kbEditor=null,kbShown=null;
 const closedKbFolders=collapseSet('casehub-open-kb-folders');
 const kbFolder=id=>state.knowledgeFolders.find(f=>f.ID===id);
@@ -1907,10 +1919,12 @@ const kbDocsIn=id=>state.knowledgeDocs.filter(d=>d.FolderID===id);
 const kbDoc=id=>state.knowledgeDocs.find(d=>d.ID===id);
 // 顶层：全局库（kb-root）在最前，其后是每个主线产品（「全部用例」下的一级目录）各一个产品库。
 const kbRoots=()=>state.knowledgeFolders.filter(f=>!f.ParentID||!state.knowledgeFolders.some(x=>x.ID===f.ParentID)).sort((a,b)=>(b.ID==='kb-root')-(a.ID==='kb-root'));
+const kbKindLabel=d=>d.Kind==='constraint'?'约束':'参考';
+const kbDocIcon=d=>d.Kind==='constraint'?'📌':'📄';
 const kbFolderIcon=f=>f.ID==='kb-root'?'🌐':f.Product?'📦':'📁';
 function kbDescendants(f){const out=[];(function walk(id){kbChildren(id).forEach(x=>{out.push(x.ID);walk(x.ID)})})(f.ID);return out}
 function kbTreeHTML(){
-  const docRow=(d,depth)=>`<div class="tree-row case-row${kbFocus?.type==='doc'&&kbFocus.id===d.ID?' active':''}" style="padding-left:${8+depth*17}px" data-kb-doc="${esc(d.ID)}"><span class="label">${d.Generated?'🗂️':'📄'} ${esc(d.Title)}</span></div>`;
+  const docRow=(d,depth)=>`<div class="tree-row case-row${kbFocus?.type==='doc'&&kbFocus.id===d.ID?' active':''}" style="padding-left:${8+depth*17}px" data-kb-doc="${esc(d.ID)}"><span class="label">${kbDocIcon(d)} ${esc(d.Title)}</span><span class="badge">${kbKindLabel(d)}</span></div>`;
   const node=(f,depth)=>`<div class="tree-row folder-row${kbFocus?.type==='folder'&&kbFocus.id===f.ID?' active':''}" style="padding-left:${8+depth*17}px" data-kb-folder="${esc(f.ID)}"><span class="chev">▾</span><span>${kbFolderIcon(f)}</span><span class="label">${esc(f.Name)}</span></div><div>${kbDocsIn(f.ID).map(d=>docRow(d,depth+1)).join('')}${kbChildren(f.ID).map(c=>node(c,depth+1)).join('')}</div>`;
   return kbRoots().map(r=>node(r,0)).join('')||'<p class="meta">暂无知识库文档</p>';
 }
@@ -1946,15 +1960,10 @@ function renderKnowledgeFocus(){
   const sig=`${doc.ID}|${doc.UpdatedAt}|${doc.Title}`;
   if(kbEditor&&kbShown===sig&&$('#kb-editor')?.isConnected)return;
   disposeKbEditor();kbShown=sig;
-  if(doc.Generated){
-    // 产品用例库：由主线自动生成，每次合并或重整后同步，只读展示。
-    detail.innerHTML=`<div class="detail-head"><div><div class="eyebrow">${esc(doc.ID)} · 主线自动生成，只读</div><h1>${esc(doc.Title)}</h1></div></div><div class="card meta-grid"><span>更新者 <b>${esc(doc.UpdatedBy)}</b></span><span>更新时间 <b>${fmt(doc.UpdatedAt)}</b></span></div><div class="card"><div id="kb-editor"></div></div>`;
-    kbEditor=toastui.Editor.factory({el:$('#kb-editor'),viewer:true,initialValue:doc.Content||'',usageStatistics:false});applyKbTheme();
-    return;
-  }
-  detail.innerHTML=`<div class="detail-head"><div><div class="eyebrow">${esc(doc.ID)}</div><h1>${esc(doc.Title)}</h1></div><div class="detail-actions"><button type="button" class="secondary" id="kb-rename">重命名</button><button type="button" class="secondary" id="kb-delete">删除</button><button type="button" id="kb-save">保存</button></div></div><div class="card meta-grid"><span>创建者 <b>${esc(doc.CreatedBy)}</b></span><span>创建时间 <b>${fmt(doc.CreatedAt)}</b></span><span>更新者 <b>${esc(doc.UpdatedBy)}</b></span><span>更新时间 <b>${fmt(doc.UpdatedAt)}</b></span></div><div class="card"><div id="kb-editor"></div></div>`;
+  detail.innerHTML=`<div class="detail-head"><div><div class="eyebrow">${esc(doc.ID)}</div><h1>${esc(doc.Title)}</h1></div><div class="detail-actions"><label class="inline-field">类型 <select id="kb-kind"><option value="constraint"${doc.Kind==='constraint'?' selected':''}>约束</option><option value="reference"${doc.Kind==='constraint'?'':' selected'}>参考</option></select></label><button type="button" class="secondary" id="kb-rename">重命名</button><button type="button" class="secondary" id="kb-delete">删除</button><button type="button" id="kb-save">保存</button></div></div><div class="card meta-grid"><span>创建者 <b>${esc(doc.CreatedBy)}</b></span><span>创建时间 <b>${fmt(doc.CreatedAt)}</b></span><span>更新者 <b>${esc(doc.UpdatedBy)}</b></span><span>更新时间 <b>${fmt(doc.UpdatedAt)}</b></span></div><div class="card"><div id="kb-editor"></div></div>`;
   kbEditor=new toastui.Editor({el:$('#kb-editor'),height:'520px',initialEditType:'wysiwyg',previewStyle:'tab',initialValue:doc.Content||'',language:'zh-CN',theme:document.documentElement.classList.contains('dark')?'dark':'light',usageStatistics:false});applyKbTheme();
   $('#kb-rename').onclick=()=>kbRenameDocModal(doc);
+  $('#kb-kind').onchange=e=>kbSetKind(doc,e.currentTarget);
   $('#kb-delete').onclick=()=>deleteKbDoc(doc);
   $('#kb-save').onclick=e=>saveKbDoc(doc,e.currentTarget);
 }
@@ -1962,9 +1971,16 @@ function renderKnowledgeFocus(){
 // 接口错误 act 已经提示过；其余错误（渲染异常等）以前会被吞掉，现在提示并写到控制台，避免"点了没反应"。
 async function saveKbDoc(doc,btn){
   const label=btn.textContent;btn.disabled=true;btn.textContent='保存中…';
-  try{await act('editKnowledgeDoc',{DocID:doc.ID,Title:doc.Title,Content:kbEditor.getMarkdown()});toast('知识库文档已保存')}
+  try{await act('editKnowledgeDoc',{DocID:doc.ID,Title:doc.Title,Content:kbEditor.getMarkdown(),Kind:doc.Kind||'reference'});toast('知识库文档已保存')}
   catch(err){if(!err?.status){console.error('知识库保存失败',err);toast(`保存失败：${err?.message||err}`,true)}}
   finally{if(btn.isConnected){btn.disabled=false;btn.textContent=label}}
+}
+// 改类型立即保存，同时带上编辑器里还没保存的内容，避免切换类型把它冲掉。
+async function kbSetKind(doc,select){
+  select.disabled=true;
+  try{await act('editKnowledgeDoc',{DocID:doc.ID,Title:doc.Title,Content:kbEditor&&kbFocus?.id===doc.ID?kbEditor.getMarkdown():doc.Content,Kind:select.value});toast(select.value==='constraint'?'已设为约束：之后的 AI 请求会带上它':'已设为参考')}
+  catch(err){if(!err?.status)toast(`保存失败：${err?.message||err}`,true);select.value=doc.Kind==='constraint'?'constraint':'reference'}
+  finally{if(select.isConnected)select.disabled=false}
 }
 async function deleteKbDoc(doc){if(!doc||!confirm(`确定删除知识库文档「${doc.Title}」？`))return;try{await act('deleteKnowledgeDoc',{DocID:doc.ID});if(kbFocus?.id===doc.ID)kbFocus=null;renderKnowledgeList();renderKnowledgeFocus()}catch{}}
 function currentKbFolderTarget(){
@@ -1973,10 +1989,10 @@ function currentKbFolderTarget(){
   return kbRoots()[0]?.ID||'';
 }
 function kbFolderMenu(id){const items=[['查看详情',()=>setKbFocus({type:'folder',id})],['新建文件夹',()=>kbFolderModal(id)],['新增文档',()=>kbDocModal(id)]];if(kbFolder(id)?.Product)return items;items.push(['重命名文件夹',()=>kbRenameFolderModal(id)]);if(id!=='kb-root')items.push(['删除空文件夹',()=>{if(confirm('确定删除这个空文件夹？'))act('deleteKnowledgeFolder',{FolderID:id}).then(()=>{if(kbFocus?.id===id)kbFocus=null;renderKnowledgeFocus()}).catch(()=>{})}]);return items}
-function kbDocMenu(id){const doc=kbDoc(id);if(doc?.Generated)return [['查看详情',()=>setKbFocus({type:'doc',id})]];return [['查看详情',()=>setKbFocus({type:'doc',id})],['重命名',()=>kbRenameDocModal(doc)],['删除',()=>deleteKbDoc(doc)]]}
+function kbDocMenu(id){const doc=kbDoc(id);return [['查看详情',()=>setKbFocus({type:'doc',id})],['重命名',()=>kbRenameDocModal(doc)],['删除',()=>deleteKbDoc(doc)]]}
 function kbFolderModal(parent){showModal('新建文件夹',`<label>文件夹名称<input name="Name" required></label>`,x=>act('createKnowledgeFolder',{...x,ParentID:parent}))}
 function kbRenameFolderModal(id){const f=kbFolder(id);showModal('重命名文件夹',`<label>文件夹名称<input name="Name" required value="${esc(f.Name)}"></label>`,x=>act('renameKnowledgeFolder',{...x,FolderID:id}))}
-function kbDocModal(folderId){showModal('新增知识库文档',`<label>标题<input name="Title" required></label>`,async x=>{const before=new Set(state.knowledgeDocs.map(d=>d.ID));await act('createKnowledgeDoc',{...x,FolderID:folderId,Content:''});const made=state.knowledgeDocs.find(d=>!before.has(d.ID));if(made)setKbFocus({type:'doc',id:made.ID})})}
+function kbDocModal(folderId){showModal('新增知识库文档',`<label>标题<input name="Title" required></label><label>类型<select name="Kind"><option value="constraint">约束 — agent 工作时必须遵守，随 AI 请求下发</option><option value="reference" selected>参考 — 仅供查阅，不下发</option></select></label>`,async x=>{const before=new Set(state.knowledgeDocs.map(d=>d.ID));await act('createKnowledgeDoc',{...x,FolderID:folderId,Content:''});const made=state.knowledgeDocs.find(d=>!before.has(d.ID));if(made)setKbFocus({type:'doc',id:made.ID})})}
 // 重命名时带上编辑器里还没保存的内容，避免改名把它冲掉。
 function kbRenameDocModal(doc){showModal('重命名知识库文档',`<label>标题<input name="Title" required value="${esc(doc.Title)}"></label>`,x=>act('editKnowledgeDoc',{...x,DocID:doc.ID,Content:kbEditor&&kbFocus?.id===doc.ID?kbEditor.getMarkdown():doc.Content}))}
 $('#create-kb-folder').onclick=()=>kbFolderModal(currentKbFolderTarget());
@@ -2513,6 +2529,8 @@ function genPayload(vid,ids,values){
   payload.caseTimeoutMs=Number(values.caseTimeoutMinutes)*60000;
   if(docs.size)payload.requirements=[...docs.values()];
   if((values.instructions||'').trim())payload.context.instructions=values.instructions.trim();
+  const constraints=constraintsFor(picked.map(c=>productOfCase(vid,c)));
+  if(constraints)payload.context.constraints=constraints;
   const productExperience=productExperienceFor(payload.target.baseUrl);
   if(productExperience)payload.context.productExperience=productExperience;
   if(values.assetIds?.length)payload.context.assetIds=values.assetIds;

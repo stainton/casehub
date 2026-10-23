@@ -2032,3 +2032,40 @@ func TestHostingPicksAFreeRequirementCodeOnAClash(t *testing.T) {
 		t.Fatalf("hosting: %+v", state.Hostings[0])
 	}
 }
+
+func TestKnowledgeDocKind(t *testing.T) {
+	service := core.NewService(store.NewMemory())
+	state := apply(t, service, core.Action{Type: "createKnowledgeDoc", FolderID: "kb-root", Title: "用例树构建约束", Content: "目录不超过 4 层", Kind: "constraint"})
+	apply(t, service, core.Action{Type: "createKnowledgeDoc", FolderID: "kb-root", Title: "背景资料", Content: "仅供参考"})
+	apply(t, service, core.Action{Type: "createKnowledgeDoc", FolderID: "kb-root", Title: "乱填", Kind: "whatever"})
+	state = apply(t, service, core.Action{Type: "createKnowledgeDoc", FolderID: "kb-root", Title: "显式参考", Kind: "reference"})
+	kinds := map[string]string{}
+	for _, d := range handWrittenDocs(state) {
+		kinds[d.Title] = d.Kind
+	}
+	want := map[string]string{"用例树构建约束": "constraint", "背景资料": "reference", "乱填": "reference", "显式参考": "reference"}
+	for title, kind := range want {
+		if kinds[title] != kind {
+			t.Fatalf("%s kind = %q, want %q (%v)", title, kinds[title], kind, kinds)
+		}
+	}
+	var id string
+	for _, d := range handWrittenDocs(state) {
+		if d.Title == "用例树构建约束" {
+			id = d.ID
+		}
+	}
+	// Saving the text without naming a kind keeps it; naming one changes it.
+	state = apply(t, service, core.Action{Type: "editKnowledgeDoc", DocID: id, Title: "用例树构建约束", Content: "目录不超过 3 层"})
+	for _, d := range state.KnowledgeDocs {
+		if d.ID == id && d.Kind != "constraint" {
+			t.Fatalf("edit without a kind changed it to %q", d.Kind)
+		}
+	}
+	state = apply(t, service, core.Action{Type: "editKnowledgeDoc", DocID: id, Title: "用例树构建约束", Content: "目录不超过 3 层", Kind: "reference"})
+	for _, d := range state.KnowledgeDocs {
+		if d.ID == id && d.Kind != "reference" {
+			t.Fatalf("kind not changed: %q", d.Kind)
+		}
+	}
+}
