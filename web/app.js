@@ -1375,10 +1375,11 @@ function renderAiResult(doc,summary){
   $('#ai-drawer-body').innerHTML=`<div class="card meta-grid"><span>已导入用例 <b>${summary.count}</b></span></div>${issues}${limitations}<p class="meta">已自动创建目录并导入到"用例评审"，请前往评审。</p><p class="drawer-actions"><button type="button" class="secondary" id="ai-restart">重新设计</button></p>`;
   $('#ai-restart').onclick=()=>{localStorage.removeItem(aiResultKey(doc));renderAiForm(doc)};
 }
-// 按用例编号 TC-<REQ>-<MOD>-<CAT>-NNN 归档：用例评审下建 需求 / 功能模块 / 测试类别 三层文件夹。
-// 文件夹名用中文（需求标题、planner 给出的模块中文名、"功能测试"等），编号前缀存在文件夹的 Code 上
-// （REQ / REQ-MOD / REQ-MOD-CAT），同 Code 复用；用例建在最里层，由 CaseHub 按 Code 续编号
-// （planner 结果里的序号只在单次结果内递增，可能与已有用例重复）。编号不符合该格式的旧结果放在需求文件夹下（随机编号）。
+// 按用例编号 TC-<REQ>-<MOD>-<CAT>-NNN 归档：用例评审下先建以需求命名的文件夹（Code 为 REQ，同 Code 复用），
+// 其下按 planner 给出的模块路径（产品用例库里的文件夹路径，modules[].path）逐层建中文名文件夹、同名复用——
+// 同一产品下不同需求的同一功能，目录树因此完全一致；测试类别不再单独建一层，只留在编号里。
+// 用例建在路径最里层，由 CaseHub 按 REQ-MOD-CAT 续编号（planner 结果里的序号只在单次结果内递增，可能与已有用例重复）。
+// 编号不符合该格式的旧结果放在需求文件夹下（随机编号）。
 const AI_CASE_ID_RE=/^TC-([A-Z][A-Z0-9]{1,11})-([A-Z][A-Z0-9]{1,11})-(FUNC|REL|PERF|SEC|COMPAT|UX)-\d{3,}$/;
 const TEST_CATEGORY_NAMES={FUNC:'功能测试',REL:'可靠性测试',PERF:'性能测试',SEC:'安全测试',COMPAT:'兼容性测试',UX:'易用性测试'};
 async function ensurePendingFolder(parentID,code,name){
@@ -1393,17 +1394,19 @@ async function importAiResult(doc,result){
   const d=liveReqDoc(doc);
   for(const c of result.cases){
     const m=AI_CASE_ID_RE.exec(c.case_id||'');
-    let folderID;
+    let folderID,idPrefix;
     if(m){
       const [,req,mod,cat]=m;
-      const moduleName=(result.modules||[]).find(x=>x.requirement===c.request&&x.code===mod)?.name||mod;
+      const module=(result.modules||[]).find(x=>x.requirement===c.request&&x.code===mod);
+      const path=(module?.path||[]).map(n=>String(n).trim()).filter(Boolean);
+      if(!path.length)path.push(module?.name||mod);
       folderID=await ensurePendingFolder('pending-root',req,d.Code===req?d.Title:req);
-      folderID=await ensurePendingFolder(folderID,`${req}-${mod}`,moduleName);
-      folderID=await ensurePendingFolder(folderID,`${req}-${mod}-${cat}`,TEST_CATEGORY_NAMES[cat]);
+      for(const name of path)folderID=await ensurePendingFolder(folderID,'',name);
+      idPrefix=`${req}-${mod}-${cat}`;
     }else{
       folderID=await ensurePendingFolder('pending-root',d.Code||'',d.Title);
     }
-    await act('createPendingCase',{FolderID:folderID,Title:c.name,Priority:c.priority,Preconditions:c.precondition,Steps:c.steps,Expected:c.expects});
+    await act('createPendingCase',{FolderID:folderID,Title:c.name,Priority:c.priority,Preconditions:c.precondition,Steps:c.steps,Expected:c.expects,...(idPrefix?{IDPrefix:idPrefix}:{})});
   }
 }
 

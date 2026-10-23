@@ -378,14 +378,7 @@ func TestHostingResumesAfterRestartAndRetriesAStoppedStep(t *testing.T) {
 			mod = x.ID
 		}
 	}
-	out, _ = f.svc.Apply(ctx, core.Action{Type: "createFolder", VersionID: f.vid, ParentID: mod, Name: "功能测试"})
-	var cat string
-	for _, x := range out.State.Folders {
-		if x.VersionID == f.vid && x.ParentID == mod {
-			cat = x.ID
-		}
-	}
-	out, err := f.svc.Apply(ctx, core.Action{Type: "createCase", VersionID: f.vid, FolderID: cat, Title: "正确密码登录成功"})
+	out, err := f.svc.Apply(ctx, core.Action{Type: "createCase", VersionID: f.vid, FolderID: mod, Title: "正确密码登录成功"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -811,4 +804,64 @@ func TestHostingCasesAsksForTheAccountAgainAfterARestart(t *testing.T) {
 	}
 	f.planner.finishKind(t, "generator", generatorResult(nil), false)
 	f.waitCaseStage(t, h.ID, core.HostingDone)
+}
+
+// The tree below the requirement follows the module's path in the product case library — no test-category level —
+// so two requirements of one product file same-function cases in identical folders.
+func TestHostingFilesCasesUnderTheLibraryPathOfTheirModule(t *testing.T) {
+	f := setup(t)
+	defer f.runner.Close()
+	if _, err := f.runner.Begin(context.Background(), core.Hosting{DocID: f.docID, VersionID: f.vid, Product: "TaskLite", ProductVersion: "v2.0"}, f.request(), "alice"); err != nil {
+		t.Fatal(err)
+	}
+	f.waitSubmitted(t, 1)
+	result := designResult("LOGIN")
+	result["modules"] = []map[string]any{
+		{"code": "AUTH", "name": "登录认证", "path": []string{"账号", "登录认证"}},
+		{"code": "PWD", "name": "找回密码", "path": []string{"账号", "找回密码"}},
+	}
+	f.planner.finish(t, result, false)
+	f.waitStage(t, core.HostingDone)
+
+	st, _ := f.svc.State(context.Background())
+	path := func(id string) string { return strings.Join(path0(st, f.vid, id), "/") }
+	got := map[string]string{}
+	for _, c := range st.Cases {
+		if c.VersionID == f.vid {
+			got[c.Title] = path(c.FolderID)
+		}
+	}
+	want := map[string]string{
+		"正确密码登录成功": "TaskLite/v2.0/登录/账号/登录认证",
+		"错误密码登录失败": "TaskLite/v2.0/登录/账号/登录认证",
+		"邮箱找回密码":   "TaskLite/v2.0/登录/账号/找回密码",
+	}
+	for title, folder := range want {
+		if got[title] != folder {
+			t.Fatalf("%s filed in %q, want %q (all: %v)", title, got[title], folder, got)
+		}
+	}
+	for _, c := range st.Cases {
+		if c.VersionID == f.vid && !strings.HasPrefix(c.ID, "TC-LOGIN-AUTH-FUNC-") && !strings.HasPrefix(c.ID, "TC-LOGIN-PWD-FUNC-") {
+			t.Fatalf("case %s lost its REQ-MODULE-CATEGORY numbering", c.ID)
+		}
+	}
+}
+
+// path0 is the folder names from below the root down to (and including) id.
+func path0(st core.State, vid, id string) []string {
+	var names []string
+	for id != "root" && id != "" {
+		found := false
+		for _, x := range st.Folders {
+			if x.VersionID == vid && x.ID == id {
+				names, id, found = append([]string{x.Name}, names...), x.ParentID, true
+				break
+			}
+		}
+		if !found {
+			break
+		}
+	}
+	return names
 }

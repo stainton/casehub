@@ -83,6 +83,8 @@ type PlannerResult struct {
 		Requirement string `json:"requirement"`
 		Code        string `json:"code"`
 		Name        string `json:"name"`
+		// Path is the module's folder path in the product case library (directly below the product down to the module).
+		Path []string `json:"path"`
 	} `json:"modules"`
 	Cases []struct {
 		Request      string `json:"request"`
@@ -443,13 +445,17 @@ func hostingImport(s *State, h *Hosting, a Action) error {
 	var created []string
 	reqFolder := ""
 	for _, c := range r.Cases {
-		var folderID, top string
+		var folderID, top, idPrefix string
 		if m := aiCaseIDRE.FindStringSubmatch(c.CaseID); m != nil {
 			req, mod, cat := m[1], m[2], m[3]
-			moduleName := mod
+			path := []string{mod}
 			for _, x := range r.Modules {
-				if x.Requirement == c.Request && x.Code == mod && x.Name != "" {
-					moduleName = x.Name
+				if x.Requirement == c.Request && x.Code == mod {
+					if p := cleanFolderPath(x.Path); len(p) > 0 {
+						path = p
+					} else if x.Name != "" {
+						path = []string{x.Name}
+					}
 				}
 			}
 			reqName := req
@@ -457,8 +463,13 @@ func hostingImport(s *State, h *Hosting, a Action) error {
 				reqName = doc.Title
 			}
 			top = ensurePendingFolder(s, "pending-root", req, reqName, a.Author)
-			folderID = ensurePendingFolder(s, top, req+"-"+mod, moduleName, a.Author)
-			folderID = ensurePendingFolder(s, folderID, req+"-"+mod+"-"+cat, testCategoryNames[cat], a.Author)
+			// Below the requirement the tree is the module's path in the product case library, so requirements of the
+			// same product file same-function cases in identical folders; the test category only lives in the case ID.
+			folderID = top
+			for _, name := range path {
+				folderID = ensurePendingFolder(s, folderID, "", name, a.Author)
+			}
+			idPrefix = req + "-" + mod + "-" + cat
 		} else {
 			top = ensurePendingFolder(s, "pending-root", doc.Code, doc.Title, a.Author)
 			folderID = top
@@ -467,7 +478,7 @@ func hostingImport(s *State, h *Hosting, a Action) error {
 			f, _ := pendingFolderAt(s, top)
 			reqFolder = f.Name
 		}
-		if err := createPendingCase(s, Action{FolderID: folderID, Title: c.Name, Priority: c.Priority, Preconditions: c.Precondition, Steps: c.Steps, Expected: c.Expects, Author: a.Author}); err != nil {
+		if err := createPendingCase(s, Action{FolderID: folderID, Title: c.Name, Priority: c.Priority, Preconditions: c.Precondition, Steps: c.Steps, Expected: c.Expects, IDPrefix: idPrefix, Author: a.Author}); err != nil {
 			return fmt.Errorf("「%s」：%w", c.Name, err)
 		}
 		created = append(created, s.PendingCases[len(s.PendingCases)-1].ID)
@@ -726,4 +737,15 @@ func hostingRetry(h *Hosting, clearTask bool) error {
 	}
 	h.Error, h.Continuable = "", false
 	return nil
+}
+
+// cleanFolderPath trims a module path's names and drops empty ones.
+func cleanFolderPath(path []string) []string {
+	var out []string
+	for _, n := range path {
+		if n = strings.TrimSpace(n); n != "" {
+			out = append(out, n)
+		}
+	}
+	return out
 }

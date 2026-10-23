@@ -130,7 +130,7 @@
   &quot;Author&quot;: &quot;本地用户&quot;,
   &quot;FolderID&quot;: &quot;文件夹ID&quot;,
   &quot;Name&quot;: &quot;支付流程&quot;
-}</code></pre></details><details class="card" id="createPendingCase"><summary><code>createPendingCase</code> · 新增待评审用例</summary><p>标题和有效目录必填，用例 ID 自动生成。新建的用例评审状态为空（未评审）。所在文件夹的 Code 形如 <code>LOGIN-AUTH-FUNC</code>（需求缩写-模块缩写-测试类别，类别为 FUNC/REL/PERF/SEC/COMPAT/UX）时，编号自动取 <code>TC-LOGIN-AUTH-FUNC-NNN</code>，NNN 接着待评审区和各版本中该前缀的最大编号递增；其他文件夹下为随机编号。</p><pre><code>{
+}</code></pre></details><details class="card" id="createPendingCase"><summary><code>createPendingCase</code> · 新增待评审用例</summary><p>标题和有效目录必填，用例 ID 自动生成；可带 IDPrefix（<code>需求缩写-模块缩写-测试类别</code>），此时不看所在文件夹，直接按 <code>TC-&lt;IDPrefix&gt;-NNN</code> 续号。新建的用例评审状态为空（未评审）。所在文件夹的 Code 形如 <code>LOGIN-AUTH-FUNC</code>（需求缩写-模块缩写-测试类别，类别为 FUNC/REL/PERF/SEC/COMPAT/UX）时，编号自动取 <code>TC-LOGIN-AUTH-FUNC-NNN</code>，NNN 接着待评审区和各版本中该前缀的最大编号递增；其他文件夹下为随机编号。</p><pre><code>{
   &quot;Type&quot;: &quot;createPendingCase&quot;,
   &quot;Author&quot;: &quot;本地用户&quot;,
   &quot;FolderID&quot;: &quot;pending-root&quot;,

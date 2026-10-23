@@ -44,15 +44,15 @@ type Version struct {
 	Name     string `json:"name"`
 	Mainline bool   `json:"mainline"`
 	// Archived marks a finished test version: it is kept for reference but read-only until unarchived.
-	Archived         bool      `json:"archived"`
-	ArchivedAt       time.Time `json:"archivedAt"`
+	Archived   bool      `json:"archived"`
+	ArchivedAt time.Time `json:"archivedAt"`
 	// ScriptsArchived is the same idea for 自动化管理: the version's scripts move to its archive tab and become
 	// read-only. It is independent of Archived, so finishing scripts never touches the version's cases.
 	ScriptsArchived   bool      `json:"scriptsArchived"`
 	ScriptsArchivedAt time.Time `json:"scriptsArchivedAt"`
-	BaseMainRevision int64     `json:"baseMainRevision"`
-	CreatedBy        string    `json:"createdBy"`
-	CreatedAt        time.Time `json:"createdAt"`
+	BaseMainRevision  int64     `json:"baseMainRevision"`
+	CreatedBy         string    `json:"createdBy"`
+	CreatedAt         time.Time `json:"createdAt"`
 }
 
 type Folder struct {
@@ -366,9 +366,11 @@ type Action struct {
 	CaseIDs                                             []string
 	Submitted, Force                                    bool
 	// createVersion: with no CaseIDs, create the version with only the root folder instead of copying mainline.
-	Blank                             bool
-	Resolved, NotIssue                bool
-	DocID, Content, Code              string
+	Blank                bool
+	Resolved, NotIssue   bool
+	DocID, Content, Code string
+	// IDPrefix (REQ-MODULE-CATEGORY) numbers a created pending case TC-<prefix>-NNN whatever folder it goes in.
+	IDPrefix                          string
 	IssueID, RequirementID, RootCause string
 	ExplorationNotes                  string
 	Review                            string
@@ -845,6 +847,7 @@ func archiveVersion(s *State, a Action, archive bool) error {
 	}
 	return nil
 }
+
 // archiveScripts moves a test version's scripts into (or back out of) the 自动化管理 archive.
 func archiveScripts(s *State, a Action, archive bool) error {
 	v, err := branchOf(s, a.VersionID)
@@ -2678,6 +2681,9 @@ func createPendingCase(s *State, a Action) error {
 		if caseFolderRE.MatchString(code) {
 			id = nextCaseID(s, code)
 		}
+	}
+	if caseFolderRE.MatchString(a.IDPrefix) {
+		id = nextCaseID(s, a.IDPrefix)
 	}
 	c := PendingCase{ID: id, FolderID: a.FolderID, Title: strings.TrimSpace(a.Title), Preconditions: a.Preconditions, Steps: a.Steps, Expected: a.Expected, Description: a.Description, Priority: a.Priority, CreatedBy: a.Author, UpdatedBy: a.Author, CreatedAt: t, UpdatedAt: t}
 	s.PendingCases = append(s.PendingCases, c)
