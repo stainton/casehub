@@ -139,7 +139,7 @@ planner、generator、healer、executor 的任务不是直接代理给某个节�
 4. 节点上的任务结束后，取回结果、planner 的会话包（用于「继续」）和失败现场的诊断包，再在节点上释放该任务。
 5. 节点丢失或停机交还的任务：未开始的重新排队；generator / healer / executor 运行中被中断的最多重试到第 3 次；planner 不自动重跑，保留会话包等人选择「继续」。
 
-**请求体只存在内存里**（`dispatch.request`），因为它带着测试账号、密码和 storageState。CaseHub 重启时还在排队的任务因此无法再派发，会以 `CASEHUB_RESTARTED` 失败；已在节点上运行的任务重启后继续跟随。
+**请求体（`dispatch.request`）带着测试账号、密码和 storageState，平时只在内存里**；只有任务排队等节点的这段时间，才会暂存进任务存储（`tasks.BlobRequest`），节点接手后立即清空，任务结束时也会清。因此 CaseHub 重启时还在排队的任务会带着请求回到队列继续派发，已在节点上运行的任务照旧跟随；只有请求没暂存下来的任务才以 `CASEHUB_RESTARTED` 失败。
 
 `internal/tasks` 只存任务记录、事件和二进制包：File 模式每个任务一个 JSON 文件（不会因任务进度更新重写状态文档），Postgres 模式是 `casehub_tasks` / `casehub_task_events` / `casehub_task_blobs` 三张表。已结束任务按 `CASEHUB_TASK_RETENTION` 清理。前端通过 `GET /api/tasks?kind=…&subject=…&active=1` 找回自己的任务，不在浏览器里存任务 ID；任务的 `subject`（如 `req:<需求 ID>`、`hosting:<ID>`）用来区分归属。
 

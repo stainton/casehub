@@ -315,12 +315,21 @@ func TestARestartedCaseHubPicksUpTasksAlreadyOnANode(t *testing.T) {
 	waiting, _ := first.Submit(context.Background(), "generator", []byte(request)) // node busy: stays queued
 	first.Close()
 
+	// A task still waiting for a node keeps its request in the store, so the restart puts it back in the queue.
+	if data, err := store.GetBlob(context.Background(), waiting.ID, tasks.BlobRequest); err != nil || len(data) == 0 {
+		t.Fatalf("the queued request was not kept: %v", err)
+	}
 	second := start(t, store, kind())
-	if lost := status(t, second, "generator", waiting.ID); lost.Status != tasks.Failed || lost.Error.Code != "CASEHUB_RESTARTED" {
-		t.Fatalf("a task still waiting lost its request with the old process: %+v", lost.Summary())
+	if queued := status(t, second, "generator", waiting.ID); queued.Status != tasks.Queued {
+		t.Fatalf("a task still waiting must stay queued across a restart: %+v", queued.Summary())
 	}
 	node.succeed(job, `{"generated":1}`)
 	waitStatus(t, second, "generator", running.ID, tasks.Succeeded)
+	// The node is free now: the restored task goes out, and its stored request (it holds the test account) is wiped.
+	waitFor(t, "the restored task to reach the node", func() bool { return status(t, second, "generator", waiting.ID).Node != "" })
+	if data, _ := store.GetBlob(context.Background(), waiting.ID, tasks.BlobRequest); len(data) != 0 {
+		t.Fatalf("the stored request outlived its dispatch: %s", data)
+	}
 }
 
 func TestTheHTTPContractMatchesANodes(t *testing.T) {

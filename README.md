@@ -106,7 +106,7 @@ http://<可访问的节点 IP>:30080
 planner、generator、healer、executor 的任务（`/api/<服务>/jobs`）由 CaseHub 持有并分发，接口形状与 auto-test 节点自己的 `/v1/<服务>/jobs` 一致。节点是无状态执行节点：CaseHub 先查各节点的 `/capacity`，把任务交给空闲的那个（`?queue=false`，忙则 429 换下一个；同一被测系统和测试账号优先交给已登录过的节点），推送所需资产，跟随节点的进度并存下来，任务结束后取回结果、planner 中断时的会话包和失败现场的诊断包，再在节点上释放该任务。所有节点都忙或都不在时任务在 CaseHub 排队，由节点空出或上线后接着派发。
 
 - 任务记录、进度事件、结果、会话包和诊断包保存在 CaseHub 的存储里（文件存储为数据文件旁的 `tasks/` 目录，PostgreSQL 为 `casehub_tasks` 等表），CaseHub 或节点重启、换浏览器后都能找回；前端通过 `GET /api/tasks?kind=…&active=1` 找回未处理完的任务，不再在 localStorage 里保存任务 ID。
-- 提交的请求内容（含测试账号、密码、storageState）只保存在 CaseHub 进程内存中，从不落盘：CaseHub 在任务还排队时重启，该任务以 `CASEHUB_RESTARTED` 失败，需要重新提交；已经在节点上运行的任务重启后继续跟随。
+- 提交的请求内容（含测试账号、密码、storageState）平时只保存在 CaseHub 进程内存中；任务排队等节点期间会暂存到任务存储，交给节点后立即清除。CaseHub 在任务还排队时重启，该任务回到队列继续派发；已经在节点上运行的任务重启后继续跟随。只有请求没暂存下来的任务才以 `CASEHUB_RESTARTED` 失败，需要重新提交。
 - 节点停机（缩容、重新部署）交还的任务、或节点丢失时尚未开始的任务自动重新排队；generator、healer、executor 运行中被中断的任务最多重试到第 3 次。planner 运行中被中断的任务不自动重跑，而是保留会话包，由人选择"继续"——可以在任意 planner 节点继续。旧版本的节点（不支持 `/capacity`、会话包下载）仍可使用，其会话只能回到原节点继续。
 - `GET /metrics`（Prometheus 文本）和 `GET /api/queue`（JSON，`{"planner":{"queued":…,"running":…,"demand":…,"nodes":…}}`）给出每类任务的排队数、运行数和节点数，供自动扩缩容读取（auto-test 的 `deploy/kubernetes/components/autoscaling` 用 KEDA 读 `/api/queue`）；不扩缩时无需理会。
 - CaseHub 是任务的唯一写入方，只运行一个副本；要多开的是 auto-test 节点。

@@ -66,8 +66,9 @@ func (c *Config) defaults() {
 	}
 }
 
-// request is what a task was submitted with. It lives in memory only (it carries test credentials), so a
-// task whose request is gone — CaseHub restarted before handing it out — cannot be queued again.
+// request is what a task was submitted with. It carries test credentials, so it lives in memory — except while the
+// task waits for a node, when it is also kept in the store (keepRequest) so a restart does not lose the queue;
+// it is wiped as soon as a node has it. A task whose request is gone cannot be queued again.
 type request struct {
 	body     map[string]json.RawMessage
 	affinity string
@@ -99,6 +100,7 @@ type live struct {
 	cancel      bool // cancelled while being handed to a node
 	nodeFinal   json.RawMessage
 	done        bool
+	requestKept bool // the request is in the store (it waits for a node)
 }
 
 type Dispatcher struct {
@@ -154,11 +156,14 @@ func (d *Dispatcher) Start(ctx context.Context) error {
 			d.finish(l, tasks.Failed, &tasks.ErrorDetail{Code: "SERVICE_DISABLED", Message: "该任务对应的服务已不再配置，任务无法继续"}, nil)
 		case t.Node != "" && t.NodeJobID != "":
 			d.follow(l)
+		case t.Node == "" && d.restoreRequest(ctx, l):
+			// It was still waiting for a node: back in the queue with its request, as if nothing happened.
 		default:
 			d.finish(l, tasks.Failed, &tasks.ErrorDetail{Code: "CASEHUB_RESTARTED", Message: "CaseHub 重启时任务尚未交给执行节点，请重新提交"}, nil)
 		}
 	}
 	d.wg.Add(2)
+	d.poke() // tasks restored into the queue go out as soon as a node has room
 	go d.schedule()
 	go d.prune()
 	return nil
@@ -243,6 +248,9 @@ func (d *Dispatcher) Submit(ctx context.Context, kindName string, body []byte) (
 	d.mu.Lock()
 	d.live[t.ID] = l
 	d.mu.Unlock()
+	if out.node == "" { // no node took it yet: it has to survive a restart while it waits
+		d.keepRequest(ctx, l)
+	}
 	l.mu.Lock()
 	d.event(l, map[string]any{"stage": "queued", "message": "任务已提交"})
 	l.dispatching = false
@@ -519,6 +527,7 @@ func (d *Dispatcher) settle(l *live, out outcome) {
 	d.event(l, map[string]any{"stage": "dispatched", "message": "已交给执行节点 " + out.node})
 	cancel := l.cancel
 	l.mu.Unlock()
+	d.dropRequest(l)
 	if cancel {
 		_, _, _ = d.call(d.ctx, http.MethodDelete, d.nodeURL(out.node, l.kind, "/jobs/"+out.job.ID), nil, 10*time.Second)
 	}
@@ -682,6 +691,7 @@ func (d *Dispatcher) finishLocked(l *live, status string, detail *tasks.ErrorDet
 	}
 	l.subs = map[chan frame]struct{}{}
 	l.req = nil // the credentials it carried are no longer needed
+	d.dropRequestLocked(l)
 	d.mu.Lock()
 	delete(d.live, t.ID)
 	d.mu.Unlock()
@@ -700,6 +710,7 @@ func (d *Dispatcher) requeueLocked(l *live, why string) {
 		return
 	}
 	t.Status, t.Node, t.NodeJobID, t.NodeEventID, t.StartedAt = tasks.Queued, "", "", 0, nil
+	d.keepRequestLocked(l)
 	l.queuedSince, l.waiting, l.nodeFinal = time.Now(), "", nil
 	d.event(l, map[string]any{"stage": "queued", "message": why + "，任务已重新排队"})
 	d.poke()
@@ -861,4 +872,77 @@ func (d *Dispatcher) String() string {
 		parts = append(parts, describe(d.kinds[name]))
 	}
 	return strings.Join(parts, " ")
+}
+
+// ---- queued requests survive a restart ----------------------------------------------------------------------
+
+// pendingRequest is the stored form of a request that is waiting for a node.
+type pendingRequest struct {
+	Body         map[string]json.RawMessage `json:"body"`
+	Source       string                     `json:"source,omitempty"`
+	Checkpoint   string                     `json:"checkpoint,omitempty"`
+	LegacyNode   string                     `json:"legacyNode,omitempty"`
+	LegacyNodeID string                     `json:"legacyNodeId,omitempty"`
+}
+
+// keepRequest stores a queued task's request so that a CaseHub restart puts the task back in the queue instead of
+// failing it. The request holds the test account the user typed, so it is only stored while the task waits and is
+// wiped once a node has it (dropRequest) or the task ends.
+func (d *Dispatcher) keepRequest(ctx context.Context, l *live) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	d.storeRequest(ctx, l)
+}
+
+func (d *Dispatcher) keepRequestLocked(l *live) { d.storeRequest(context.Background(), l) }
+
+func (d *Dispatcher) storeRequest(ctx context.Context, l *live) {
+	if l.req == nil {
+		return
+	}
+	data, err := json.Marshal(pendingRequest{Body: l.req.body, Source: l.req.source, Checkpoint: l.req.checkpoint,
+		LegacyNode: l.req.legacyNode, LegacyNodeID: l.req.legacyNodeID})
+	if err == nil {
+		err = d.store.PutBlob(ctx, l.task.ID, tasks.BlobRequest, data)
+	}
+	if err != nil {
+		d.cfg.Logf("dispatch: keeping the request of task %s failed: %v", l.task.ID, err)
+		return
+	}
+	l.requestKept = true
+}
+
+// dropRequest wipes the stored request once a node has the task.
+func (d *Dispatcher) dropRequest(l *live) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	d.dropRequestLocked(l)
+}
+
+func (d *Dispatcher) dropRequestLocked(l *live) {
+	if !l.requestKept {
+		return
+	}
+	l.requestKept = false
+	if err := d.store.PutBlob(context.Background(), l.task.ID, tasks.BlobRequest, nil); err != nil {
+		d.cfg.Logf("dispatch: wiping the stored request of task %s failed: %v", l.task.ID, err)
+	}
+}
+
+// restoreRequest brings back a queued task's request after a restart; false when it was not kept.
+func (d *Dispatcher) restoreRequest(ctx context.Context, l *live) bool {
+	data, err := d.store.GetBlob(ctx, l.task.ID, tasks.BlobRequest)
+	if err != nil || len(data) == 0 {
+		return false
+	}
+	var p pendingRequest
+	if json.Unmarshal(data, &p) != nil || p.Body == nil {
+		return false
+	}
+	l.req = &request{body: p.Body, affinity: affinityKey(p.Body), source: p.Source, checkpoint: p.Checkpoint,
+		legacyNode: p.LegacyNode, legacyNodeID: p.LegacyNodeID}
+	l.requestKept = true
+	l.task.Status = tasks.Queued
+	l.waiting = ""
+	return true
 }

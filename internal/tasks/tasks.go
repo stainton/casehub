@@ -35,6 +35,8 @@ func Terminal(status string) bool {
 const (
 	BlobCheckpoint  = "checkpoint"
 	BlobDiagnostics = "diagnostics"
+	// BlobRequest is a queued task's request, kept only until a node has it (see dispatch.keepRequest).
+	BlobRequest = "request"
 )
 
 type ErrorDetail struct {
