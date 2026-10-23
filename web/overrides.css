@@ -299,3 +299,6 @@ button.avatar{padding:0;color:#fff;cursor:pointer;border:1px solid #ffffff40}
 .tc-list .tc-host>small{flex:none}
 .tc-list .tc-host.stopped>small{color:var(--danger)}
 .host-scope{display:grid;gap:4px}
+
+.tc-list .tc-row.expanded{border-color:var(--accent,var(--line));margin-bottom:0;border-bottom-left-radius:0;border-bottom-right-radius:0}
+.tc-inline{padding:12px;margin:0 0 8px;border:1px solid var(--line);border-top:0;border-radius:0 0 8px 8px;background:var(--surface)}

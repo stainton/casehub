@@ -1601,6 +1601,7 @@ async function renderHostForm(doc,{retry}={}){
 let hostCase=null; // AI 抽屉里的用例托管：{id} 已发起的，或 {draft:{versionID,caseIDs,label}} 待填写的
 const caseHostOpen=()=>Boolean(hostCase)&&!$('#ai-drawer').classList.contains('hidden');
 function openCaseHost(x){
+  if(!tcExpanding)tcCollapse();
   aiDoc=null;closeHostLog();hostShown=null;hostCase=x;
   const h=x.id&&state.hostings.find(y=>y.ID===x.id),d=h?{versionID:h.VersionID,label:h.Label}:x.draft;
   $('#ai-drawer .panel-head strong').textContent='AI 托管';
@@ -2772,7 +2773,29 @@ function tcAttach(key){
   drawer.prepend(tcTabs);
   tcRenderTabs();
 }
+// 列表里点一行：详情就地展开在这一行下面（一次只展开一行），再点同一行收起，不用切标签才能回到列表。
+// 详情的渲染函数都往 #ai-drawer-body 里写，所以展开时把这个 id 让给行下面的容器，列表容器暂记为 #ai-drawer-list。
+let tcInline=null,tcExpanding=false;
+function tcCollapse(){
+  if(!tcInline)return;
+  const {box,list,row}=tcInline;
+  box.remove();list.id='ai-drawer-body';row.classList.remove('expanded');
+  tcInline=null;aiDoc=null;hostCase=null;hostShown=null;closeHostLog();
+  $('#ai-drawer-doc').textContent='';
+}
+function tcExpand(row,open){
+  const same=tcInline?.row===row;
+  tcCollapse();
+  if(same)return;
+  const list=$('#ai-drawer-body'),box=document.createElement('div');
+  box.className='ai-drawer-body tc-inline';list.id='ai-drawer-list';box.id='ai-drawer-body';
+  row.after(box);row.classList.add('expanded');
+  tcInline={row,box,list};
+  tcExpanding=true;
+  try{open()}finally{tcExpanding=false}
+}
 function tcSwitch(key){
+  tcCollapse();
   TC_TABS.forEach(([,,sel])=>$(sel).classList.add('hidden'));
   if(key==='gen')openGenDrawer();
   else if(key==='run')openScriptRunDrawer();
@@ -2786,7 +2809,7 @@ function hostStatusText(h){
 }
 // 托管列表：每份需求一行（最近一次托管），显示阶段和归档位置，点开进入该需求的托管视图（进度、重试、放弃）。
 function tcShowHosting(){
-  aiDoc=null;hostCase=null;closeHostLog();hostShown=null;
+  tcCollapse();aiDoc=null;hostCase=null;closeHostLog();hostShown=null;
   $('#ai-drawer-doc').textContent='';
   $('#ai-drawer .panel-head strong').textContent='AI 托管';
   $('#ai-drawer').classList.remove('hidden');
@@ -2794,24 +2817,24 @@ function tcShowHosting(){
   $('#ai-drawer-body').innerHTML=`<div class="tc-list">${list.length?list.map(h=>{const doc=state.reqDocs.find(d=>d.ID===h.DocID),v=version(h.VersionID),where=isCaseHost(h)?`${h.CaseIDs?.length||0} 条用例`:hostArchivePath(h).join(' / ');
     return `<button type="button" class="tc-row tc-host${h.Stage==='stopped'?' stopped':''}" ${isCaseHost(h)?`data-tc-host-cases="${esc(h.ID)}"`:`data-tc-host="${esc(h.DocID)}"`}><span>${esc(isCaseHost(h)?h.Label:doc.Title)}<small class="meta">${esc(v?.name||'已删除的版本')}：${esc(where)}</small></span><small>${esc(hostStatusText(h))}${h.Stage==='done'&&!isCaseHost(h)&&h.CaseIDs?.length?` · ${h.CaseIDs.length} 条`:''}${h.Execute&&Object.keys(h.Results||{}).length?` · ${hostRunText(hostRunStats(h))}`:''}</small></button>`}).join('')
     :(all.length?tcEmptyHTML('host'):'<p class="meta">暂无托管任务。在「需求管理」里打开需求文档点「AI 托管」，或在「用例管理」里勾选用例、右键目录发起。</p>')}</div>`;
-  $$('#ai-drawer-body [data-tc-host]').forEach(b=>b.onclick=()=>{const doc=state.reqDocs.find(d=>d.ID===b.dataset.tcHost);if(doc)openAiDrawer(doc,'host')});
-  $$('#ai-drawer-body [data-tc-host-cases]').forEach(b=>b.onclick=()=>openCaseHost({id:b.dataset.tcHostCases}));
+  $$('#ai-drawer-body [data-tc-host]').forEach(b=>b.onclick=()=>{const doc=state.reqDocs.find(d=>d.ID===b.dataset.tcHost);if(doc)tcExpand(b,()=>openAiDrawer(doc,'host'))});
+  $$('#ai-drawer-body [data-tc-host-cases]').forEach(b=>b.onclick=()=>tcExpand(b,()=>openCaseHost({id:b.dataset.tcHostCases})));
   tcAttach('host');
 }
 function tcShowPlanner(){
-  aiDoc=null;hostCase=null;closeHostLog();
+  tcCollapse();aiDoc=null;hostCase=null;closeHostLog();
   $('#ai-drawer .panel-head strong').textContent='AI 设计';
   $('#ai-drawer-doc').textContent='';
   $('#ai-drawer').classList.remove('hidden');
   const all=tcPlannerDocs(),docs=all.filter(doc=>tcShown('plan',isAiActive(doc)));
   $('#ai-drawer-body').innerHTML=`<div class="tc-list">${docs.length?docs.map(doc=>`<button type="button" class="tc-row" data-tc-plan="${esc(doc.ID)}"><span>${esc(doc.Title)}</span><small>${isAiActive(doc)?'进行中':'已完成 / 待查看'}</small></button>`).join(''):(all.length?tcEmptyHTML('plan'):'<p class="meta">暂无设计任务。在「需求管理」里打开需求文档，点「AI 设计」发起。</p>')}</div>`;
-  $$('#ai-drawer-body [data-tc-plan]').forEach(b=>b.onclick=()=>{const doc=state.reqDocs.find(d=>d.ID===b.dataset.tcPlan);if(doc)openAiDrawer(doc)});
+  $$('#ai-drawer-body [data-tc-plan]').forEach(b=>b.onclick=()=>{const doc=state.reqDocs.find(d=>d.ID===b.dataset.tcPlan);if(doc)tcExpand(b,()=>openAiDrawer(doc))});
   tcAttach('plan');
 }
 // 任何入口打开这三个抽屉，都带上标签，方便互相切换。
 {const g=openGenDrawer;openGenDrawer=function(){g.apply(this,arguments);tcAttach('gen')};
  const r=openScriptRunDrawer;openScriptRunDrawer=function(){r.apply(this,arguments);tcAttach('run')};
- const a=openAiDrawer;openAiDrawer=function(doc,mode){a.apply(this,arguments);tcAttach(mode==='host'?'host':'plan')}}
+ const a=openAiDrawer;openAiDrawer=function(doc,mode){if(!tcExpanding)tcCollapse();a.apply(this,arguments);tcAttach(mode==='host'?'host':'plan')}}
 $('#open-task-center').onclick=()=>tcSwitch(tcCurrent);
 setInterval(tcRenderTabs,2000);
 
