@@ -804,7 +804,14 @@ async function restoreServerTasks(){
   let list;
   try{list=(await serviceRequest('/api/tasks?active=1&kind=planner,generator,healer')).tasks||[]}catch{return}
   for(const t of list){ // 新的在前
-    if(t.kind==='planner'){const docId=t.subject?.startsWith('req:')?t.subject.slice(4):'';if(docId&&!aiJobs.has(docId)){aiJobs.set(docId,t.id);aiJobStatus.set(docId,t.status)}continue}
+    if(t.kind==='planner'){const docId=t.subject?.startsWith('req:')?t.subject.slice(4):'';if(docId&&!aiJobs.has(docId)){
+      aiJobs.set(docId,t.id);aiJobStatus.set(docId,t.status);
+      // 页面刷新后，服务端还在跑的任务要马上算"进行中"并接上进度订阅；否则要等用户点开那份需求才被发现，
+      // 在此之前一直显示成"已完成 / 待查看"，等点开后又跳回进行中。
+      const doc=state.reqDocs.find(d=>d.ID===docId);
+      if(doc&&['queued','running'].includes(t.status)){setAiActive(doc);ensureAiStream(doc,t.id)}
+    }
+    continue}
     const {group,...meta}=t.meta||{};
     if(!meta.versionID||!Array.isArray(meta.caseIDs)||genTasks.some(task=>task.jobId===t.id))continue; // 还没同步过记账的任务无从展示
     if(group?.id&&!genGroup(group.id))genGroups.push(group);
@@ -860,10 +867,15 @@ async function checkAiJob(doc){
     const job=await serviceRequest(`/api/planner/jobs/${jobId}`);
     routeAiJob(doc,job);
   }catch(e){
-    // 只有任务确实不存在时才放弃它；网络等临时错误下保留，下次打开再查。
-    if(e.status===404)clearAiJob(doc);else aiJobs.delete(doc.ID);
-    clearAiActive(doc);
-    if(isAiDrawerOpen(doc))renderAiForm(doc,'读取任务状态失败，请重新开始。');
+    // 只有任务确实不存在时才放弃它；网络等临时错误下任务和它的"进行中"状态原样保留，下次打开再查
+    // （否则一次读取失败就会让任务从任务中心的进行中跳到已完成或消失）。
+    if(e.status===404){
+      clearAiJob(doc);clearAiActive(doc);
+      if(isAiDrawerOpen(doc))renderAiForm(doc,'读取任务状态失败，请重新开始。');
+    }else if(isAiDrawerOpen(doc)){
+      $('#ai-drawer-body').innerHTML=`<p class="meta">读取任务状态失败：${esc(e.message)}。任务不受影响，仍在继续。</p><p class="drawer-actions"><button type="button" class="secondary" id="ai-status-retry">重试</button></p>`;
+      $('#ai-status-retry').onclick=()=>checkAiJob(doc);
+    }
   }
 }
 // "建议覆盖用例数量"两步流程：开始分析 → 先调 /api/planner/estimate 评估并预填 → 用户可修改 →
