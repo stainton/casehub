@@ -6,8 +6,6 @@ package core
 // in the same atomic save; it only writes what actually differs. Libraries hold hand-written documents only: an
 // earlier version also generated a read-only case-tree document in each, which is deleted when found.
 
-import "strings"
-
 const (
 	mainRootFolder         = "root"
 	productLibraryIDPrefix = "kb-product-"
