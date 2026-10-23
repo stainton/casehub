@@ -12,6 +12,7 @@ let openTasks=persistedSet('casehub-open-tasks'), closedTaskVersions=collapseSet
 let page='cases', reqFocus=null, reqEditor=null, reqSidebarWidth=null, aiDoc=null, reqPage='docs';
 const aiFixInFlight=new Set(); // 正在 AI 修正的用例：`${versionID}:${caseID}`
 let issueFocus=null, issueDescriptionEditor=null, issueCauseEditor=null, issueViewers=[];
+const AI_MAX_STREAMS=3,AI_POLL_MS=5000; // 同时常驻的进度连接上限；其余任务轮询
 const aiSources=new Map(); // 正在订阅进度的 planner 任务：jobId -> EventSource（批量设计时同时有多个）
 let aiPlannerEnabled=null;
 let caseViewMode='friendly'; // 'friendly' | 'raw' — applies to whichever case detail is currently shown
@@ -1269,7 +1270,20 @@ function aiLogLine(msg){
 }
 function ensureAiStream(doc,jobId){
   if(aiSources.has(jobId))return; // already subscribed, keep it (drawer may be closed)
+  // 浏览器对同一来源的 HTTP/1.1 连接只有 6 条，每个 EventSource 常驻占一条：批量设计时任务一多，
+  // 后面的请求（包括抽屉里查任务状态的 GET）就排不上队，界面停在"正在检查 AI 设计服务…"。
+  // 超过上限的任务改为定时轮询，只留少量连接给普通请求。
+  const streaming=[...aiSources.values()].filter(x=>x.stream).length;
+  if(streaming>=AI_MAX_STREAMS){
+    const timer=setInterval(()=>serviceRequest(`/api/planner/jobs/${jobId}`).then(job=>{
+      if(isAiDrawerOpen(doc)){const badge=$('#ai-drawer-body .meta-grid b');if(badge)badge.textContent=aiStageLabel(job)}
+      if(['succeeded','failed','cancelled'].includes(job.status))routeAiJob(doc,job);
+    }).catch(()=>{}),AI_POLL_MS);
+    aiSources.set(jobId,{close:()=>clearInterval(timer)});
+    return;
+  }
   const source=new EventSource(`/api/planner/jobs/${jobId}/events`);
+  source.stream=true;
   aiSources.set(jobId,source);
   source.addEventListener('snapshot',e=>{
     const job=JSON.parse(e.data);
