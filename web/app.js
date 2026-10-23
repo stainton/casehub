@@ -762,8 +762,9 @@ function renameReqDocModal(doc){showModal('重命名需求文档',`<label>标题
 // 启动时由 restoreServerTasks 从 /api/tasks 填回。处理完（导入、重试、重新开始、取消）即在服务端标记为已处理。
 const aiJobs=new Map();
 const aiJobOf=doc=>aiJobs.get(doc.ID)||null;
+const aiJobStatus=new Map(); // 需求 ID -> 最近一次任务的结束状态（succeeded/failed/cancelled），任务中心用它区分成功和失败
 function clearAiJob(doc){
-  const id=aiJobs.get(doc.ID);aiJobs.delete(doc.ID);
+  const id=aiJobs.get(doc.ID);aiJobs.delete(doc.ID);aiJobStatus.delete(doc.ID);
   if(id)markTaskHandled('planner',id);
 }
 // 设计完成后的结果摘要（导入条数 + 遗留问题）持久保存，关闭抽屉/刷新页面后仍展示，
@@ -803,7 +804,7 @@ async function restoreServerTasks(){
   let list;
   try{list=(await serviceRequest('/api/tasks?active=1&kind=planner,generator,healer')).tasks||[]}catch{return}
   for(const t of list){ // 新的在前
-    if(t.kind==='planner'){const docId=t.subject?.startsWith('req:')?t.subject.slice(4):'';if(docId&&!aiJobs.has(docId))aiJobs.set(docId,t.id);continue}
+    if(t.kind==='planner'){const docId=t.subject?.startsWith('req:')?t.subject.slice(4):'';if(docId&&!aiJobs.has(docId)){aiJobs.set(docId,t.id);aiJobStatus.set(docId,t.status)}continue}
     const {group,...meta}=t.meta||{};
     if(!meta.versionID||!Array.isArray(meta.caseIDs)||genTasks.some(task=>task.jobId===t.id))continue; // 还没同步过记账的任务无从展示
     if(group?.id&&!genGroup(group.id))genGroups.push(group);
@@ -1236,6 +1237,7 @@ function aiStageLabel(job){
 // 任务状态的唯一分发点：无论抽屉是否打开（可关闭，关闭后任务继续在后台跑），
 // 都会在这里更新"AI 设计中"按钮态、维持 SSE 订阅，并在完成后等待用户确认导入。
 function routeAiJob(doc,job){
+  aiJobStatus.set(doc.ID,job.status);
   const terminal=['succeeded','failed','cancelled'].includes(job.status);
   if(terminal)closeAiStream(job.id);
   if(!terminal){
@@ -2821,13 +2823,20 @@ function tcShowHosting(){
   $$('#ai-drawer-body [data-tc-host-cases]').forEach(b=>b.onclick=()=>tcExpand(b,()=>openCaseHost({id:b.dataset.tcHostCases})));
   tcAttach('host');
 }
+// 设计任务行右侧的状态：进行中 / 成功（待确认导入）/ 失败 / 已取消，已完成里一眼分得出成败。
+function aiRowStatusHTML(doc){
+  if(isAiActive(doc))return '<small>进行中</small>';
+  const st=aiJobStatus.get(doc.ID);
+  const [cls,text]=st==='succeeded'?['ok','✓ 成功 · 待确认导入']:st==='failed'?['fail','✗ 失败']:st==='cancelled'?['','已取消']:['','已完成 / 待查看'];
+  return `<small class="tc-status${cls?` ${cls}`:''}">${text}</small>`;
+}
 function tcShowPlanner(){
   tcCollapse();aiDoc=null;hostCase=null;closeHostLog();
   $('#ai-drawer .panel-head strong').textContent='AI 设计';
   $('#ai-drawer-doc').textContent='';
   $('#ai-drawer').classList.remove('hidden');
   const all=tcPlannerDocs(),docs=all.filter(doc=>tcShown('plan',isAiActive(doc)));
-  $('#ai-drawer-body').innerHTML=`<div class="tc-list">${docs.length?docs.map(doc=>`<button type="button" class="tc-row" data-tc-plan="${esc(doc.ID)}"><span>${esc(doc.Title)}</span><small>${isAiActive(doc)?'进行中':'已完成 / 待查看'}</small></button>`).join(''):(all.length?tcEmptyHTML('plan'):'<p class="meta">暂无设计任务。在「需求管理」里打开需求文档，点「AI 设计」发起。</p>')}</div>`;
+  $('#ai-drawer-body').innerHTML=`<div class="tc-list">${docs.length?docs.map(doc=>`<button type="button" class="tc-row" data-tc-plan="${esc(doc.ID)}"><span>${esc(doc.Title)}</span>${aiRowStatusHTML(doc)}</button>`).join(''):(all.length?tcEmptyHTML('plan'):'<p class="meta">暂无设计任务。在「需求管理」里打开需求文档，点「AI 设计」发起。</p>')}</div>`;
   $$('#ai-drawer-body [data-tc-plan]').forEach(b=>b.onclick=()=>{const doc=state.reqDocs.find(d=>d.ID===b.dataset.tcPlan);if(doc)tcExpand(b,()=>openAiDrawer(doc))});
   tcAttach('plan');
 }
