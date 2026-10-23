@@ -1032,9 +1032,7 @@ func TestReqDocCodeAndStructuredPendingCaseIDs(t *testing.T) {
 			other = d.ID
 		}
 	}
-	if _, err := svc.Apply(context.Background(), core.Action{Type: "setReqDocCode", DocID: other, Code: "LOGIN"}); err == nil {
-		t.Fatal("a code already used by another requirement must be rejected")
-	}
+	apply(t, svc, core.Action{Type: "setReqDocCode", DocID: other, Code: "LOGIN"}) // a shared code is allowed
 
 	folder := func(parent, name, code string) string {
 		st := apply(t, svc, core.Action{Type: "createPendingFolder", ParentID: parent, Name: name, Code: code, Author: "pat"})

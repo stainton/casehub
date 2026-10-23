@@ -2139,11 +2139,8 @@ func setReqDocCode(s *State, a Action) error {
 	if code != "" && !codeRE.MatchString(code) {
 		return errors.New("需求缩写需为 2–12 位大写英文字母或数字，以字母开头，不含 -")
 	}
-	for _, other := range s.ReqDocs {
-		if code != "" && other.ID != d.ID && other.Code == code {
-			return fmt.Errorf("需求缩写 %s 已被需求「%s」使用", code, other.Title)
-		}
-	}
+	// Several requirements may share a code: their cases then number on from the same TC-<code>- prefix
+	// and are filed under the same review folder.
 	d.Code = code
 	d.UpdatedBy = a.Author
 	d.UpdatedAt = now()
