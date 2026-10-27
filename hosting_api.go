@@ -110,16 +110,17 @@ func (a *api) hostingRoutes(m *http.ServeMux) {
 			// Generate / Execute add script generation and one automated run of each script; BaseURL is the
 			// system under test the scripts run against.
 			// (Named apart from Request.Generate, the generator body: JSON keys match case-insensitively.)
-			Generate bool `json:"withScripts"`
-			Execute  bool `json:"withRun"`
-			BaseURL  string
+			Generate                bool `json:"withScripts"`
+			Execute                 bool `json:"withRun"`
+			SaveScriptsIndividually bool `json:"saveScriptsIndividually"`
+			BaseURL                 string
 			hosting.Request
 		}
 		if json.NewDecoder(http.MaxBytesReader(w, r.Body, 8<<20)).Decode(&in) != nil {
 			refuse(w, errors.New("无效的 JSON 请求"))
 			return
 		}
-		h, err := a.hosting.Begin(r.Context(), core.Hosting{DocID: in.DocID, VersionID: in.VersionID, Product: in.Product, ProductVersion: in.ProductVersion, Source: in.Source, Label: in.Label, CaseIDs: in.CaseIDs, Generate: in.Generate, Execute: in.Execute, BaseURL: in.BaseURL}, in.Request, in.Author)
+		h, err := a.hosting.Begin(r.Context(), core.Hosting{DocID: in.DocID, VersionID: in.VersionID, Product: in.Product, ProductVersion: in.ProductVersion, Source: in.Source, Label: in.Label, CaseIDs: in.CaseIDs, Generate: in.Generate, Execute: in.Execute, SaveScriptsIndividually: in.SaveScriptsIndividually, BaseURL: in.BaseURL}, in.Request, in.Author)
 		reply(w, h, err)
 	})
 	m.HandleFunc("POST /api/hostings/{id}/retry", func(w http.ResponseWriter, r *http.Request) {

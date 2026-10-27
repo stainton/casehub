@@ -236,7 +236,7 @@ func (r *Runner) request(id string) *Request {
 }
 
 // forget drops what the request holds that is no longer needed: the planner parts once the design is
-// submitted, everything once the generation is (or when no generation will follow).
+// submitted, everything after the last generation is submitted (or when no generation will follow).
 func (r *Runner) forget(id string, all bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -352,7 +352,7 @@ func (r *Runner) run(id string) {
 				if !r.submitGeneration(h, req) {
 					return
 				}
-				r.forget(id, true) // the generator task holds the credentials now; running the scripts needs none
+				r.forget(id, !h.SaveScriptsIndividually) // individual mode needs the request for later cases
 				continue
 			}
 			if !r.awaitGeneration(h) {
@@ -490,6 +490,9 @@ func (r *Runner) submitGeneration(h core.Hosting, req *Request) bool {
 	var requirements []any
 	seen := map[string]bool{}
 	for _, id := range h.CaseIDs {
+		if h.SaveScriptsIndividually && h.ScriptJobs[id] != "" {
+			continue
+		}
 		for _, c := range st.Cases {
 			if c.VersionID != h.VersionID || c.ID != id || strings.TrimSpace(c.Steps) == "" {
 				continue
@@ -507,6 +510,12 @@ func (r *Runner) submitGeneration(h core.Hosting, req *Request) bool {
 				}
 			}
 			cases = append(cases, item)
+			if h.SaveScriptsIndividually {
+				break
+			}
+		}
+		if h.SaveScriptsIndividually && len(cases) > 0 {
+			break
 		}
 	}
 	if len(cases) == 0 {
@@ -523,7 +532,11 @@ func (r *Runner) submitGeneration(h core.Hosting, req *Request) bool {
 		r.halt(h.ID, core.HostingGenerating, "提交脚本生成任务失败："+err.Error(), false)
 		return false
 	}
-	if err := r.apply(core.Action{Type: "hostingGenSubmitted", HostingID: h.ID, TaskID: t.ID}); err != nil {
+	caseID := ""
+	if h.SaveScriptsIndividually {
+		caseID = cases[0]["id"].(string)
+	}
+	if err := r.apply(core.Action{Type: "hostingGenSubmitted", HostingID: h.ID, TaskID: t.ID, CaseID: caseID}); err != nil {
 		_ = r.srv.Cancel(r.ctx, "generator", t.ID)
 		r.halt(h.ID, core.HostingGenerating, err.Error(), false)
 		return false

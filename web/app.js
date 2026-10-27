@@ -1534,7 +1534,7 @@ function watchHostings(){
     let list;
     try{list=(await serviceRequest('/api/hostings')).hostings||[]}catch{return}
     // 阶段变化，或自动执行又出了一条结果（新测试记录）：整体刷新一次。
-    const mark=h=>`${h.Stage}:${Object.keys(h.Results||{}).length}`,before=new Map(state.hostings.map(h=>[h.ID,mark(h)]));
+    const mark=h=>`${h.Stage}:${h.Generated}:${h.Blocked}:${Object.keys(h.Results||{}).length}`,before=new Map(state.hostings.map(h=>[h.ID,mark(h)]));
     const moved=list.some(h=>before.get(h.ID)!==mark(h));
     state.hostings=list;
     if(moved)await refresh().catch(()=>{});
@@ -1569,7 +1569,8 @@ async function renderHostForm(doc,{retry}={}){
   const genDefaults=agentDefaultsCache.get('generator')||{};
   // 托管范围默认沿用这份需求上一次托管的，没有就沿用上次在本浏览器里选的（默认全选）。
   const wantScripts=prev?Boolean(prev.Generate):last.withScripts!==false,wantRun=prev?Boolean(prev.Execute):last.withRun!==false;
-  const scope=retry?'':`<fieldset class="host-scope"><legend>托管范围</legend><label class="ai-asset"><input type="checkbox" name="withScripts"${services.generator?(wantScripts?' checked':''):' disabled'}> 归档后生成自动化脚本${services.generator?'':'（脚本生成服务未配置）'}</label><label class="ai-asset"><input type="checkbox" name="withRun"${services.executor&&services.generator?(wantRun?' checked':''):' disabled'}> 生成后自动执行一次，并保存测试记录${services.executor?'':'（执行服务未配置）'}</label><label id="host-case-timeout">单用例生成时长（分钟）<input name="caseTimeoutMinutes" type="number" min="1" max="60" step="1" value="${esc(genDefaults.caseTimeoutMinutes||60)}"></label></fieldset>`;
+  const saveIndividually=prev?Boolean(prev.SaveScriptsIndividually):Boolean(last.saveScriptsIndividually);
+  const scope=retry?'':`<fieldset class="host-scope"><legend>托管范围</legend><label class="ai-asset"><input type="checkbox" name="withScripts"${services.generator?(wantScripts?' checked':''):' disabled'}> 归档后生成自动化脚本${services.generator?'':'（脚本生成服务未配置）'}</label><label class="ai-asset"><input type="checkbox" name="withRun"${services.executor&&services.generator?(wantRun?' checked':''):' disabled'}> 生成后自动执行一次，并保存测试记录${services.executor?'':'（执行服务未配置）'}</label><label class="ai-asset" id="host-save-scripts"><input type="checkbox" name="saveScriptsIndividually"${saveIndividually?' checked':''}> 已生成的脚本逐个存储（不勾选则全部生成后一起存储）</label><label id="host-case-timeout">单用例生成时长（分钟）<input name="caseTimeoutMinutes" type="number" min="1" max="60" step="1" value="${esc(genDefaults.caseTimeoutMinutes||60)}"></label></fieldset>`;
   const retryGen=retry&&retry.FailedAt==='generating';
   const buttons=retryGen?'<button type="submit" value="start">重新填写并生成</button>':retry?.Continuable?'<button type="submit" class="secondary" value="redo">重新设计</button><button type="submit" value="continue">继续上次的设计</button>':`<button type="submit" value="start">${retry?'重新托管':'开始托管'}</button>`;
   $('#ai-drawer-body').innerHTML=`${retry?hostStepsHTML(retry):`<div class="card"><h3>AI 托管</h3><p class="meta">托管后不再逐步确认：AI 评估的用例数量和需求缩写直接采用，设计完成的用例放入用例评审后自动评审通过，并归档到下面的位置（上级目录不存在会自动创建）；勾选后还会为它们生成自动化脚本、自动执行一次并保存测试记录。托管由 CaseHub 服务端执行，提交后可以关闭页面。</p></div>`}<form id="host-form" autocomplete="off"><label>被测系统 URL<input name="baseUrl" required placeholder="https://test.example.com/login" autocomplete="off" value="${esc(v.baseUrl||'')}"></label><label>补充说明（可选）<textarea name="instructions" placeholder="覆盖范围、登录方式或探索约束">${esc(v.instructions||'')}</textarea></label><label>测试账号 · 用户名（可选）<input name="testAccount" autocomplete="off" value="${esc(v.testAccount||'')}"></label><label>测试账号 · 密码（可选）<input name="testSecret" type="text" class="fake-password" autocomplete="off" spellcheck="false" value="${esc(v.testSecret||'')}"></label><fieldset class="ai-assets"><legend>随任务带上的资产（可选）</legend>${assetsCache.length?assetsCache.map(a=>`<label class="ai-asset"><input type="checkbox" name="assetIds" value="${esc(a.id)}"${(v.assetIds||[]).includes(a.id)?' checked':''}> ${esc(assetTypeLabel(a.type))} · ${esc(a.name)} <small>${assetSize(a.size)}</small></label>`).join(''):'<small class="meta">还没有资产，可在头像菜单的「资产」里上传。</small>'}</fieldset><label>设计任务超时时间（分钟）<input name="timeoutMinutes" type="number" min="${AI_MIN_TIMEOUT_MIN}" max="${AI_MAX_TIMEOUT_MIN}" step="1" required value="${esc(v.timeoutMinutes??aiTimeoutMinutes())}"></label>${target}${scope}${retryGen?`<label>单用例生成时长（分钟）<input name="caseTimeoutMinutes" type="number" min="1" max="60" step="1" value="${esc(genDefaults.caseTimeoutMinutes||60)}"></label>`:''}<p class="drawer-actions">${retry?'<button type="button" class="secondary" id="host-back">返回</button>':''}${buttons}</p></form>`;
@@ -1579,7 +1580,7 @@ async function renderHostForm(doc,{retry}={}){
     const fresh=x.versionID==='__new__',nv=form.elements.newVersionName;$('#host-new-version').classList.toggle('hidden',!fresh);nv.required=fresh;
     if(fresh&&!nv.dataset.touched)nv.value=[x.product.trim(),x.productVersion.trim()].filter(Boolean).join(' ')+(x.product.trim()||x.productVersion.trim()?' 测试':'');el.textContent=`用例将归档到：${['全部用例',x.product.trim()||'<产品>',x.productVersion.trim()||'<产品版本>',liveReqDoc(doc).Title].join(' / ')}`};
   // 自动执行依赖脚本生成：勾执行时带上生成，取消生成时一并取消执行。
-  const syncScope=e=>{const g=form.elements.withScripts,r=form.elements.withRun;if(!g)return;if(e?.target===r&&r.checked)g.checked=true;if(e?.target===g&&!g.checked)r.checked=false;$('#host-case-timeout').classList.toggle('hidden',!g.checked)};
+  const syncScope=e=>{const g=form.elements.withScripts,r=form.elements.withRun;if(!g)return;if(e?.target===r&&r.checked)g.checked=true;if(e?.target===g&&!g.checked)r.checked=false;$('#host-case-timeout').classList.toggle('hidden',!g.checked);$('#host-save-scripts').classList.toggle('hidden',!g.checked)};
   form.oninput=e=>{if(e.target.name==='newVersionName')e.target.dataset.touched='1';syncScope(e);preview()};form.onchange=preview;syncScope();preview();
   form.onsubmit=async e=>{
     e.preventDefault();
@@ -1595,6 +1596,7 @@ async function renderHostForm(doc,{retry}={}){
     if(values.testAccount||values.testSecret)job.context.testData={username:values.testAccount,password:values.testSecret};
     // 脚本生成请求（不含用例，服务端归档后补上用例和需求）：和自动化页发起生成时一样的目标、说明、资产、账号和时限。
     const withScripts=Boolean(form.elements.withScripts?.checked)||retryGen,withRun=Boolean(form.elements.withRun?.checked);
+    const saveScriptsIndividually=Boolean(form.elements.saveScriptsIndividually?.checked);
     const caseTimeoutMinutes=Number(data.get('caseTimeoutMinutes')||60);
     if(withScripts&&(!Number.isInteger(caseTimeoutMinutes)||caseTimeoutMinutes<1||caseTimeoutMinutes>60))return toast('单用例生成时长需为 1–60 分钟的整数',true);
     const generate=withScripts?{target:{baseUrl:values.baseUrl},context:{...(constraints?{constraints}:{}),...(values.instructions.trim()?{instructions:values.instructions.trim()}:{}),...(productExperience?{productExperience}:{}),...(values.assetIds.length?{assetIds:values.assetIds}:{}),...(job.context.testData?{testData:job.context.testData}:{})},caseTimeoutMs:caseTimeoutMinutes*60000}:undefined;
@@ -1614,8 +1616,8 @@ async function renderHostForm(doc,{retry}={}){
           const out=await act('createVersion',{Name:name,Blank:true});
           cfg.versionID=out.state.versions.find(v=>!before.has(v.id)).id;
         }
-        try{localStorage.setItem('casehub-ai-host-last',JSON.stringify({...cfg,withScripts,withRun}))}catch{}
-        h=await serviceRequest('/api/hostings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({DocID:doc.ID,VersionID:cfg.versionID,Product:cfg.product,ProductVersion:cfg.productVersion,Author:'本地用户',withScripts,withRun,BaseURL:values.baseUrl,estimate,job,...(generate?{generate}:{})})});
+        try{localStorage.setItem('casehub-ai-host-last',JSON.stringify({...cfg,withScripts,withRun,saveScriptsIndividually}))}catch{}
+        h=await serviceRequest('/api/hostings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({DocID:doc.ID,VersionID:cfg.versionID,Product:cfg.product,ProductVersion:cfg.productVersion,Author:'本地用户',withScripts,withRun,saveScriptsIndividually,BaseURL:values.baseUrl,estimate,job,...(generate?{generate}:{})})});
       }
       toast('已开始托管，可以关闭页面，CaseHub 会自动完成');
       hostingUpdated(h);
@@ -1687,9 +1689,9 @@ async function renderCaseHostForm({retry}={}){
   const usable=picked.filter(c=>(c.Steps||'').trim()),existing=usable.filter(c=>scriptFor(d.versionID,c.ID)).length;
   if(!retry&&!usable.length){$('#ai-drawer-body').innerHTML='<p class="meta">选中的用例都没有执行步骤，无法生成脚本。</p>';return}
   let last={};try{last=JSON.parse(localStorage.getItem('casehub-ai-host-last'))||{}}catch{}
-  const v=genValues('generator'),wantRun=last.withRun!==false;
+  const v=genValues('generator'),wantRun=last.withRun!==false,saveIndividually=retry?Boolean(retry.SaveScriptsIndividually):Boolean(last.saveScriptsIndividually);
   const intro=retry?hostStepsHTML(retry):`<div class="card"><h3>AI 托管</h3><p class="meta">直接为这 ${usable.length} 条用例生成自动化脚本（按用例编号前缀附带对应的需求文档），勾选后再自动执行一次并保存测试记录，不需要逐步确认。${picked.length-usable.length?`另外 ${picked.length-usable.length} 条没有执行步骤，会跳过。`:''}${existing?`其中 ${existing} 条已有脚本，会重新生成（旧脚本保留在脚本历史里）。`:''}托管由 CaseHub 服务端执行，提交后可以关闭页面。</p></div>`;
-  $('#ai-drawer-body').innerHTML=`${intro}<form id="host-form" autocomplete="off"><label>被测系统 URL<input name="baseUrl" required placeholder="https://test.example.com" autocomplete="off" value="${esc(v.baseUrl||'')}"></label><label>补充说明（可选）<textarea name="instructions" placeholder="登录方式、数据约束、需要避免的操作等">${esc(v.instructions||'')}</textarea></label><label>测试账号 · 用户名（可选）<input name="testAccount" autocomplete="off" value="${esc(v.testAccount||'')}"></label><label>测试账号 · 密码（可选）<input name="testSecret" type="text" class="fake-password" autocomplete="off" spellcheck="false" value="${esc(v.testSecret||'')}"></label><fieldset class="ai-assets"><legend>生成脚本可使用的资产（可选）</legend>${assetsCache.length?assetsCache.map(a=>`<label class="ai-asset"><input type="checkbox" name="assetIds" value="${esc(a.id)}"${v.assetIds.includes(a.id)?' checked':''}> ${esc(assetTypeLabel(a.type))} · ${esc(a.name)} <small>${assetSize(a.size)}</small></label>`).join(''):'<small class="meta">还没有资产，可在头像菜单的「资产」里上传。</small>'}</fieldset><label>单用例生成时长（分钟）<input name="caseTimeoutMinutes" type="number" min="1" max="60" step="1" required value="${esc(v.caseTimeoutMinutes)}"></label>${retry?'':`<fieldset class="host-scope"><legend>托管范围</legend><label class="ai-asset"><input type="checkbox" checked disabled> 生成自动化脚本</label><label class="ai-asset"><input type="checkbox" name="withRun"${executor?(wantRun?' checked':''):' disabled'}> 生成后自动执行一次，并保存测试记录${executor?'':'（执行服务未配置）'}</label></fieldset>`}<p class="drawer-actions">${retry?'<button type="button" class="secondary" id="host-back">返回</button>':''}<button type="submit">${retry?'重新填写并生成':'开始托管'}</button></p></form>`;
+  $('#ai-drawer-body').innerHTML=`${intro}<form id="host-form" autocomplete="off"><label>被测系统 URL<input name="baseUrl" required placeholder="https://test.example.com" autocomplete="off" value="${esc(v.baseUrl||'')}"></label><label>补充说明（可选）<textarea name="instructions" placeholder="登录方式、数据约束、需要避免的操作等">${esc(v.instructions||'')}</textarea></label><label>测试账号 · 用户名（可选）<input name="testAccount" autocomplete="off" value="${esc(v.testAccount||'')}"></label><label>测试账号 · 密码（可选）<input name="testSecret" type="text" class="fake-password" autocomplete="off" spellcheck="false" value="${esc(v.testSecret||'')}"></label><fieldset class="ai-assets"><legend>生成脚本可使用的资产（可选）</legend>${assetsCache.length?assetsCache.map(a=>`<label class="ai-asset"><input type="checkbox" name="assetIds" value="${esc(a.id)}"${v.assetIds.includes(a.id)?' checked':''}> ${esc(assetTypeLabel(a.type))} · ${esc(a.name)} <small>${assetSize(a.size)}</small></label>`).join(''):'<small class="meta">还没有资产，可在头像菜单的「资产」里上传。</small>'}</fieldset><label>单用例生成时长（分钟）<input name="caseTimeoutMinutes" type="number" min="1" max="60" step="1" required value="${esc(v.caseTimeoutMinutes)}"></label>${retry?'':`<fieldset class="host-scope"><legend>托管范围</legend><label class="ai-asset"><input type="checkbox" checked disabled> 生成自动化脚本</label><label class="ai-asset"><input type="checkbox" name="saveScriptsIndividually"${saveIndividually?' checked':''}> 已生成的脚本逐个存储（不勾选则全部生成后一起存储）</label><label class="ai-asset"><input type="checkbox" name="withRun"${executor?(wantRun?' checked':''):' disabled'}> 生成后自动执行一次，并保存测试记录${executor?'':'（执行服务未配置）'}</label></fieldset>`}<p class="drawer-actions">${retry?'<button type="button" class="secondary" id="host-back">返回</button>':''}<button type="submit">${retry?'重新填写并生成':'开始托管'}</button></p></form>`;
   const form=$('#host-form');
   if(retry)$('#host-back').onclick=()=>renderCaseHostView();
   form.onsubmit=async e=>{
@@ -1702,14 +1704,14 @@ async function renderCaseHostForm({retry}={}){
     const {cases:_,...generate}=genPayload(d.versionID,[],{...values,reqDoc:''});
     const caseConstraints=constraintsForCases(d.versionID,d.caseIDs);
     if(caseConstraints)generate.context.constraints=caseConstraints;
-    const withRun=Boolean(form.elements.withRun?.checked);
+    const withRun=Boolean(form.elements.withRun?.checked),saveScriptsIndividually=Boolean(form.elements.saveScriptsIndividually?.checked);
     const btn=form.querySelector('button[type="submit"]');btn.disabled=true;
     try{
       let h;
       if(retry)h=await serviceRequest(`/api/hostings/${retry.ID}/retry`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({generate})});
       else{
-        try{localStorage.setItem('casehub-ai-host-last',JSON.stringify({...last,withRun}))}catch{}
-        h=await serviceRequest('/api/hostings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({Source:'cases',VersionID:d.versionID,CaseIDs:d.caseIDs,Label:d.label,Author:'本地用户',withRun,BaseURL:values.baseUrl,generate})});
+        try{localStorage.setItem('casehub-ai-host-last',JSON.stringify({...last,withRun,saveScriptsIndividually}))}catch{}
+        h=await serviceRequest('/api/hostings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({Source:'cases',VersionID:d.versionID,CaseIDs:d.caseIDs,Label:d.label,Author:'本地用户',withRun,saveScriptsIndividually,BaseURL:values.baseUrl,generate})});
         selected.get(d.versionID)?.clear();updateBulk();renderVersions();
       }
       toast('已开始托管，可以关闭页面，CaseHub 会自动完成');

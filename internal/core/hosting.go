@@ -36,13 +36,16 @@ type Hosting struct {
 	// Optional stages after filing: generate a Playwright script for each filed case (generator), then run
 	// every generated script once (executor) and record its result as a test record. BaseURL is the system
 	// under test the scripts run against (no secret, so it is kept; the test account is not).
-	Generate, Execute bool
-	BaseURL           string
-	GenTaskID         string
-	Generated         int               // scripts saved by the generator run
-	Blocked           int               // cases the generator could not script
-	ExecTasks         map[string]string `json:",omitempty"` // case ID -> executor task ID
-	Results           map[string]string `json:",omitempty"` // case ID -> passed / failed / error (the run itself failed)
+	Generate, Execute       bool
+	SaveScriptsIndividually bool // commit each generator result before submitting the next case
+	BaseURL                 string
+	GenTaskID               string
+	GenCaseID               string            // case being generated in individual mode
+	ScriptJobs              map[string]string `json:",omitempty"` // case ID -> generator task ID
+	Generated               int               // scripts saved by the generator run
+	Blocked                 int               // cases the generator could not script
+	ExecTasks               map[string]string `json:",omitempty"` // case ID -> executor task ID
+	Results                 map[string]string `json:",omitempty"` // case ID -> passed / failed / error (the run itself failed)
 }
 
 // GeneratorResult is the part of a generator job's result a hosting saves.
@@ -165,6 +168,7 @@ func applyHosting(s *State, a Action) (ok bool, err error) {
 			return true, errors.New("托管不在脚本生成阶段")
 		}
 		h.GenTaskID = a.TaskID
+		h.GenCaseID = a.CaseID
 	case "hostingScripts":
 		err = hostingScripts(s, h, a)
 	case "hostingExecSubmitted":
@@ -241,7 +245,7 @@ func startHosting(s *State, a Action) error {
 	}
 	t := now()
 	s.Hostings = append(kept, Hosting{ID: ID(), DocID: doc.ID, VersionID: in.VersionID, Product: product, ProductVersion: version,
-		Stage: HostingEstimating, ReqFolder: doc.Title, Generate: in.Generate || in.Execute, Execute: in.Execute, BaseURL: strings.TrimSpace(in.BaseURL),
+		Stage: HostingEstimating, ReqFolder: doc.Title, Generate: in.Generate || in.Execute, Execute: in.Execute, SaveScriptsIndividually: in.SaveScriptsIndividually, BaseURL: strings.TrimSpace(in.BaseURL),
 		CreatedBy: a.Author, CreatedAt: t, UpdatedAt: t})
 	return nil
 }
@@ -304,7 +308,7 @@ func startCaseHosting(s *State, a Action) error {
 	}
 	t := now()
 	s.Hostings = append(kept, Hosting{ID: ID(), VersionID: in.VersionID, Source: HostingFromCases, Label: label, CaseIDs: ids,
-		Stage: HostingGenerating, Generate: true, Execute: in.Execute, BaseURL: strings.TrimSpace(in.BaseURL),
+		Stage: HostingGenerating, Generate: true, Execute: in.Execute, SaveScriptsIndividually: in.SaveScriptsIndividually, BaseURL: strings.TrimSpace(in.BaseURL),
 		CreatedBy: a.Author, CreatedAt: t, UpdatedAt: t})
 	return nil
 }
@@ -572,6 +576,9 @@ func hostingScripts(s *State, h *Hosting, a Action) error {
 	if r == nil {
 		return errors.New("缺少脚本生成结果")
 	}
+	if h.SaveScriptsIndividually && (len(r.Scripts) != 1 || r.Scripts[0].CaseID != h.GenCaseID) {
+		return errors.New("逐条生成结果与当前用例不匹配")
+	}
 	if h.DocID != "" {
 		if doc, _ := reqDocAt(s, h.DocID); doc == nil {
 			return errors.New("需求文档不存在")
@@ -636,8 +643,29 @@ func hostingScripts(s *State, h *Hosting, a Action) error {
 	if err := reportIssues(s, Action{Reports: reports, Author: a.Author}); err != nil {
 		return err
 	}
-	h.Generated, h.Blocked, h.ExecTasks, h.Results = generated, blocked, nil, nil
-	if h.Execute && generated > 0 {
+	if h.ScriptJobs == nil {
+		h.ScriptJobs = map[string]string{}
+	}
+	for _, sc := range r.Scripts {
+		h.ScriptJobs[sc.CaseID] = h.GenTaskID
+	}
+	if h.SaveScriptsIndividually {
+		h.Generated += generated
+		h.Blocked += blocked
+		h.GenTaskID, h.GenCaseID = "", ""
+		for _, id := range h.CaseIDs {
+			if _, saved := h.ScriptJobs[id]; saved {
+				continue
+			}
+			if c, _ := caseAt(s, h.VersionID, id); c != nil && strings.TrimSpace(c.Steps) != "" {
+				return nil
+			}
+		}
+	} else {
+		h.Generated, h.Blocked = generated, blocked
+	}
+	h.ExecTasks, h.Results = nil, nil
+	if h.Execute && h.Generated > 0 {
 		h.Stage = HostingRunning
 	} else {
 		h.Stage, h.FinishedAt = HostingDone, now()
@@ -649,7 +677,11 @@ func hostingScripts(s *State, h *Hosting, a Action) error {
 func HostingRunnable(s State, h Hosting) []Script {
 	var out []Script
 	for _, id := range h.CaseIDs {
-		if sc, _ := scriptAt(&s, h.VersionID, id); sc != nil && sc.Status == "generated" && sc.Code != "" && sc.JobID == h.GenTaskID {
+		job := h.ScriptJobs[id]
+		if job == "" {
+			job = h.GenTaskID // hostings saved before ScriptJobs was introduced
+		}
+		if sc, _ := scriptAt(&s, h.VersionID, id); sc != nil && sc.Status == "generated" && sc.Code != "" && sc.JobID == job {
 			out = append(out, *sc)
 		}
 	}

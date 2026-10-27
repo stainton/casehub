@@ -494,6 +494,68 @@ func generatorResult(status map[string]string) map[string]any {
 	return map[string]any{"scripts": scripts, "generated": 2, "blocked": 1, "explorationRecords": map[string]string{}}
 }
 
+func singleGeneratorResult(id, status string) map[string]any {
+	all := generatorResult(map[string]string{id: status})
+	for _, script := range all["scripts"].([]map[string]any) {
+		if script["caseId"] == id {
+			return map[string]any{"scripts": []any{script}}
+		}
+	}
+	panic("unknown case " + id)
+}
+
+func (f *fixture) waitGeneratorTasks(t *testing.T, want int) {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		f.planner.mu.Lock()
+		got := len(f.planner.sent["generator"])
+		f.planner.mu.Unlock()
+		if got >= want {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("generator tasks = %d, want %d", got, want)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+func TestHostingSavesScriptsIndividuallyAndRunsEach(t *testing.T) {
+	f := setup(t)
+	defer f.runner.Close()
+	f.hostCases(t)
+	ids := []string{"TC-LOGIN-AUTH-FUNC-001", "TC-LOGIN-AUTH-FUNC-002", "TC-LOGIN-PWD-FUNC-001"}
+	h, err := f.runner.Begin(context.Background(), core.Hosting{Source: core.HostingFromCases, VersionID: f.vid, CaseIDs: ids, Execute: true, SaveScriptsIndividually: true, BaseURL: "http://sut"}, hosting.Request{Generate: f.fullRequest().Generate}, "alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.waitGeneratorTasks(t, 1)
+	f.planner.mu.Lock()
+	first := f.planner.sent["generator"][0]
+	f.planner.mu.Unlock()
+	if got := first["cases"].([]any); len(got) != 1 || got[0].(map[string]any)["id"] != ids[0] {
+		t.Fatalf("first generator body: %v", got)
+	}
+	f.planner.finishKind(t, "generator", singleGeneratorResult(ids[0], ""), false)
+	f.waitGeneratorTasks(t, 2)
+	st, _ := f.svc.State(context.Background())
+	if len(st.Scripts) != 1 || st.Scripts[0].CaseID != ids[0] {
+		t.Fatalf("first script was not saved immediately: %+v", st.Scripts)
+	}
+	if current := f.caseHosting(t, h.ID); current.Generated != 1 || current.Stage != core.HostingGenerating {
+		t.Fatalf("intermediate hosting: %+v", current)
+	}
+	f.planner.finishKind(t, "generator", singleGeneratorResult(ids[1], "blocked"), false)
+	f.waitGeneratorTasks(t, 3)
+	f.planner.finishKind(t, "generator", singleGeneratorResult(ids[2], ""), false)
+	f.planner.finishRuns(t, 2, nil)
+	h = f.waitCaseStage(t, h.ID, core.HostingDone)
+	if h.Generated != 2 || h.Blocked != 1 || len(f.records(t)) != 2 || len(h.ScriptJobs) != 3 {
+		t.Fatalf("final hosting: %+v, records: %v", h, f.records(t))
+	}
+}
+
 func (f *fixture) records(t *testing.T) map[string]core.Record {
 	st, _ := f.svc.State(context.Background())
 	out := map[string]core.Record{}
@@ -515,6 +577,11 @@ func TestHostingGeneratesScriptsAndRunsThem(t *testing.T) {
 	}
 	f.waitSubmitted(t, 1)
 	f.planner.finish(t, designResult("LOGIN"), false)
+	f.waitGeneratorTasks(t, 1)
+	stBefore, _ := f.svc.State(ctx)
+	if len(stBefore.Scripts) != 0 {
+		t.Fatalf("batch mode saved scripts before the generator completed: %+v", stBefore.Scripts)
+	}
 	f.planner.finishKind(t, "generator", generatorResult(map[string]string{"TC-LOGIN-AUTH-FUNC-002": "deviation", "TC-LOGIN-PWD-FUNC-001": "blocked"}), false)
 
 	f.planner.mu.Lock()
