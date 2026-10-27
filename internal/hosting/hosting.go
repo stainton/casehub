@@ -135,9 +135,11 @@ func (r *Runner) Retry(ctx context.Context, id string, req *Request) (core.Hosti
 	}
 	// A finished generator run is only saved again; any other generation stop submits a new one.
 	resubmitGeneration := false
+	continueGeneration := false
 	if h.FailedAt == core.HostingGenerating || h.Source == core.HostingFromCases && h.FailedAt == "" {
 		t, err := r.srv.Get(ctx, "generator", h.GenTaskID)
 		resubmitGeneration = h.GenTaskID == "" || err != nil || t.Status != tasks.Succeeded
+		continueGeneration = err == nil && t.Continuable() && (h.GenCaseID != "" || len(h.CaseIDs) == 1)
 		if resubmitGeneration && (req == nil || len(req.Generate) == 0) {
 			return core.Hosting{}, errors.New("重新生成脚本需要重新填写托管参数")
 		}
@@ -148,6 +150,9 @@ func (r *Runner) Retry(ctx context.Context, id string, req *Request) (core.Hosti
 	}
 	if req != nil && req.Continue {
 		req.Job = withField(req.Job, "continueFrom", failedTask)
+	}
+	if continueGeneration {
+		req.Generate = withField(req.Generate, "continueFrom", h.GenTaskID)
 	}
 	r.launch(id, req)
 	return r.hosting(ctx, id)

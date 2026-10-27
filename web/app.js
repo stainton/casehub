@@ -815,7 +815,7 @@ async function restoreServerTasks(){
     const {group,...meta}=t.meta||{};
     if(!meta.versionID||!Array.isArray(meta.caseIDs)||genTasks.some(task=>task.jobId===t.id))continue; // 还没同步过记账的任务无从展示
     if(group?.id&&!genGroup(group.id))genGroups.push(group);
-    genTasks.push({...meta,kind:t.kind,jobId:t.id,status:t.status,stage:t.stage,error:t.error,createdAt:meta.createdAt||t.createdAt});
+    genTasks.push({...meta,kind:t.kind,jobId:t.id,status:t.status,stage:t.stage,error:t.error,continuable:Boolean(t.continuable),diagnostics:Boolean(t.diagnostics),createdAt:meta.createdAt||t.createdAt});
     genSynced.set(t.id,{kind:t.kind,meta:JSON.stringify(t.meta)});
   }
   genTasks.sort((a,b)=>String(b.createdAt||'').localeCompare(String(a.createdAt||'')));
@@ -1680,6 +1680,8 @@ function renderCaseHostView(){
 async function renderCaseHostForm({retry}={}){
   if(hostingCases===null){try{hostingCases=Boolean((await serviceRequest('/api/hostings')).cases)}catch{hostingCases=false}}
   let executor=false;try{executor=(await serviceRequest('/api/executor/status')).enabled}catch{}
+  let continueGeneration=false;
+  if(retry?.GenTaskID)try{const task=await serviceRequest(`/api/generator/jobs/${retry.GenTaskID}`);continueGeneration=Boolean(task.continuable&&(retry.GenCaseID||retry.CaseIDs?.length===1))}catch{}
   try{await Promise.all([loadAgentDefaults('generator'),loadAssets()])}catch{}
   if(!caseHostOpen())return;
   closeHostLog();hostShown=null;
@@ -1690,8 +1692,8 @@ async function renderCaseHostForm({retry}={}){
   if(!retry&&!usable.length){$('#ai-drawer-body').innerHTML='<p class="meta">选中的用例都没有执行步骤，无法生成脚本。</p>';return}
   let last={};try{last=JSON.parse(localStorage.getItem('casehub-ai-host-last'))||{}}catch{}
   const v=genValues('generator'),wantRun=last.withRun!==false,saveIndividually=retry?Boolean(retry.SaveScriptsIndividually):Boolean(last.saveScriptsIndividually);
-  const intro=retry?hostStepsHTML(retry):`<div class="card"><h3>AI 托管</h3><p class="meta">直接为这 ${usable.length} 条用例生成自动化脚本（按用例编号前缀附带对应的需求文档），勾选后再自动执行一次并保存测试记录，不需要逐步确认。${picked.length-usable.length?`另外 ${picked.length-usable.length} 条没有执行步骤，会跳过。`:''}${existing?`其中 ${existing} 条已有脚本，会重新生成（旧脚本保留在脚本历史里）。`:''}托管由 CaseHub 服务端执行，提交后可以关闭页面。</p></div>`;
-  $('#ai-drawer-body').innerHTML=`${intro}<form id="host-form" autocomplete="off"><label>被测系统 URL<input name="baseUrl" required placeholder="https://test.example.com" autocomplete="off" value="${esc(v.baseUrl||'')}"></label><label>补充说明（可选）<textarea name="instructions" placeholder="登录方式、数据约束、需要避免的操作等">${esc(v.instructions||'')}</textarea></label><label>测试账号 · 用户名（可选）<input name="testAccount" autocomplete="off" value="${esc(v.testAccount||'')}"></label><label>测试账号 · 密码（可选）<input name="testSecret" type="text" class="fake-password" autocomplete="off" spellcheck="false" value="${esc(v.testSecret||'')}"></label><fieldset class="ai-assets"><legend>生成脚本可使用的资产（可选）</legend>${assetsCache.length?assetsCache.map(a=>`<label class="ai-asset"><input type="checkbox" name="assetIds" value="${esc(a.id)}"${v.assetIds.includes(a.id)?' checked':''}> ${esc(assetTypeLabel(a.type))} · ${esc(a.name)} <small>${assetSize(a.size)}</small></label>`).join(''):'<small class="meta">还没有资产，可在头像菜单的「资产」里上传。</small>'}</fieldset><label>单用例生成时长（分钟）<input name="caseTimeoutMinutes" type="number" min="1" max="60" step="1" required value="${esc(v.caseTimeoutMinutes)}"></label>${retry?'':`<fieldset class="host-scope"><legend>托管范围</legend><label class="ai-asset"><input type="checkbox" checked disabled> 生成自动化脚本</label><label class="ai-asset"><input type="checkbox" name="saveScriptsIndividually"${saveIndividually?' checked':''}> 已生成的脚本逐个存储（不勾选则全部生成后一起存储）</label><label class="ai-asset"><input type="checkbox" name="withRun"${executor?(wantRun?' checked':''):' disabled'}> 生成后自动执行一次，并保存测试记录${executor?'':'（执行服务未配置）'}</label></fieldset>`}<p class="drawer-actions">${retry?'<button type="button" class="secondary" id="host-back">返回</button>':''}<button type="submit">${retry?'重新填写并生成':'开始托管'}</button></p></form>`;
+  const intro=retry?hostStepsHTML(retry)+(continueGeneration?'<p class="meta">将接着上次超时的生成会话继续；请重新填写测试账号密码。</p>':''):`<div class="card"><h3>AI 托管</h3><p class="meta">直接为这 ${usable.length} 条用例生成自动化脚本（按用例编号前缀附带对应的需求文档），勾选后再自动执行一次并保存测试记录，不需要逐步确认。${picked.length-usable.length?`另外 ${picked.length-usable.length} 条没有执行步骤，会跳过。`:''}${existing?`其中 ${existing} 条已有脚本，会重新生成（旧脚本保留在脚本历史里）。`:''}托管由 CaseHub 服务端执行，提交后可以关闭页面。</p></div>`;
+  $('#ai-drawer-body').innerHTML=`${intro}<form id="host-form" autocomplete="off"><label>被测系统 URL<input name="baseUrl" required placeholder="https://test.example.com" autocomplete="off" value="${esc(v.baseUrl||'')}"></label><label>补充说明（可选）<textarea name="instructions" placeholder="登录方式、数据约束、需要避免的操作等">${esc(v.instructions||'')}</textarea></label><label>测试账号 · 用户名（可选）<input name="testAccount" autocomplete="off" value="${esc(v.testAccount||'')}"></label><label>测试账号 · 密码（可选）<input name="testSecret" type="text" class="fake-password" autocomplete="off" spellcheck="false" value="${esc(v.testSecret||'')}"></label><fieldset class="ai-assets"><legend>生成脚本可使用的资产（可选）</legend>${assetsCache.length?assetsCache.map(a=>`<label class="ai-asset"><input type="checkbox" name="assetIds" value="${esc(a.id)}"${v.assetIds.includes(a.id)?' checked':''}> ${esc(assetTypeLabel(a.type))} · ${esc(a.name)} <small>${assetSize(a.size)}</small></label>`).join(''):'<small class="meta">还没有资产，可在头像菜单的「资产」里上传。</small>'}</fieldset><label>单用例生成时长（分钟）<input name="caseTimeoutMinutes" type="number" min="1" max="60" step="1" required value="${esc(v.caseTimeoutMinutes)}"></label>${retry?'':`<fieldset class="host-scope"><legend>托管范围</legend><label class="ai-asset"><input type="checkbox" checked disabled> 生成自动化脚本</label><label class="ai-asset"><input type="checkbox" name="saveScriptsIndividually"${saveIndividually?' checked':''}> 已生成的脚本逐个存储（不勾选则全部生成后一起存储）</label><label class="ai-asset"><input type="checkbox" name="withRun"${executor?(wantRun?' checked':''):' disabled'}> 生成后自动执行一次，并保存测试记录${executor?'':'（执行服务未配置）'}</label></fieldset>`}<p class="drawer-actions">${retry?'<button type="button" class="secondary" id="host-back">返回</button>':''}<button type="submit">${retry?(continueGeneration?'继续生成':'重新填写并生成'):'开始托管'}</button></p></form>`;
   const form=$('#host-form');
   if(retry)$('#host-back').onclick=()=>renderCaseHostView();
   form.onsubmit=async e=>{
@@ -2357,7 +2359,7 @@ const isLocalGen=task=>String(task.jobId).startsWith('local-');
 // 旧版本把服务端任务 ID 也存在本地；那些是执行节点上的任务 ID，CaseHub 接管任务后已无从查询，只保留本地失败条目。
 function loadGenTasks(){try{const x=JSON.parse(localStorage.getItem(GEN_TASKS_KEY));return Array.isArray(x)?x.filter(isLocalGen):[]}catch{return []}}
 const genSynced=new Map(); // jobId -> {kind, meta:最近一次同步到服务端的 meta JSON}
-function genMeta(task){const {status,stage,error,jobId,...meta}=task,group=meta.groupID&&genGroup(meta.groupID);return group?{...meta,group}:meta}
+function genMeta(task){const {status,stage,error,continuable,diagnostics,jobId,...meta}=task,group=meta.groupID&&genGroup(meta.groupID);return group?{...meta,group}:meta}
 function saveGenTasks(){
   try{const local=genTasks.filter(isLocalGen).slice(0,30);localStorage.setItem(GEN_TASKS_KEY,JSON.stringify(local));localStorage.setItem(GEN_GROUPS_KEY,JSON.stringify(genGroups.filter(group=>local.some(task=>task.groupID===group.id)).slice(0,20)))}catch{}
   const present=new Set();
@@ -2539,15 +2541,16 @@ function genPayload(vid,ids,values){
   if(values.testAccount||values.testSecret)payload.context.testData={username:values.testAccount||'',password:values.testSecret||''};
   return payload;
 }
-async function submitGenJob(vid,ids,label,values,groupID='',kind='generator'){
+async function submitGenJob(vid,ids,label,values,groupID='',kind='generator',continueFrom=''){
   const payload=genPayload(vid,ids,values);
+  if(continueFrom)payload.continueFrom=continueFrom;
   let original;
   if(kind==='healer'){original=scriptFor(vid,ids[0]);if(ids.length!==1||!original?.Code)throw Error('修复需要一条已有脚本');payload.cases[0].script=original.Code;payload.cases[0].failureDetails=values.failureDetails||'';}
   // 修复是对着发给 healer 的这份用例文本验证的：记下来，保存修复结果时用它更新脚本的"生成自"快照，
   // 脚本才不会在修复之后仍被判定为按旧用例生成。用提交时的文本而不是保存时的，修复期间用例又被改动仍会提示已变更。
   const sent=kind==='healer'?payload.cases[0]:null;
   const job=await serviceRequest(`/api/${kind}/jobs`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
-  const task={kind,...(original?{scriptBaseID:original.ID,scriptBaseRevision:original.Revision||0,scriptBaseUpdatedAt:original.UpdatedAt,caseSnapshot:{Preconditions:sent.precondition,Steps:sent.steps,Expected:sent.expects}}:{}),jobId:job.id,...(groupID?{groupID}:{}),versionID:vid,versionName:version(vid)?.name||'',caseIDs:ids,assetIDs:payload.context.assetIds||[],requirementIDs:(payload.requirements||[]).map(doc=>doc.id),label,createdAt:job.createdAt||new Date().toISOString(),status:job.status,stage:job.stage,input:{...values,testSecret:''}};
+  const task={kind,...(original?{scriptBaseID:original.ID,scriptBaseRevision:original.Revision||0,scriptBaseUpdatedAt:original.UpdatedAt,caseSnapshot:{Preconditions:sent.precondition,Steps:sent.steps,Expected:sent.expects}}:{}),jobId:job.id,...(groupID?{groupID}:{}),...(continueFrom?{continuedFrom:continueFrom}:{}),versionID:vid,versionName:version(vid)?.name||'',caseIDs:ids,assetIDs:payload.context.assetIds||[],requirementIDs:(payload.requirements||[]).map(doc=>doc.id),label,createdAt:job.createdAt||new Date().toISOString(),status:job.status,stage:job.stage,input:{...values,testSecret:''}};
   genTasks.unshift(task);saveGenTasks();
   genOpen.add(job.id);
   routeGenJob(task,job);
@@ -2577,9 +2580,9 @@ function genTaskHTML(task){
   const runtime=genRuntime.get(task.jobId);
   const done=task.saved?`<div class="card meta-grid"><span>${taskService(task)==='healer'?'已修复':'已生成'} <b>${task.saved.generated}</b></span><span>受阻 <b>${task.saved.blocked}</b></span>${task.saved.failed?`<span>保存失败 <b>${task.saved.failed}</b></span>`:''}</div>`:'';
   const limitations=task.limitations?.length?`<div class="card"><h3>${taskService(task)==='healer'?'未完成修复':'未生成的用例'} <small class="meta">按风险从高到低</small></h3>${aiRiskListHTML(task.limitations,l=>esc(l.summary))}</div>`:'';
-  const error=task.error?`<p class="meta">${esc(task.error.code||'')}${task.error.code?'：':''}${esc(task.error.message||'')}</p>`:'';
+  const error=task.error?`<div class="card"><h3>失败原因</h3><p class="meta" style="white-space:pre-wrap">${esc(task.error.code||'')}${task.error.code?'：':''}${esc(task.error.message||'任务未返回详细原因，请查看下方运行日志')}</p></div>`:'';
   const actions=GEN_TERMINAL.includes(task.status)
-    ?`<button type="button" class="secondary" data-gen-forget="${task.jobId}">移除记录</button>${taskService(task)==='healer'&&task.status==='succeeded'?`<button type="button" class="secondary" data-heal-download="${task.jobId}">下载修复结果</button>`:''}${task.status==='succeeded'&&(!task.saved||task.saved.failed)?`<button type="button" data-gen-import="${task.jobId}">重试保存</button>`:''}${task.status!=='succeeded'||task.saved?.blocked||task.saved?.failed?`<button type="button" data-gen-intervene="${task.jobId}">${taskService(task)==='healer'?'补充说明并再次修复':'故障排查并重新生成'}</button>`:''}`
+    ?`<button type="button" class="secondary" data-gen-forget="${task.jobId}">移除记录</button>${taskService(task)==='generator'&&task.status==='failed'&&task.continuable&&task.error?.code==='JOB_TIMEOUT'?`<button type="button" data-gen-continue="${task.jobId}">继续生成</button>`:''}${task.diagnostics?`<a class="secondary" href="/api/${taskService(task)}/jobs/${task.jobId}/diagnostics" download>下载诊断包</a>`:''}${taskService(task)==='healer'&&task.status==='succeeded'?`<button type="button" class="secondary" data-heal-download="${task.jobId}">下载修复结果</button>`:''}${task.status==='succeeded'&&(!task.saved||task.saved.failed)?`<button type="button" data-gen-import="${task.jobId}">重试保存</button>`:''}${task.status!=='succeeded'||task.saved?.blocked||task.saved?.failed?`<button type="button" data-gen-intervene="${task.jobId}">${taskService(task)==='healer'?'补充说明并再次修复':'故障排查并重新生成'}</button>`:''}`
     :`<button type="button" class="secondary" data-gen-cancel="${task.jobId}">取消任务</button>`;
   return `<details class="gen-task" data-gen-panel="${task.jobId}"${genOpen.has(task.jobId)?' open':''}>
     <summary><span class="gen-task-title">${esc(task.label)}</span><span class="gen-chip">${genCaseCount(task)} 条</span><span class="gen-chip gen-status-${GEN_TERMINAL.includes(task.status)?task.status:'running'}" data-gen-status="${task.jobId}">${genStatusText(task)}</span></summary>
@@ -2614,6 +2617,7 @@ function bindGenTasks(){
   });
   $$('#gen-drawer-body [data-gen-import]').forEach(b=>b.onclick=()=>{const t=genTask(b.dataset.genImport);if(t)importGenResult(t)});
   $$('#gen-drawer-body [data-gen-intervene]').forEach(b=>b.onclick=()=>{const t=genTask(b.dataset.genIntervene);if(t)interveneGenTask(t)});
+  $$('#gen-drawer-body [data-gen-continue]').forEach(b=>b.onclick=()=>{const t=genTask(b.dataset.genContinue);if(t)continueGenTask(t)});
   $$('#gen-drawer-body [data-gen-forget]').forEach(b=>b.onclick=()=>{
     const id=b.dataset.genForget;
     closeGenStream(id);
@@ -2629,13 +2633,22 @@ function interveneGenTask(task){
     if(task.groupID){closeGenStream(task.jobId);genTasks=genTasks.filter(t=>t.jobId!==task.jobId);genRuntime.delete(task.jobId);genOpen.delete(task.jobId);saveGenTasks();genOpen.add(task.groupID)}
     renderGenDrawer();toast('已提交故障排查任务')});
 }
+function continueGenTask(task){
+  if(!task.continuable||task.status!=='failed'||task.caseIDs.length!==1)return toast('这次生成已无法继续，请重新生成',true);
+  const saved=task.input||genValues('generator');
+  showModal('继续上次中断的生成',`<p class="meta">将接着已保存的探索会话继续处理 ${esc(task.caseIDs[0])}；浏览器会重新打开。测试密码不会保存，如需登录请重新填写。</p><label>补充说明（可选）<textarea name="instructions">${esc(saved.instructions||'')}</textarea></label><label>测试账号 · 用户名（可选）<input name="testAccount" value="${esc(saved.testAccount||'')}"></label><label>测试账号 · 密码（如需登录）<input name="testSecret" type="text" class="fake-password" autocomplete="off"></label><label>单用例生成时长（分钟）<input name="caseTimeoutMinutes" type="number" min="1" max="20" required value="${Math.min(Number(saved.caseTimeoutMinutes)||20,20)}"></label>`,async values=>{
+    const next={...saved,...values,assetIds:saved.assetIds||[]};
+    await submitGenJob(task.versionID,task.caseIDs,`${task.label} · 继续`,next,'','generator',task.jobId);
+    task.continuable=false;saveGenTasks();renderGenDrawer();toast('已从上次会话继续生成');
+  });
+}
 const genEventLine=ev=>`[${fmt(ev.createdAt)}] ${ev.stage||''} ${ev.message||''}${ev.tool?` (${ev.tool} ${ev.toolStatus||''})`:''}`.trim();
 // 日志只存在浏览器内存里，刷新页面后已结束任务的日志框是空的。服务端在保留期内（默认 24 小时）还留着这些事件，
 // 对已结束的任务它会一次性回放全部事件并关闭连接，所以展开任务时取一次回填即可。每个任务只尝试一次。
 async function backfillGenLog(task){
   if(!task||!GEN_TERMINAL.includes(task.status)||String(task.jobId).startsWith('local-'))return;
   const runtime=genRuntime.get(task.jobId)||{log:[]};
-  if(runtime.log.length||runtime.backfilled)return;
+  if(runtime.log.length>1||runtime.backfilled)return;
   runtime.backfilled=true;genRuntime.set(task.jobId,runtime);
   try{
     const res=await fetch(`/api/${taskService(task)}/jobs/${task.jobId}/events`);
@@ -2668,7 +2681,8 @@ function updateGenStatusChip(task){
 function closeGenStream(jobId){const r=genRuntime.get(jobId);r?.source?.close();if(r)r.source=null}
 // 任务状态的唯一分发点：抽屉关不关都会更新任务列表、维持 SSE，并在完成时自动保存脚本。
 function routeGenJob(task,job){
-  task.status=job.status;task.stage=job.stage;task.error=job.error;
+  task.status=job.status;task.stage=job.stage;task.error=job.error;task.continuable=Boolean(job.continuable);task.diagnostics=Boolean(job.diagnostics);
+  if(job.status==='failed'&&job.error){const runtime=genRuntime.get(task.jobId)||{log:[]};if(!runtime.errorLogged){runtime.errorLogged=true;genRuntime.set(task.jobId,runtime);genLogLine(task.jobId,`失败原因 [${job.error.code||'UNKNOWN'}] ${job.error.message||'任务未返回详细原因'}`)}}
   saveGenTasks();
   updateGenStatusChip(task);
   refreshAutoFocusForGeneration(task);
@@ -2744,7 +2758,7 @@ async function importGenResult(task){
     }
     task.status='succeeded';
     task.saved={generated:result.generated??0,blocked:result.blocked??0,failed};
-    task.limitations=result.limitations||[];
+    task.limitations=(result.scripts||[]).filter(sc=>sc.status==='blocked').map(sc=>({risk:'high',summary:`${sc.caseId}：${(sc.missingInputs||[]).join('；')||sc.summary}`}));
     if(taskService(task)==='healer')task.limitations=(result.scripts||[]).filter(sc=>sc.status==='blocked').map(sc=>({risk:'high',summary:(sc.missingInputs||[]).join('；')||sc.summary}));
     toast(`「${task.label}」${taskService(task)==='healer'?'修复':'生成'}完成：${Math.max(0,task.saved.generated-failed)} 个脚本已保存${task.saved.blocked?`，${task.saved.blocked} 条用例未生成`:''}`);
   }catch(e){

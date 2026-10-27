@@ -873,6 +873,32 @@ func TestHostingCasesAsksForTheAccountAgainAfterARestart(t *testing.T) {
 	f.waitCaseStage(t, h.ID, core.HostingDone)
 }
 
+func TestHostingContinuesTimedOutSingleCaseGeneration(t *testing.T) {
+	f := setup(t)
+	defer f.runner.Close()
+	f.hostCases(t)
+	ctx := context.Background()
+	h, err := f.runner.Begin(ctx, core.Hosting{Source: core.HostingFromCases, VersionID: f.vid, CaseIDs: []string{"TC-LOGIN-AUTH-FUNC-001"}, BaseURL: "http://sut"}, hosting.Request{Generate: f.fullRequest().Generate}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := f.planner.finishKind(t, "generator", nil, true)
+	h = f.waitCaseStage(t, h.ID, core.HostingStopped)
+	if h.FailedAt != core.HostingGenerating || !strings.Contains(h.Error, "超时") {
+		t.Fatalf("stopped: %+v", h)
+	}
+	if _, err := f.runner.Retry(ctx, h.ID, &hosting.Request{Generate: f.fullRequest().Generate}); err != nil {
+		t.Fatal(err)
+	}
+	f.planner.finishKind(t, "generator", generatorResult(nil), false)
+	f.planner.mu.Lock()
+	continued := f.planner.sent["generator"][1]["continueFrom"]
+	f.planner.mu.Unlock()
+	if continued != first {
+		t.Fatalf("generator continuation = %v, want %s", continued, first)
+	}
+}
+
 // The tree below the requirement follows the module's path in the product case library — no test-category level —
 // so two requirements of one product file same-function cases in identical folders.
 func TestHostingFilesCasesUnderTheLibraryPathOfTheirModule(t *testing.T) {

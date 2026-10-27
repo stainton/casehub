@@ -201,7 +201,7 @@ func main() {
 	organizerProxy, organizerEnabled := proxy(organizerPool, "organizer", agentSettingsOf(svc, "planner"), nil)
 	dispatcher := dispatch.New(taskStore, []*dispatch.Kind{
 		{Name: "planner", Pool: plannerPool, Settings: agentSettingsOf(svc, "planner"), Assets: lookup, Continuable: true},
-		{Name: "generator", Pool: generatorPool, Settings: agentSettingsOf(svc, "generator"), Assets: lookup},
+		{Name: "generator", Pool: generatorPool, Settings: agentSettingsOf(svc, "generator"), Assets: lookup, Continuable: true},
 		{Name: "healer", Pool: healerPool, Settings: agentSettingsOf(svc, "healer"), Assets: lookup},
 		{Name: "executor", Pool: executorPool, Settings: agentSettingsOf(svc, "planner")},
 		{Name: "organizer", Pool: organizerPool, Settings: agentSettingsOf(svc, "planner"), Continuable: true},
