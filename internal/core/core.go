@@ -69,7 +69,9 @@ type TestCase struct {
 	CreatedBy, UpdatedBy, Result                    string
 	CreatedAt, UpdatedAt                            time.Time
 	BaseRevision, Revision                          int64
-	Dirty                                           bool
+	// ReorganizedFromID keeps the original mainline ID when a test version renumbers an inherited case.
+	ReorganizedFromID string
+	Dirty             bool
 	// Description is the case summary written by a person during review (the
 	// review initiator, after reading the case). It is deliberately never filled
 	// by the AI planner — see describePendingCase.
@@ -427,7 +429,7 @@ type Action struct {
 	Hosting   *Hosting         `json:",omitempty"`
 	Planner   *PlannerResult   `json:",omitempty"`
 	Generator *GeneratorResult `json:",omitempty"`
-	// reorganizeMainline (reorganize.go, temporary): the planner's organize result to apply to mainline.
+	// reorganizeMainline (reorganize.go): organizer result to apply to VersionID (defaults to mainline).
 	Reorganize *Reorganization `json:",omitempty"`
 }
 
@@ -1561,6 +1563,31 @@ func mergeVersion(s *State, a Action) ([]string, error) {
 	if len(conflicts) > 0 {
 		return conflicts, nil
 	}
+	// A branch reorganization changes IDs. Move its inherited mainline cases to those IDs before the normal
+	// upsert, so merging the branch does not leave duplicate cases under their old IDs.
+	renamedMain := map[string]string{}
+	for _, c := range s.Cases {
+		if c.VersionID != v.ID || !c.Dirty || c.ReorganizedFromID == "" || c.ReorganizedFromID == c.ID {
+			continue
+		}
+		m, _ := caseAt(s, "main", c.ReorganizedFromID)
+		if m == nil {
+			continue
+		}
+		if m.Revision > c.BaseRevision {
+			conflicts = append(conflicts, c.ReorganizedFromID)
+			continue
+		}
+		renamedMain[c.ReorganizedFromID] = c.ID
+	}
+	if len(conflicts) > 0 {
+		return conflicts, nil
+	}
+	for _, newID := range renamedMain {
+		if m, _ := caseAt(s, "main", newID); m != nil && renamedMain[newID] == "" {
+			return nil, fmt.Errorf("重整后的编号 %s 已在主线使用，请先处理冲突", newID)
+		}
+	}
 	s.MainRevision++
 	branchFolders := append([]Folder(nil), s.Folders...)
 	for _, f := range branchFolders {
@@ -1589,6 +1616,54 @@ func mergeVersion(s *State, a Action) ([]string, error) {
 			s.Folders[i].Moved = false
 		}
 	}
+	if len(renamedMain) > 0 {
+		for i := range s.Cases {
+			if s.Cases[i].VersionID == "main" {
+				if id, ok := renamedMain[s.Cases[i].ID]; ok {
+					s.Cases[i].ID = id
+				}
+			}
+		}
+		for i := range s.Histories {
+			if s.Histories[i].VersionID == "main" {
+				if id, ok := renamedMain[s.Histories[i].CaseID]; ok {
+					s.Histories[i].CaseID = id
+				}
+			}
+		}
+		for i := range s.Records {
+			if s.Records[i].VersionID == "main" {
+				if id, ok := renamedMain[s.Records[i].CaseID]; ok {
+					s.Records[i].CaseID = id
+				}
+			}
+		}
+		for i := range s.Scripts {
+			if s.Scripts[i].VersionID == "main" {
+				if id, ok := renamedMain[s.Scripts[i].CaseID]; ok {
+					s.Scripts[i].FileName = renamedSpecFile(s.Scripts[i].FileName, s.Scripts[i].CaseID, id)
+					s.Scripts[i].CaseID = id
+				}
+			}
+		}
+		for i := range s.ScriptVersions {
+			if s.ScriptVersions[i].VersionID == "main" {
+				if id, ok := renamedMain[s.ScriptVersions[i].CaseID]; ok {
+					s.ScriptVersions[i].FileName = renamedSpecFile(s.ScriptVersions[i].FileName, s.ScriptVersions[i].CaseID, id)
+					s.ScriptVersions[i].CaseID = id
+				}
+			}
+		}
+		for i := range s.Tasks {
+			if s.Tasks[i].VersionID == "main" {
+				for j, id := range s.Tasks[i].CaseIDs {
+					if newID, ok := renamedMain[id]; ok {
+						s.Tasks[i].CaseIDs[j] = newID
+					}
+				}
+			}
+		}
+	}
 	branchCases := []TestCase{}
 	for _, c := range s.Cases {
 		if c.VersionID == v.ID && c.Dirty {
@@ -1603,6 +1678,9 @@ func mergeVersion(s *State, a Action) ([]string, error) {
 			archiveCaseActivity(s, c)
 			copyScript(s, v.ID, "main", c.ID)
 		}
+	}
+	if len(renamedMain) > 0 {
+		pruneEmptyVersionFolders(s, "main")
 	}
 	v.BaseMainRevision = s.MainRevision
 	return nil, nil
@@ -1664,6 +1742,7 @@ func mergeCaseInto(s *State, c TestCase, revision int64, folderID string, author
 	n.Result = ""
 	n.Dirty = false
 	n.BaseRevision = 0
+	n.ReorganizedFromID = ""
 	n.Revision = revision
 	n.AIRevisedBy, n.AIRevisedReason, n.AIRevisedAt = "", "", time.Time{} // the flag is for the branch reviewer; mainline stays clean
 	n.UpdatedAt = now()
@@ -1675,6 +1754,7 @@ func mergeCaseInto(s *State, c TestCase, revision int64, folderID string, author
 	s.Histories = append(s.Histories, History{ID: ID(), CaseID: c.ID, VersionID: "main", SourceVersionID: c.VersionID, Action: "merge", Author: author, After: &n, CreatedAt: now()})
 	bc, _ := caseAt(s, c.VersionID, c.ID)
 	bc.BaseRevision = revision
+	bc.ReorganizedFromID = ""
 	bc.Dirty = false
 }
 

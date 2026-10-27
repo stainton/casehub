@@ -339,3 +339,73 @@ func TestReorganizeMainlineHoldsFolderLimits(t *testing.T) {
 		t.Fatalf("scoped run within limits: %v", mainPaths(st))
 	}
 }
+
+func TestReorganizeOpenTestVersionOnly(t *testing.T) {
+	svc := core.NewService(store.NewMemory())
+	st := apply(t, svc, core.Action{Type: "createVersion", Name: "待重整", Blank: true})
+	branch := branchID(t, st, "待重整")
+	st = apply(t, svc, core.Action{Type: "createFolder", VersionID: branch, ParentID: "root", Name: "旧目录"})
+	var oldFolder string
+	for _, f := range st.Folders {
+		if f.VersionID == branch && f.Name == "旧目录" {
+			oldFolder = f.ID
+		}
+	}
+	st = apply(t, svc, core.Action{Type: "createCase", VersionID: branch, FolderID: oldFolder, Title: "登录"})
+	oldID := caseIDByTitle(t, st, branch, "登录")
+	mainRevision := st.MainRevision
+	plan := reorg([][2]string{{"APP", "应用"}}, asg(oldID, "APP", "LOGIN", "FUNC", "登录"))
+	st = apply(t, svc, core.Action{Type: "reorganizeMainline", VersionID: branch, Reorganize: plan})
+	var found bool
+	for _, c := range st.Cases {
+		if c.VersionID == branch && c.ID == "TC-APP-LOGIN-FUNC-001" {
+			found = true
+			if !c.Dirty {
+				t.Fatal("renamed branch case must be marked dirty")
+			}
+		}
+	}
+	if !found {
+		t.Fatal("branch case was not reorganized")
+	}
+	if st.MainRevision != mainRevision {
+		t.Fatal("branch reorganization changed mainline revision")
+	}
+	for _, f := range st.Folders {
+		if f.VersionID == branch && f.ID == oldFolder {
+			t.Fatal("empty old folder remains")
+		}
+	}
+	if _, err := svc.Apply(context.Background(), core.Action{Type: "reorganizeMainline", VersionID: "missing", Reorganize: plan}); err == nil {
+		t.Fatal("missing version accepted")
+	}
+	apply(t, svc, core.Action{Type: "archiveVersion", VersionID: branch})
+	if _, err := svc.Apply(context.Background(), core.Action{Type: "reorganizeMainline", VersionID: branch, Reorganize: plan}); err == nil {
+		t.Fatal("archived version accepted")
+	}
+}
+
+func TestMergeReorganizedTestVersionReplacesInheritedCase(t *testing.T) {
+	svc := core.NewService(store.NewMemory())
+	oldID := versionFolderOnMainline(t, svc, "初始版本", "登录")
+	st := apply(t, svc, core.Action{Type: "createVersion", Name: "重整版本"})
+	branch := branchID(t, st, "重整版本")
+	plan := reorg([][2]string{{"APP", "应用"}}, asg(oldID, "APP", "LOGIN", "FUNC", "登录"))
+	st = apply(t, svc, core.Action{Type: "reorganizeMainline", VersionID: branch, Reorganize: plan})
+	st = apply(t, svc, core.Action{Type: "merge", VersionID: branch})
+	var oldPresent, newPresent bool
+	for _, c := range st.Cases {
+		if c.VersionID == "main" {
+			oldPresent = oldPresent || c.ID == oldID
+			newPresent = newPresent || c.ID == "TC-APP-LOGIN-FUNC-001"
+		}
+	}
+	if oldPresent || !newPresent {
+		t.Fatalf("inherited case was not replaced: old=%v, new=%v", oldPresent, newPresent)
+	}
+	for _, r := range st.Records {
+		if r.VersionID == "main" && r.CaseID == oldID {
+			t.Fatalf("old mainline record still points to %s", oldID)
+		}
+	}
+}

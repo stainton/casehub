@@ -53,6 +53,15 @@ type ReorgAssignment struct {
 const reorgMaxDepth = 6
 
 func reorganizeMainline(s *State, a Action) error {
+	versionID := a.VersionID
+	if versionID == "" {
+		versionID = "main"
+	} // older callers target the mainline
+	if versionID != "main" {
+		if _, err := requireBranch(s, versionID); err != nil {
+			return err
+		}
+	}
 	r := a.Reorganize
 	if r == nil || len(r.Assignments) == 0 {
 		return errors.New("缺少重整结果")
@@ -61,7 +70,7 @@ func reorganizeMainline(s *State, a Action) error {
 	// has and re-adds its cases under their old IDs. Finished (archived) versions are read-only until reopened.
 	var open []string
 	for _, v := range s.Versions {
-		if !v.Mainline && !v.Archived {
+		if versionID == "main" && !v.Mainline && !v.Archived {
 			open = append(open, v.Name)
 		}
 	}
@@ -85,8 +94,8 @@ func reorganizeMainline(s *State, a Action) error {
 			return fmt.Errorf("用例 %s 被归类了两次", x.CaseID)
 		}
 		inBatch[x.CaseID] = true
-		if c, _ := caseAt(s, "main", x.CaseID); c == nil {
-			return fmt.Errorf("主线不存在用例 %s，请重新运行重整", x.CaseID)
+		if c, _ := caseAt(s, versionID, x.CaseID); c == nil {
+			return fmt.Errorf("目标版本不存在用例 %s，请重新运行重整", x.CaseID)
 		}
 		if _, ok := products[x.Product]; !ok {
 			return fmt.Errorf("用例 %s 的产品 %s 不在产品列表里", x.CaseID, x.Product)
@@ -119,14 +128,14 @@ func reorganizeMainline(s *State, a Action) error {
 		if !ok {
 			return fmt.Errorf("目录重整的产品 %s 不在产品列表里", sc.Product)
 		}
-		scopeFolder = mainChild("root", name, s)
+		scopeFolder = versionChild("root", name, versionID, s)
 		for _, n := range sc.Path {
 			if scopeFolder != "" {
-				scopeFolder = mainChild(scopeFolder, n, s)
+				scopeFolder = versionChild(scopeFolder, n, versionID, s)
 			}
 		}
 		if scopeFolder == "" {
-			return errors.New("要重整的目录已经不在主线上，请重新运行")
+			return errors.New("要重整的目录已经不在目标版本中，请重新运行")
 		}
 		for _, x := range r.Assignments {
 			if x.Product != sc.Product || len(x.Path) < len(sc.Path) || strings.Join(x.Path[:len(sc.Path)], "/") != strings.Join(sc.Path, "/") {
@@ -140,11 +149,11 @@ func reorganizeMainline(s *State, a Action) error {
 
 	ensure := func(parent, name string) string {
 		for _, f := range s.Folders {
-			if f.VersionID == "main" && f.ParentID == parent && f.Name == name {
+			if f.VersionID == versionID && f.ParentID == parent && f.Name == name {
 				return f.ID
 			}
 		}
-		f := Folder{ID: ID(), VersionID: "main", ParentID: parent, Name: name, CreatedBy: a.Author, CreatedAt: now()}
+		f := Folder{ID: ID(), VersionID: versionID, ParentID: parent, Name: name, CreatedBy: a.Author, CreatedAt: now()}
 		s.Folders = append(s.Folders, f)
 		return f.ID
 	}
@@ -181,7 +190,7 @@ func reorganizeMainline(s *State, a Action) error {
 		taken[c.ID] = true
 	}
 	for _, c := range s.Cases {
-		if c.VersionID != "main" || inBatch[c.ID] || touched[c.FolderID] {
+		if c.VersionID != versionID || inBatch[c.ID] || touched[c.FolderID] {
 			continue
 		}
 		taken[c.ID] = true
@@ -205,7 +214,7 @@ func reorganizeMainline(s *State, a Action) error {
 	for _, leaf := range leaves {
 		var resident []string
 		for _, c := range s.Cases {
-			if c.VersionID == "main" && c.FolderID == leaf && !inBatch[c.ID] {
+			if c.VersionID == versionID && c.FolderID == leaf && !inBatch[c.ID] {
 				resident = append(resident, c.ID)
 			}
 		}
@@ -233,13 +242,15 @@ func reorganizeMainline(s *State, a Action) error {
 		}
 	}
 
-	s.MainRevision++
+	if versionID == "main" {
+		s.MainRevision++
+	}
 	t := now()
 	var histories []History
 	for i := range s.Cases {
 		c := &s.Cases[i]
 		newID, renamed := rename[c.ID]
-		if c.VersionID != "main" || !renamed {
+		if c.VersionID != versionID || !renamed {
 			continue
 		}
 		folder := c.FolderID
@@ -250,14 +261,23 @@ func reorganizeMainline(s *State, a Action) error {
 			continue // a resident that keeps its number; a batch case is always recorded, it marks the case as classified
 		}
 		before := *c
-		c.ID, c.FolderID, c.Revision, c.UpdatedBy, c.UpdatedAt = newID, folder, s.MainRevision, a.Author, t
+		if versionID != "main" && c.ReorganizedFromID == "" && c.BaseRevision > 0 {
+			c.ReorganizedFromID = c.ID
+		}
+		c.ID, c.FolderID, c.UpdatedBy, c.UpdatedAt = newID, folder, a.Author, t
+		if versionID == "main" {
+			c.Revision = s.MainRevision
+		} else {
+			c.Dirty = true
+		}
 		after := *c
-		histories = append(histories, History{ID: ID(), CaseID: c.ID, VersionID: "main", SourceVersionID: "main", Action: "reorganize", Author: a.Author, Before: &before, After: &after, CreatedAt: t})
+		histories = append(histories, History{ID: ID(), CaseID: c.ID, VersionID: versionID, SourceVersionID: versionID, Action: "reorganize", Author: a.Author, Before: &before, After: &after, CreatedAt: t})
 	}
 	// Everything else on mainline that names a renamed case follows it (a case's ID is how all of these find it).
 	// The map is applied once per entry, so swapped numbers inside a folder cannot chain.
+	targetVersionID := versionID
 	renamed := func(versionID, id string) (string, bool) {
-		if versionID != "main" {
+		if versionID != targetVersionID {
 			return "", false
 		}
 		n, ok := rename[id]
@@ -293,16 +313,16 @@ func reorganizeMainline(s *State, a Action) error {
 		}
 	}
 	s.Histories = append(s.Histories, histories...)
-	pruneEmptyMainFolders(s)
+	pruneEmptyVersionFolders(s, versionID)
 	if r.Scope != nil {
-		return checkScopeLimits(s, scopeFolder, r.Scope)
+		return checkScopeLimits(s, versionID, scopeFolder, r.Scope)
 	}
 	return nil
 }
 
-func mainChild(parent, name string, s *State) string {
+func versionChild(parent, name, versionID string, s *State) string {
 	for _, f := range s.Folders {
-		if f.VersionID == "main" && f.ParentID == parent && f.Name == name {
+		if f.VersionID == versionID && f.ParentID == parent && f.Name == name {
 			return f.ID
 		}
 	}
@@ -312,7 +332,7 @@ func mainChild(parent, name string, s *State) string {
 // checkScopeLimits verifies the divided folder as it now stands — including any case this run did not move — so
 // the limits hold for the folder, not just for this batch. Category folders (功能测试 …) are not function levels.
 // An error discards the whole action.
-func checkScopeLimits(s *State, scope string, sc *ReorgScope) error {
+func checkScopeLimits(s *State, versionID, scope string, sc *ReorgScope) error {
 	category := map[string]bool{}
 	for _, n := range testCategoryNames {
 		category[n] = true
@@ -321,13 +341,13 @@ func checkScopeLimits(s *State, scope string, sc *ReorgScope) error {
 	walk = func(id string, depth int) error {
 		var children []Folder
 		for _, f := range s.Folders {
-			if f.VersionID == "main" && f.ParentID == id && !category[f.Name] {
+			if f.VersionID == versionID && f.ParentID == id && !category[f.Name] {
 				children = append(children, f)
 			}
 		}
 		if len(children) > sc.MaxChildren {
 			name := strings.Join(sc.Path, " / ")
-			if f, _ := folderAt(s, "main", id); f != nil {
+			if f, _ := folderAt(s, versionID, id); f != nil {
 				name = f.Name
 			}
 			return fmt.Errorf("目录「%s」重整后会有 %d 个子目录，超过上限 %d", name, len(children), sc.MaxChildren)
@@ -357,15 +377,15 @@ func renamedSpecFile(fileName, oldID, newID string) string {
 	return fileName
 }
 
-func pruneEmptyMainFolders(s *State) {
+func pruneEmptyVersionFolders(s *State, versionID string) {
 	parent, used := map[string]string{}, map[string]bool{"root": true}
 	for _, f := range s.Folders {
-		if f.VersionID == "main" {
+		if f.VersionID == versionID {
 			parent[f.ID] = f.ParentID
 		}
 	}
 	for _, c := range s.Cases {
-		if c.VersionID != "main" {
+		if c.VersionID != versionID {
 			continue
 		}
 		for id, steps := c.FolderID, 0; id != "" && !used[id] && steps <= len(parent); steps++ {
@@ -375,7 +395,7 @@ func pruneEmptyMainFolders(s *State) {
 	}
 	kept := s.Folders[:0]
 	for _, f := range s.Folders {
-		if f.VersionID != "main" || used[f.ID] {
+		if f.VersionID != versionID || used[f.ID] {
 			kept = append(kept, f)
 		}
 	}

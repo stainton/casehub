@@ -187,6 +187,8 @@ Kubernetes 部署中，planner、generator（同时提供 healer）、executor �
 
 「AI 修正需求」浏览器回归（详情页按钮 / 右键菜单、变更确认、需求与关联用例一起保存、用例打标与确认）：`node tests/req-ai-revise.cjs`，通用 AI 服务由脚本拦截成固定结果，不调用模型；只对 `CASEHUB_STORE=memory PORT=18081 go run .` 启动的临时服务运行。
 
+「用例重整」可在主线和未归档的测试版本上使用，按所选版本独立提交 organizer 任务、预览并应用目录和编号调整；已归档版本仍只读。主线重整仍要求先处理所有未归档的测试版本。测试版本重整后合并时，继承自主线的用例会按新编号替换原用例，不会留下旧编号的重复项。
+
 「用例重整」（临时功能）的浏览器回归：`node tests/reorganize.cjs`，脚本自带一个假的 organizer 服务（与假 planner 同一端口，默认 127.0.0.1:4598），启动临时服务时把 `CASEHUB_PLANNER_URL` 指向它即可（organizer 默认同址）。
 
 自动化管理与脚本生成的浏览器回归：`node tests/automation.cjs`，脚本自带一个假的 generator 服务（默认 127.0.0.1:4599，`CASEHUB_FAKE_GENERATOR_PORT` 可改），不需要 auto-test 在场，也不调用模型；启动临时服务时把 `CASEHUB_GENERATOR_URL` 指向它：`CASEHUB_STORE=memory PORT=18081 CASEHUB_GENERATOR_URL=http://127.0.0.1:4599 go run .`。

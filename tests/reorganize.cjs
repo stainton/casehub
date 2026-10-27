@@ -164,6 +164,28 @@ function fakePlanner(){
     // 归档版本保留旧编号。
     const archived=await page.evaluate(n=>cases(state.versions.find(v=>v.name===n).id).map(c=>c.ID),names[0]);
     assert.ok(archived.every(id=>!id.startsWith('TC-AIGC-')));
+    // 开着的测试版本也可独立重整，不改主线；结果提交和任务恢复都按版本隔离。
+    const mainBeforeBranch=await page.evaluate(()=>cases('main').map(c=>c.ID).sort());
+    const branch=await page.evaluate(async stamp=>{
+      await act('createVersion',{Name:`重整分支-${stamp}`,Blank:true});
+      const id=state.versions.find(v=>v.name===`重整分支-${stamp}`).id;
+      await act('createFolder',{VersionID:id,ParentID:'root',Name:'旧目录'});
+      const folder=state.folders.find(f=>f.VersionID===id&&f.Name==='旧目录').ID;
+      await act('createCase',{VersionID:id,FolderID:folder,Title:`登录 ${stamp}`});
+      return id;
+    },stamp);
+    await page.locator(`[data-reorganize-version="${branch}"]`).click();
+    await page.locator('#reorg-form').waitFor();
+    await page.locator('#reorg-form [name="products"]').fill('AIGC | AIGC 平台 | http://127.0.0.1:18081/');
+    await page.locator('#reorg-form button[type="submit"]').click();
+    await page.locator('#reorg-apply').waitFor();
+    assert.equal(submissions.at(-1).cases.length,1,'测试版本只提交自己的用例');
+    assert.equal(await page.evaluate(async id=>(await serviceRequest(`/api/tasks?kind=organizer&subject=${encodeURIComponent(`reorganize:${id}`)}`)).tasks.length,branch),1);
+    await page.locator('#reorg-apply').click();
+    await page.locator('#reorg-body').getByText('所有用例都已重整').waitFor();
+    assert.deepEqual(await page.evaluate(()=>cases('main').map(c=>c.ID).sort()),mainBeforeBranch,'测试版本重整不改主线');
+    assert.deepEqual(await page.evaluate(id=>cases(id).map(c=>c.ID),branch),['TC-AIGC-LOGIN-FUNC-001']);
+    await page.locator('#reorg-close').click();
     assert.equal(plannerHits,0,'planner 不接重整任务');
     assert.deepEqual(errors,[]);
     console.log('reorganize: ok');
