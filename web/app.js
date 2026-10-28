@@ -2258,7 +2258,7 @@ function renderAutoFocusInner(){
   const c=caseOfScript(s),stale=scriptStale(s),blocked=s.Status==='blocked';
   const regenerating=hasGenerationForCases(s.VersionID,[s.CaseID]),healing=hasHealing(s.VersionID,s.CaseID);
   const run=scriptRunResults.get(`${s.VersionID}:${s.CaseID}`);
-  const deviations=s.Deviations?.length?`<div class="card"><h3>与用例预期的实测偏差 <small class="meta">脚本按实测行为断言，并在对应行标注 // deviation:</small></h3>${aiRiskListHTML(s.Deviations.map(d=>({risk:d.Risk,summary:d.Summary})),d=>esc(d.summary))}</div>`:'';
+  const deviations=s.Deviations?.length?`<div class="card"><h3>${s.Summary==='生成超时，脚本待人工复核'?'生成未完成 · 请人工复核':'与用例预期的实测偏差'}${s.Summary==='生成超时，脚本待人工复核'?'':' <small class="meta">脚本按实测行为断言，并在对应行标注 // deviation:</small>'}</h3>${aiRiskListHTML(s.Deviations.map(d=>({risk:d.Risk,summary:d.Summary})),d=>esc(d.summary))}</div>`:'';
   const staleHint=stale?`<div class="card script-stale"><b>用例内容已变更</b><p class="meta">这个脚本是按变更前的用例生成的，断言可能已经不符合当前用例。确认用例后可以重新生成。</p><p class="drawer-actions"><button type="button" id="script-regen-stale" class="${regenerating?'ai-running':''}">${regenerating?'重新生成中':'重新生成'}</button></p></div>`:'';
   const editing=scriptEdit?.versionID===s.VersionID&&scriptEdit.caseID===s.CaseID;
   const scriptKey=`${s.VersionID}:${s.CaseID}`,codeExpanded=expandedScriptCode.has(scriptKey);
@@ -2748,7 +2748,7 @@ async function importGenResult(task){
           ScriptCode:sc.code||'',ScriptStatus:sc.status,ScriptSummary:sc.summary||'',ScriptJobID:task.jobId,
           ScriptDeviations:(sc.deviations||[]).map(d=>({Risk:d.risk,Summary:d.summary})),ScriptMissingInputs:sc.missingInputs||[],ScriptAssetIDs:task.assetIDs,
           ...(taskService(task)==='healer'&&task.caseSnapshot?{ScriptFromPreconditions:task.caseSnapshot.Preconditions,ScriptFromSteps:task.caseSnapshot.Steps,ScriptFromExpected:task.caseSnapshot.Expected}:{})});
-        if(taskService(task)==='generator'&&sc.deviations?.length){
+        if(taskService(task)==='generator'&&sc.summary!=='生成超时，脚本待人工复核'&&sc.deviations?.length){
           const c=state.cases.find(x=>x.VersionID===task.versionID&&x.ID===sc.caseId);
           const docId=(c&&reqDocForCase(c)?.ID)||task.requirementIDs?.[0];
           if(docId)await reportDefects(sc.deviations.map(d=>({RequirementID:docId,Title:`[${RISK_LABEL[d.risk]||'未评级'}] ${sc.caseId} ${d.summary}`,Description:`**用例**：${sc.caseId} ${c?.Title||''}\n\n**缺陷**：${d.summary}\n\n**风险**：${RISK_LABEL[d.risk]||'未评级'}\n\n来源：脚本生成发现的预期与实际不符，脚本已按预期断言，运行会失败。生成任务 ${task.jobId}`,Source:`generator:${sc.caseId}:${d.summary}`})));

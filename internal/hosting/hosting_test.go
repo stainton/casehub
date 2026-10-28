@@ -623,6 +623,30 @@ func TestHostingGeneratesScriptsAndRunsThem(t *testing.T) {
 	}
 }
 
+func TestHostingKeepsTimeoutReviewWithoutReportingAProductDefect(t *testing.T) {
+	f := setup(t)
+	defer f.runner.Close()
+	h, err := f.runner.Begin(context.Background(), core.Hosting{DocID: f.docID, VersionID: f.vid, Product: "TaskLite", ProductVersion: "v2.0", Generate: true, BaseURL: "http://sut"}, f.fullRequest(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.waitSubmitted(t, 1)
+	f.planner.finish(t, designResult("LOGIN"), false)
+	f.waitGeneratorTasks(t, 1)
+	before, _ := f.svc.State(context.Background())
+	issueCount := len(before.Issues)
+	result := generatorResult(nil)
+	script := result["scripts"].([]map[string]any)[0]
+	script["summary"] = "生成超时，脚本待人工复核"
+	script["deviations"] = []map[string]string{{"risk": "medium", "summary": "生成超时，脚本尚未完成验证，请人工复核"}}
+	f.planner.finishKind(t, "generator", result, false)
+	f.waitStage(t, core.HostingDone)
+	st, _ := f.svc.State(context.Background())
+	if len(st.Issues) != issueCount || len(st.Scripts) != 3 || len(st.Scripts[0].Deviations) != 1 {
+		t.Fatalf("timeout review should be saved without a defect: issues=%+v scripts=%+v hosting=%s", st.Issues, st.Scripts, h.ID)
+	}
+}
+
 func TestHostingRerunsOnlyScriptsWhoseRunFailed(t *testing.T) {
 	f := setup(t)
 	defer f.runner.Close()

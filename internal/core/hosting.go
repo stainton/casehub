@@ -631,6 +631,9 @@ func hostingScripts(s *State, h *Hosting, a Action) error {
 			continue // a defect is filed against a requirement; a case with none keeps it on its script only
 		}
 		for _, d := range sc.Deviations {
+			if sc.Summary == "生成超时，脚本待人工复核" {
+				continue // Incomplete verification is not a product defect.
+			}
 			label := riskLabels[d.Risk]
 			if label == "" {
 				label = "未评级"
