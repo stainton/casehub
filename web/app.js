@@ -698,7 +698,8 @@ function renderReqFocus(){
     if(!f){reqFocus=null;return renderReqFocus()}
     reqEditor?.destroy();reqEditor=null;
     const descendants=pendingDescendantFolders(f),count=state.pendingCases.filter(x=>x.FolderID===f.ID||descendants.includes(x.FolderID)).length;
-    d.innerHTML=`<div class="detail-head"><div><div class="eyebrow">待评审文件夹</div><h1>📁 ${esc(f.Name)}</h1></div></div><div class="card meta-grid">${f.Code?`<span>编号前缀 <b>TC-${esc(f.Code)}</b></span>`:''}<span>用例 <b>${count}</b></span><span>子文件夹 <b>${descendants.length}</b></span><span>创建者 <b>${esc(f.CreatedBy)}</b></span><span>创建时间 <b>${fmt(f.CreatedAt)}</b></span></div>`;
+    d.innerHTML=`<div class="detail-head"><div><div class="eyebrow">待评审文件夹</div><h1>📁 ${esc(f.Name)}</h1></div>${f.ID==='pending-root'?'':`<div class="detail-actions"><button type="button" class="secondary danger" id="delete-review-folder">删除整个文件夹</button></div>`}</div><div class="card meta-grid">${f.Code?`<span>编号前缀 <b>TC-${esc(f.Code)}</b></span>`:''}<span>用例 <b>${count}</b></span><span>子文件夹 <b>${descendants.length}</b></span><span>创建者 <b>${esc(f.CreatedBy)}</b></span><span>创建时间 <b>${fmt(f.CreatedAt)}</b></span></div>`;
+    if(f.ID!=='pending-root')$('#delete-review-folder').onclick=()=>deleteReviewFolderTree(f.ID);
     return;
   }
   if(reqFocus.type==='reviewCase'){
@@ -1786,7 +1787,15 @@ function pendingCaseIdsIn(folderId){
   const scope=f?[f.ID,...pendingDescendantFolders(f)]:[folderId];
   return state.pendingCases.filter(c=>scope.includes(c.FolderID)).map(c=>c.ID);
 }
-function reviewFolderMenu(id){const items=[['查看详情',()=>setReqFocus({type:'reviewFolder',id})],['新建文件夹',()=>pendingFolderModal(id)],['新增用例',()=>pendingCaseModal(null,id)],['导入到版本…',()=>importReviewModal(pendingCaseIdsIn(id),pendingParentOf(id))],['重命名空文件夹',()=>renamePendingFolderModal(id)]];if(id!=='pending-root')items.push(['移动到…',()=>movePendingFolderModal(id)],['删除空文件夹',()=>{if(confirm('确定删除这个空文件夹？'))actReview('deletePendingFolder',{FolderID:id})}]);return items}
+function reviewFolderMenu(id){const items=[['查看详情',()=>setReqFocus({type:'reviewFolder',id})],['新建文件夹',()=>pendingFolderModal(id)],['新增用例',()=>pendingCaseModal(null,id)],['导入到版本…',()=>importReviewModal(pendingCaseIdsIn(id),pendingParentOf(id))],['重命名空文件夹',()=>renamePendingFolderModal(id)]];if(id!=='pending-root')items.push(['移动到…',()=>movePendingFolderModal(id)],['删除整个文件夹',()=>deleteReviewFolderTree(id)]);return items}
+async function deleteReviewFolderTree(id){
+  const f=pendingFolder(id);
+  if(!f||id==='pending-root')return;
+  const folders=pendingDescendantFolders(f).length,cases=pendingCaseIdsIn(id).length;
+  if(!confirm(`确定删除「${f.Name}」及其 ${folders} 个子文件夹、${cases} 条待评审用例？删除后无法恢复。`))return;
+  try{await actReview('deletePendingFolderTree',{FolderID:id})}catch{return}
+  toast(`已删除文件夹「${f.Name}」及其全部内容`);
+}
 function pendingFolderOptionsHTML(exclude=''){
   const node=(f,depth)=>f.ID===exclude?'':`<option value="${f.ID}">${'　'.repeat(depth)}${esc(f.Name)}</option>`+pendingChildren(f.ID).map(ch=>node(ch,depth+1)).join('');
   return pendingRoots().map(r=>node(r,0)).join('');

@@ -1109,6 +1109,38 @@ func TestDeletePendingCasesInBulk(t *testing.T) {
 	}
 }
 
+func TestDeletePendingFolderTreeRemovesOnlyThatBranch(t *testing.T) {
+	svc := core.NewService(store.NewMemory())
+	folder := func(parent, name string) string {
+		st := apply(t, svc, core.Action{Type: "createPendingFolder", ParentID: parent, Name: name})
+		for _, f := range st.PendingFolders {
+			if f.ParentID == parent && f.Name == name {
+				return f.ID
+			}
+		}
+		t.Fatalf("folder %s was not created", name)
+		return ""
+	}
+	branch := folder("pending-root", "待删除")
+	child := folder(branch, "子目录")
+	sibling := folder("pending-root", "保留")
+	apply(t, svc, core.Action{Type: "createPendingCase", FolderID: branch, Title: "父目录用例"})
+	apply(t, svc, core.Action{Type: "createPendingCase", FolderID: child, Title: "子目录用例"})
+	apply(t, svc, core.Action{Type: "createPendingCase", FolderID: sibling, Title: "其他用例"})
+	if _, err := svc.Apply(context.Background(), core.Action{Type: "deletePendingFolder", FolderID: branch}); err == nil {
+		t.Fatal("the existing empty-folder action must still reject nonempty folders")
+	}
+	for _, id := range []string{"pending-root", "missing"} {
+		if _, err := svc.Apply(context.Background(), core.Action{Type: "deletePendingFolderTree", FolderID: id}); err == nil {
+			t.Fatalf("deleting %s must fail", id)
+		}
+	}
+	st := apply(t, svc, core.Action{Type: "deletePendingFolderTree", FolderID: branch})
+	if len(st.PendingFolders) != 2 || st.PendingFolders[1].ID != sibling || len(st.PendingCases) != 1 || st.PendingCases[0].Title != "其他用例" {
+		t.Fatalf("unrelated review content changed or deleted branch survived: folders=%+v cases=%+v", st.PendingFolders, st.PendingCases)
+	}
+}
+
 func folderParent(t *testing.T, state core.State, versionID, id string) string {
 	t.Helper()
 	for _, f := range state.Folders {

@@ -747,6 +747,8 @@ func (s *Service) Apply(ctx context.Context, a Action) (Result, error) {
 		err = renamePendingFolder(&st, a)
 	case "deletePendingFolder":
 		err = deletePendingFolder(&st, a)
+	case "deletePendingFolderTree":
+		err = deletePendingFolderTree(&st, a)
 	case "createPendingCase":
 		err = createPendingCase(&st, a)
 	case "editPendingCase":
@@ -2760,6 +2762,44 @@ func deletePendingFolder(s *State, a Action) error {
 		}
 	}
 	s.PendingFolders = append(s.PendingFolders[:i], s.PendingFolders[i+1:]...)
+	return nil
+}
+func deletePendingFolderTree(s *State, a Action) error {
+	if a.FolderID == "pending-root" {
+		return errors.New("不能删除根目录")
+	}
+	if f, _ := pendingFolderAt(s, a.FolderID); f == nil {
+		return errors.New("文件夹不存在")
+	}
+	children := map[string][]string{}
+	for _, f := range s.PendingFolders {
+		children[f.ParentID] = append(children[f.ParentID], f.ID)
+	}
+	drop := map[string]bool{a.FolderID: true}
+	for queue := []string{a.FolderID}; len(queue) > 0; {
+		id := queue[0]
+		queue = queue[1:]
+		for _, child := range children[id] {
+			if !drop[child] {
+				drop[child] = true
+				queue = append(queue, child)
+			}
+		}
+	}
+	keptFolders := s.PendingFolders[:0]
+	for _, f := range s.PendingFolders {
+		if !drop[f.ID] {
+			keptFolders = append(keptFolders, f)
+		}
+	}
+	s.PendingFolders = keptFolders
+	keptCases := s.PendingCases[:0]
+	for _, c := range s.PendingCases {
+		if !drop[c.FolderID] {
+			keptCases = append(keptCases, c)
+		}
+	}
+	s.PendingCases = keptCases
 	return nil
 }
 func createPendingCase(s *State, a Action) error {
