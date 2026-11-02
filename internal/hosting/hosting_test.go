@@ -3,6 +3,7 @@ package hosting_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"sync"
 	"testing"
@@ -17,18 +18,20 @@ import (
 // fakePlanner answers the estimate at once and holds each submitted task (of any kind) until the test
 // finishes it. submitted lists the planner tasks' bodies; sent lists every kind's.
 type fakePlanner struct {
-	mu        sync.Mutex
-	tasks     map[string]*tasks.Task
-	submitted []map[string]any
-	sent      map[string][]map[string]any
-	bodies    map[string]map[string]any // task ID -> body
-	handled   map[string]bool
-	code      string
-	disabled  map[string]bool
+	mu          sync.Mutex
+	tasks       map[string]*tasks.Task
+	submitted   []map[string]any
+	sent        map[string][]map[string]any
+	bodies      map[string]map[string]any // task ID -> body
+	handled     map[string]bool
+	code        string
+	disabled    map[string]bool
+	failExec    map[string]bool
+	failGenCase string
 }
 
 func newFake(code string) *fakePlanner {
-	return &fakePlanner{tasks: map[string]*tasks.Task{}, sent: map[string][]map[string]any{}, bodies: map[string]map[string]any{}, handled: map[string]bool{}, disabled: map[string]bool{}, code: code}
+	return &fakePlanner{tasks: map[string]*tasks.Task{}, sent: map[string][]map[string]any{}, bodies: map[string]map[string]any{}, handled: map[string]bool{}, disabled: map[string]bool{}, failExec: map[string]bool{}, code: code}
 }
 
 func (f *fakePlanner) Estimate(_ context.Context, body []byte) ([]byte, error) {
@@ -42,6 +45,14 @@ func (f *fakePlanner) Submit(_ context.Context, kind string, body []byte) (tasks
 	defer f.mu.Unlock()
 	var m map[string]any
 	_ = json.Unmarshal(body, &m)
+	if kind == "executor" && f.failExec[m["title"].(string)] {
+		return tasks.Task{}, errors.New("executor submit unavailable")
+	}
+	if kind == "generator" && f.failGenCase != "" {
+		if cases, ok := m["cases"].([]any); ok && len(cases) == 1 && cases[0].(map[string]any)["id"] == f.failGenCase {
+			return tasks.Task{}, errors.New("generator submit unavailable")
+		}
+	}
 	if kind == "planner" {
 		f.submitted = append(f.submitted, m)
 	}
@@ -556,6 +567,61 @@ func TestHostingSavesScriptsIndividuallyAndRunsEach(t *testing.T) {
 	}
 }
 
+func TestHostingContinuesAfterOneGeneratedCaseFails(t *testing.T) {
+	f := setup(t)
+	defer f.runner.Close()
+	f.hostCases(t)
+	ids := []string{"TC-LOGIN-AUTH-FUNC-001", "TC-LOGIN-AUTH-FUNC-002", "TC-LOGIN-PWD-FUNC-001"}
+	h, err := f.runner.Begin(context.Background(), core.Hosting{Source: core.HostingFromCases, VersionID: f.vid,
+		CaseIDs: ids, SaveScriptsIndividually: true, Execute: true, BaseURL: "http://sut"}, hosting.Request{Generate: f.fullRequest().Generate}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.waitGeneratorTasks(t, 1)
+	f.planner.finishKind(t, "generator", nil, false)
+	f.waitGeneratorTasks(t, 2)
+	st, _ := f.svc.State(context.Background())
+	if len(st.Scripts) != 1 || st.Scripts[0].CaseID != ids[0] || st.Scripts[0].Status != "blocked" ||
+		!strings.Contains(st.Scripts[0].Summary, "超时") {
+		t.Fatalf("failed case should be saved as blocked: %+v", st.Scripts)
+	}
+	f.planner.finishKind(t, "generator", singleGeneratorResult(ids[1], ""), false)
+	f.waitGeneratorTasks(t, 3)
+	f.planner.finishKind(t, "generator", singleGeneratorResult(ids[2], ""), false)
+	f.planner.finishRuns(t, 2, nil)
+	h = f.waitCaseStage(t, h.ID, core.HostingDone)
+	if h.Generated != 2 || h.Blocked != 1 || len(f.records(t)) != 2 {
+		t.Fatalf("later cases did not finish: %+v", h)
+	}
+}
+
+func TestHostingContinuesAfterOneGeneratorSubmissionFails(t *testing.T) {
+	f := setup(t)
+	defer f.runner.Close()
+	f.hostCases(t)
+	ids := []string{"TC-LOGIN-AUTH-FUNC-001", "TC-LOGIN-AUTH-FUNC-002", "TC-LOGIN-PWD-FUNC-001"}
+	f.planner.failGenCase = ids[0]
+	h, err := f.runner.Begin(context.Background(), core.Hosting{Source: core.HostingFromCases, VersionID: f.vid,
+		CaseIDs: ids, SaveScriptsIndividually: true, Execute: true, BaseURL: "http://sut"}, hosting.Request{Generate: f.fullRequest().Generate}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.waitGeneratorTasks(t, 1)
+	st, _ := f.svc.State(context.Background())
+	if len(st.Scripts) != 1 || st.Scripts[0].CaseID != ids[0] || st.Scripts[0].Status != "blocked" ||
+		!strings.Contains(st.Scripts[0].Summary, "submit unavailable") {
+		t.Fatalf("failed submission should block only its case: %+v", st.Scripts)
+	}
+	f.planner.finishKind(t, "generator", singleGeneratorResult(ids[1], ""), false)
+	f.waitGeneratorTasks(t, 2)
+	f.planner.finishKind(t, "generator", singleGeneratorResult(ids[2], ""), false)
+	f.planner.finishRuns(t, 2, nil)
+	h = f.waitCaseStage(t, h.ID, core.HostingDone)
+	if h.Generated != 2 || h.Blocked != 1 || len(f.records(t)) != 2 {
+		t.Fatalf("later cases did not finish: %+v", h)
+	}
+}
+
 func (f *fixture) records(t *testing.T) map[string]core.Record {
 	st, _ := f.svc.State(context.Background())
 	out := map[string]core.Record{}
@@ -656,9 +722,9 @@ func TestHostingRerunsOnlyScriptsWhoseRunFailed(t *testing.T) {
 	f.planner.finish(t, designResult("LOGIN"), false)
 	f.planner.finishKind(t, "generator", generatorResult(nil), false)
 	f.planner.finishRuns(t, 3, map[string]string{"邮箱找回密码": "error"})
-	h = f.waitStage(t, core.HostingStopped)
-	if h.FailedAt != core.HostingRunning || !strings.Contains(h.Error, "1 条用例") || len(f.records(t)) != 2 {
-		t.Fatalf("a run that itself failed must stop the hosting with the others recorded: %+v", h)
+	h = f.waitStage(t, core.HostingDone)
+	if h.Results["TC-LOGIN-PWD-FUNC-001"] != "error" || !strings.Contains(h.RunErrors["TC-LOGIN-PWD-FUNC-001"], "浏览器崩溃") || len(f.records(t)) != 2 {
+		t.Fatalf("a failed run should leave the hosting done with other results recorded: %+v", h)
 	}
 	if _, err := f.runner.Retry(ctx, h.ID, nil); err != nil {
 		t.Fatal(err)
@@ -667,6 +733,35 @@ func TestHostingRerunsOnlyScriptsWhoseRunFailed(t *testing.T) {
 	h = f.waitStage(t, core.HostingDone)
 	if len(f.planner.sent["executor"]) != 4 || len(f.records(t)) != 3 {
 		t.Fatalf("retry must re-run just the errored script: %d runs, %d records", len(f.planner.sent["executor"]), len(f.records(t)))
+	}
+}
+
+func TestHostingContinuesWhenOneExecutorSubmissionFails(t *testing.T) {
+	f := setup(t)
+	defer f.runner.Close()
+	ctx := context.Background()
+	h, err := f.runner.Begin(ctx, core.Hosting{DocID: f.docID, VersionID: f.vid, Product: "P", ProductVersion: "1",
+		Execute: true, BaseURL: "http://sut"}, f.fullRequest(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.waitSubmitted(t, 1)
+	f.planner.finish(t, designResult("LOGIN"), false)
+	f.planner.failExec["邮箱找回密码"] = true
+	f.planner.finishKind(t, "generator", generatorResult(nil), false)
+	f.planner.finishRuns(t, 2, nil)
+	h = f.waitStage(t, core.HostingDone)
+	if h.Results["TC-LOGIN-PWD-FUNC-001"] != "error" || !strings.Contains(h.RunErrors["TC-LOGIN-PWD-FUNC-001"], "submit unavailable") || len(f.records(t)) != 2 {
+		t.Fatalf("failed submission should not stop other runs: %+v", h)
+	}
+	f.planner.failExec["邮箱找回密码"] = false
+	if _, err := f.runner.Retry(ctx, h.ID, nil); err != nil {
+		t.Fatal(err)
+	}
+	f.planner.finishRuns(t, 3, nil)
+	h = f.waitStage(t, core.HostingDone)
+	if len(f.records(t)) != 3 || len(h.RunErrors) != 0 || len(f.planner.sent["executor"]) != 3 {
+		t.Fatalf("retry should execute only the failed submission: %+v", h)
 	}
 }
 

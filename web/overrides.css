@@ -299,6 +299,10 @@ button.avatar{padding:0;color:#fff;cursor:pointer;border:1px solid #ffffff40}
 .host-step.failed{color:#dc2626}
 .host-step.failed .host-dot{background:#dc2626;border-color:#dc2626;color:#fff}
 .host-error{color:#dc2626}
+.host-case-errors{margin-top:12px;padding:10px 12px;border:1px solid var(--line);border-radius:8px;background:var(--surface2)}
+.host-case-errors b{display:block;margin-top:6px}
+.host-case-errors b:first-child{margin-top:0}
+.host-case-errors ul{margin:4px 0 8px;padding-left:20px;overflow-wrap:anywhere}
 .host-target{display:grid;gap:8px}
 @keyframes host-pulse{50%{opacity:.35}}
 /* 任务中心「AI 托管」列表：需求名下方一行写归档位置，停下的托管标红 */

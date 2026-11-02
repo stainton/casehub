@@ -114,7 +114,8 @@ func (r *Runner) Begin(ctx context.Context, h core.Hosting, req Request, author 
 	return created, nil
 }
 
-// Retry restarts a stopped hosting at the step it stopped in. What it needs again depends on that step:
+// Retry restarts a stopped hosting at the step it stopped in, or re-runs only executor tasks that
+// failed in an otherwise completed hosting. What it needs again depends on that step:
 // redoing the estimate or the design needs the planner requests, submitting a new generation the generator
 // request (they carry the test account, which is never stored); re-filing a result or re-running scripts
 // needs nothing.
@@ -123,8 +124,19 @@ func (r *Runner) Retry(ctx context.Context, id string, req *Request) (core.Hosti
 	if err != nil {
 		return core.Hosting{}, err
 	}
-	if h.Stage != core.HostingStopped {
-		return core.Hosting{}, errors.New("只有已停止的托管可以重试")
+	retryRunErrors := false
+	for _, result := range h.Results {
+		retryRunErrors = retryRunErrors || result == "error"
+	}
+	if h.Stage != core.HostingStopped && (h.Stage != core.HostingDone || !retryRunErrors) {
+		return core.Hosting{}, errors.New("只有已停止的托管或执行出错的用例可以重试")
+	}
+	if h.Stage == core.HostingDone {
+		if _, err := r.svc.Apply(ctx, core.Action{Type: "hostingRetry", HostingID: id, Author: core.HostingAuthor}); err != nil {
+			return core.Hosting{}, err
+		}
+		r.launch(id, nil)
+		return r.hosting(ctx, id)
 	}
 	needEstimate := h.Source != core.HostingFromCases && (h.FailedAt == core.HostingEstimating || h.FailedAt == "")
 	if (needEstimate || h.FailedAt == core.HostingDesigning) && (req == nil || len(req.Job) == 0 || needEstimate && len(req.Estimate) == 0) {
@@ -443,6 +455,10 @@ func (r *Runner) await(h core.Hosting, kind, taskID, stage, what string) (tasks.
 		case r.ctx.Err() != nil:
 			return t, false
 		case errors.Is(err, ErrTaskGone):
+			if kind == "generator" && h.SaveScriptsIndividually && h.GenCaseID != "" {
+				return tasks.Task{ID: taskID, Kind: kind, Status: tasks.Failed,
+					Error: &tasks.ErrorDetail{Code: "TASK_GONE", Message: "脚本生成任务已不存在"}}, true
+			}
 			r.halt(h.ID, stage, "这次托管的"+what+"任务已不存在", false)
 			return t, false
 		case err == nil && tasks.Terminal(t.Status):
@@ -532,19 +548,47 @@ func (r *Runner) submitGeneration(h core.Hosting, req *Request) bool {
 		body = withField(body, "requirements", requirements)
 	}
 	body = withField(body, "casehubTask", r.subject(h))
-	t, err := r.srv.Submit(r.ctx, "generator", body)
-	if err != nil {
-		r.halt(h.ID, core.HostingGenerating, "提交脚本生成任务失败："+err.Error(), false)
-		return false
-	}
 	caseID := ""
 	if h.SaveScriptsIndividually {
 		caseID = cases[0]["id"].(string)
+	}
+	t, err := r.srv.Submit(r.ctx, "generator", body)
+	if err != nil {
+		if caseID != "" {
+			// Give the blocked script a unique job ID even though no generator task was created.
+			failedTaskID := "submit-failed-" + core.ID()
+			if applyErr := r.apply(core.Action{Type: "hostingGenSubmitted", HostingID: h.ID,
+				TaskID: failedTaskID, CaseID: caseID}); applyErr != nil {
+				r.halt(h.ID, core.HostingGenerating, applyErr.Error(), false)
+				return false
+			}
+			h.GenTaskID, h.GenCaseID = failedTaskID, caseID
+			return r.blockGeneration(h, "提交脚本生成任务失败："+err.Error())
+		}
+		r.halt(h.ID, core.HostingGenerating, "提交脚本生成任务失败："+err.Error(), false)
+		return false
 	}
 	if err := r.apply(core.Action{Type: "hostingGenSubmitted", HostingID: h.ID, TaskID: t.ID, CaseID: caseID}); err != nil {
 		_ = r.srv.Cancel(r.ctx, "generator", t.ID)
 		r.halt(h.ID, core.HostingGenerating, err.Error(), false)
 		return false
+	}
+	return true
+}
+
+func (r *Runner) blockGeneration(h core.Hosting, reason string) bool {
+	if runes := []rune(reason); len(runes) > 200 {
+		reason = string(runes[:200])
+	}
+	result := core.GeneratorResult{Scripts: []core.GeneratorScript{{CaseID: h.GenCaseID,
+		FileName: h.GenCaseID + ".spec.ts", Language: "typescript", Status: "blocked",
+		Summary: "脚本生成失败：" + reason, MissingInputs: []string{reason}}}}
+	if err := r.apply(core.Action{Type: "hostingScripts", HostingID: h.ID, Generator: &result}); err != nil {
+		r.halt(h.ID, core.HostingGenerating, err.Error(), false)
+		return false
+	}
+	if !strings.HasPrefix(h.GenTaskID, "submit-failed-") {
+		r.srv.MarkHandled(r.ctx, "generator", h.GenTaskID)
 	}
 	return true
 }
@@ -555,15 +599,24 @@ func (r *Runner) awaitGeneration(h core.Hosting) bool {
 		return false
 	}
 	if t.Status != tasks.Succeeded {
+		if h.SaveScriptsIndividually && h.GenCaseID != "" {
+			return r.blockGeneration(h, failure(t, "脚本生成"))
+		}
 		r.halt(h.ID, core.HostingGenerating, failure(t, "脚本生成"), false)
 		return false
 	}
 	var result core.GeneratorResult
 	if err := json.Unmarshal(t.Result, &result); err != nil {
+		if h.SaveScriptsIndividually && h.GenCaseID != "" {
+			return r.blockGeneration(h, "读取脚本生成结果失败："+err.Error())
+		}
 		r.halt(h.ID, core.HostingGenerating, "读取脚本生成结果失败："+err.Error(), false)
 		return false
 	}
 	if err := r.apply(core.Action{Type: "hostingScripts", HostingID: h.ID, Generator: &result}); err != nil {
+		if h.SaveScriptsIndividually && h.GenCaseID != "" {
+			return r.blockGeneration(h, "保存脚本生成结果失败："+err.Error())
+		}
 		r.halt(h.ID, core.HostingGenerating, err.Error(), false)
 		return false
 	}
@@ -593,8 +646,12 @@ func (r *Runner) runScripts(h core.Hosting) bool {
 		body, _ := json.Marshal(map[string]any{"code": sc.Code, "fileName": sc.FileName, "target": map[string]string{"baseUrl": h.BaseURL}, "title": sc.Title, "casehubTask": r.subject(h)})
 		t, err := r.srv.Submit(r.ctx, "executor", body)
 		if err != nil {
-			r.halt(h.ID, core.HostingRunning, "提交执行任务失败："+err.Error(), false)
-			return false
+			if recordErr := r.apply(core.Action{Type: "hostingRecord", HostingID: h.ID, CaseID: sc.CaseID,
+				Result: "error", Note: "提交执行任务失败：" + err.Error()}); recordErr != nil {
+				r.halt(h.ID, core.HostingRunning, recordErr.Error(), false)
+				return false
+			}
+			continue
 		}
 		if err := r.apply(core.Action{Type: "hostingExecSubmitted", HostingID: h.ID, CaseID: sc.CaseID, TaskID: t.ID}); err != nil {
 			_ = r.srv.Cancel(r.ctx, "executor", t.ID)
@@ -625,10 +682,16 @@ func (r *Runner) runScripts(h core.Hosting) bool {
 					Passed   bool   `json:"passed"`
 					Markdown string `json:"markdown"`
 				}
-				if json.Unmarshal(t.Result, &res) == nil {
+				if json.Unmarshal(t.Result, &res) == nil && strings.TrimSpace(res.Markdown) != "" {
 					outcome.Result = map[bool]string{true: "passed", false: "failed"}[res.Passed]
 					outcome.Note = fmt.Sprintf("> AI 托管自动执行的脚本 r%d（%s）\n\n%s", sc.Revision, sc.FileName, res.Markdown)
+				} else {
+					outcome.Note = "执行任务返回的结果格式错误"
 				}
+			} else if errors.Is(err, ErrTaskGone) {
+				outcome.Note = "执行任务已不存在"
+			} else {
+				outcome.Note = failure(t, "自动化执行")
 			}
 			if err := r.apply(outcome); err != nil {
 				r.Logf("hosting %s: recording %s failed: %v", h.ID, sc.CaseID, err)

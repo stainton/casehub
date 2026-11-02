@@ -1471,6 +1471,12 @@ function reqFolderPathNames(doc){
   return names;
 }
 const hostArchivePath=h=>['全部用例',h.Product,h.ProductVersion,h.ReqFolder||'<需求>'];
+function hostCaseFailuresHTML(h){
+  const blocked=(h.CaseIDs||[]).map(id=>scriptFor(h.VersionID,id)).filter(s=>s?.Status==='blocked'&&s.JobID===(h.ScriptJobs?.[s.CaseID]||h.GenTaskID));
+  const runErrors=Object.entries(h.RunErrors||{});
+  if(!blocked.length&&!runErrors.length)return '';
+  return `<div class="host-case-errors">${blocked.length?`<b>脚本生成受阻</b><ul>${blocked.map(s=>`<li>${esc(s.CaseID)}：${esc(s.Summary||s.MissingInputs?.[0]||'未说明原因')}</li>`).join('')}</ul>`:''}${runErrors.length?`<b>脚本执行出错</b><ul>${runErrors.map(([id,reason])=>`<li>${esc(id)}：${esc(reason||'执行任务未返回原因')}</li>`).join('')}</ul>`:''}</div>`;
+}
 function hostStepsHTML(h){
   const steps=hostSteps(h),stage=h.Stage==='stopped'?h.FailedAt:h.Stage,at=steps.findIndex(([k])=>k===stage),run=hostRunStats(h);
   const items=steps.map(([k,label],i)=>{
@@ -1481,7 +1487,7 @@ function hostStepsHTML(h){
     return `<li class="host-step ${st}"><span class="host-dot">${st==='done'?'✓':st==='failed'?'!':st==='current'?'●':'○'}</span>${esc(label)}${extra}</li>`;
   }).join('');
   const v=version(h.VersionID),where=isCaseHost(h)?`「${esc(v?.name||'已删除的版本')}」：${esc(h.Label)} · ${h.CaseIDs?.length||0} 条用例`:`归档到「${esc(v?.name||'已删除的版本')}」：${esc(hostArchivePath(h).join(' / '))}`;
-  return `<div class="card host-card"><h3>AI 托管 <small class="meta">${where}</small></h3><ol class="host-steps">${items}</ol>${h.Note?`<p class="meta">${esc(h.Note)}</p>`:''}${h.Stage==='stopped'?`<p class="meta host-error">托管已停止：${esc(h.Error||'')}</p>`:''}</div>`;
+  return `<div class="card host-card"><h3>AI 托管 <small class="meta">${where}</small></h3><ol class="host-steps">${items}</ol>${h.Note?`<p class="meta">${esc(h.Note)}</p>`:''}${h.Stage==='stopped'?`<p class="meta host-error">托管已停止：${esc(h.Error||'')}</p>`:''}${hostCaseFailuresHTML(h)}</div>`;
 }
 // 设计和脚本生成阶段在托管视图里接上对应任务的进度流（和手动设计、生成同一个接口）。
 let hostLog=null;
@@ -1503,7 +1509,7 @@ function renderHostView(doc){
   const done=h.Stage==='done',stopped=h.Stage==='stopped';
   // 设计之后的步骤重试不用重新填写；脚本生成要看生成任务是否已经完成（服务端会告诉我们是否需要重新填写）。
   const late=stopped&&['importing','reviewing','archiving','generating','running'].includes(h.FailedAt);
-  const actions=done?'<button type="button" class="secondary" id="host-again">重新托管</button><button type="button" id="host-goto">查看用例</button>'
+  const actions=done?`${hostRunStats(h).error?'<button type="button" class="secondary" id="host-retry-errors">重试执行出错用例</button>':''}<button type="button" class="secondary" id="host-again">重新托管</button><button type="button" id="host-goto">查看用例</button>`
     :stopped?`<button type="button" class="secondary" id="host-abandon">放弃托管</button><button type="button" id="host-resume">${late?'重试这一步':h.Continuable?'继续或重新设计…':'重新填写并托管'}</button>`
     :'<button type="button" class="secondary" id="host-abandon">取消托管</button>';
   const status=h.Stage==='estimating'?'正在评估用例数量，完成后自动采用评估结果并开始设计…'
@@ -1522,6 +1528,7 @@ function renderHostView(doc){
     $('#host-again').onclick=()=>renderHostForm(doc);
     $('#host-goto').onclick=()=>{const id=h.CaseIDs?.[0];setPage('cases');if(id&&state.cases.some(c=>c.VersionID===h.VersionID&&c.ID===id))setFocus({type:'case',versionID:h.VersionID,id})};
   }
+  $('#host-retry-errors')&&($('#host-retry-errors').onclick=async()=>{try{hostingUpdated(await serviceRequest(`/api/hostings/${h.ID}/retry`,{method:'POST'}))}catch(e){toast(e.message,true)}});
   $('#host-abandon')&&($('#host-abandon').onclick=async()=>{
     if(!confirm(stopped?'放弃托管？已经完成的部分（评审区或用例树里的用例、脚本、测试记录）都会保留，可以手动接着处理。':'取消托管？正在进行的设计/生成/执行任务会被取消，已经完成的部分会保留。'))return;
     try{await serviceRequest(`/api/hostings/${h.ID}`,{method:'DELETE'})}catch(e){return toast(e.message,true)}
@@ -1672,7 +1679,7 @@ function renderCaseHostView(){
   const done=h.Stage==='done',stopped=h.Stage==='stopped';
   const status=h.Stage==='generating'?'正在为这些用例生成自动化脚本…':h.Stage==='running'?'脚本已生成，正在逐条自动执行，每条执行完都会保存测试记录…'
     :done?`已完成：生成 ${h.Generated||0} 个脚本${h.Blocked?`，${h.Blocked} 条受阻未生成`:''}${h.Execute&&h.Generated?`，自动执行 ${hostRunText(hostRunStats(h))}`:''}。`:'';
-  const actions=done?'<button type="button" class="secondary" id="host-again">重新托管</button><button type="button" id="host-goto-auto">查看脚本</button>'
+  const actions=done?`${hostRunStats(h).error?'<button type="button" class="secondary" id="host-retry-errors">重试执行出错用例</button>':''}<button type="button" class="secondary" id="host-again">重新托管</button><button type="button" id="host-goto-auto">查看脚本</button>`
     :stopped?'<button type="button" class="secondary" id="host-abandon">放弃托管</button><button type="button" id="host-resume">重试这一步</button>'
     :'<button type="button" class="secondary" id="host-abandon">取消托管</button>';
   const logTask=h.Stage==='generating'&&h.GenTaskID;
@@ -1682,6 +1689,7 @@ function renderCaseHostView(){
     $('#host-again').onclick=()=>openCaseHost({draft:{versionID:h.VersionID,caseIDs:h.CaseIDs.filter(id=>state.cases.some(c=>c.VersionID===h.VersionID&&c.ID===id)),label:h.Label}});
     $('#host-goto-auto').onclick=()=>{setPage('automation');const id=h.CaseIDs.find(id=>scriptFor(h.VersionID,id));if(id)setAutoFocus({type:'script',versionID:h.VersionID,id})};
   }
+  $('#host-retry-errors')&&($('#host-retry-errors').onclick=async()=>{try{hostingUpdated(await serviceRequest(`/api/hostings/${h.ID}/retry`,{method:'POST'}))}catch(e){toast(e.message,true)}});
   $('#host-abandon')&&($('#host-abandon').onclick=async()=>{
     if(!confirm(stopped?'放弃托管？已经生成的脚本和测试记录都会保留。':'取消托管？正在进行的生成/执行任务会被取消，已经完成的部分会保留。'))return;
     try{await serviceRequest(`/api/hostings/${h.ID}`,{method:'DELETE'})}catch(e){return toast(e.message,true)}

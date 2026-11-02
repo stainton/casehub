@@ -46,20 +46,22 @@ type Hosting struct {
 	Blocked                 int               // cases the generator could not script
 	ExecTasks               map[string]string `json:",omitempty"` // case ID -> executor task ID
 	Results                 map[string]string `json:",omitempty"` // case ID -> passed / failed / error (the run itself failed)
+	RunErrors               map[string]string `json:",omitempty"` // case ID -> why an executor task itself failed
 }
 
 // GeneratorResult is the part of a generator job's result a hosting saves.
+type GeneratorScript struct {
+	CaseID        string              `json:"caseId"`
+	FileName      string              `json:"fileName"`
+	Language      string              `json:"language"`
+	Code          string              `json:"code"`
+	Status        string              `json:"status"`
+	Summary       string              `json:"summary"`
+	Deviations    []HostingLimitation `json:"deviations"`
+	MissingInputs []string            `json:"missingInputs"`
+}
 type GeneratorResult struct {
-	Scripts []struct {
-		CaseID        string              `json:"caseId"`
-		FileName      string              `json:"fileName"`
-		Language      string              `json:"language"`
-		Code          string              `json:"code"`
-		Status        string              `json:"status"`
-		Summary       string              `json:"summary"`
-		Deviations    []HostingLimitation `json:"deviations"`
-		MissingInputs []string            `json:"missingInputs"`
-	} `json:"scripts"`
+	Scripts            []GeneratorScript `json:"scripts"`
 	ExplorationRecords map[string]string `json:"explorationRecords"`
 	ExplorationNotes   string            `json:"explorationNotes"`
 	ProductExperience  *struct {
@@ -667,7 +669,7 @@ func hostingScripts(s *State, h *Hosting, a Action) error {
 	} else {
 		h.Generated, h.Blocked = generated, blocked
 	}
-	h.ExecTasks, h.Results = nil, nil
+	h.ExecTasks, h.Results, h.RunErrors = nil, nil, nil
 	if h.Execute && h.Generated > 0 {
 		h.Stage = HostingRunning
 	} else {
@@ -713,6 +715,18 @@ func hostingRecord(s *State, h *Hosting, a Action) error {
 			h.Results = map[string]string{}
 		}
 		h.Results[a.CaseID] = a.Result
+		if a.Result == "error" {
+			if h.RunErrors == nil {
+				h.RunErrors = map[string]string{}
+			}
+			reason := []rune(strings.TrimSpace(a.Note))
+			if len(reason) > 1000 {
+				reason = reason[:1000]
+			}
+			h.RunErrors[a.CaseID] = string(reason)
+		} else {
+			delete(h.RunErrors, a.CaseID)
+		}
 	}
 	errored := 0
 	for _, sc := range HostingRunnable(*s, *h) {
@@ -723,22 +737,41 @@ func hostingRecord(s *State, h *Hosting, a Action) error {
 			errored++
 		}
 	}
-	// A run that itself failed (browser crash, node lost) says nothing about the case: stop so a person can
-	// re-run just those scripts. Passed and failed assertions are already recorded.
+	// A failed executor task belongs to its own case; the hosting still finishes after every case has an
+	// outcome. A person can retry only the errored runs without repeating successful scripts.
 	if errored > 0 {
-		h.FailedAt, h.Stage, h.Error = HostingRunning, HostingStopped, fmt.Sprintf("%d 条用例的脚本执行出错（执行任务本身失败，未产生测试记录），可「重试这一步」重新执行它们", errored)
-		return nil
+		h.Error = fmt.Sprintf("%d 条用例的脚本执行出错，其他用例已继续完成；可单独重试出错用例", errored)
 	}
 	h.Stage, h.FinishedAt = HostingDone, now()
 	return nil
 }
 
-// hostingRetry restarts a stopped hosting at the step it stopped in. Steps after the design need nothing
+// hostingRetry restarts a stopped hosting at the step it stopped in, or retries failed runs in a completed
+// hosting. Steps after the design need nothing
 // from the person; estimating and designing need the request again (it carries test credentials, which are
 // never stored), so the runner calls this only together with a fresh request.
 //
 // clearTask (Force on the action) drops a failed generator task so the runner submits a new one.
 func hostingRetry(h *Hosting, clearTask bool) error {
+	if h.Stage == HostingDone {
+		hasRunError := false
+		for _, result := range h.Results {
+			hasRunError = hasRunError || result == "error"
+		}
+		if !hasRunError {
+			return errors.New("没有需要重试的执行错误")
+		}
+		h.FailedAt, h.Stage, h.FinishedAt = HostingRunning, HostingRunning, time.Time{}
+		for id, result := range h.Results {
+			if result == "error" {
+				delete(h.Results, id)
+				delete(h.ExecTasks, id)
+				delete(h.RunErrors, id)
+			}
+		}
+		h.Error = ""
+		return nil
+	}
 	if h.Stage != HostingStopped {
 		return errors.New("只有已停止的托管可以重试")
 	}
@@ -759,6 +792,7 @@ func hostingRetry(h *Hosting, clearTask bool) error {
 			if r == "error" {
 				delete(h.Results, id)
 				delete(h.ExecTasks, id)
+				delete(h.RunErrors, id)
 			}
 		}
 	case HostingDesigning:
