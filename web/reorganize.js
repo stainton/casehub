@@ -65,8 +65,6 @@ function reorgDialog(){
   $('#reorg-close').onclick=()=>{d.close();reorgSource?.close();reorgSource=null};
   return d;
 }
-document.addEventListener('click',e=>{const btn=e.target.closest('[data-reorganize-version]');if(btn){e.stopPropagation();openReorg(btn.dataset.reorganizeVersion)}});
-
 function openReorgFolder(versionID,folderID){
   reorgVersionID=versionID;
   const target=reorgFolderTarget(folderID);

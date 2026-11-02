@@ -5,9 +5,10 @@ const assert=require('node:assert/strict');
 (async()=>{const b=await chromium.launch(),p=await b.newPage({viewport:{width:1500,height:900}});
 const errs=[];p.on('pageerror',e=>errs.push(e.message));
 await p.goto((process.env.CASEHUB_TEST_URL||'http://127.0.0.1:18081'));await p.waitForFunction(()=>typeof state!=='undefined'&&state&&state.folders);
+const openPull=async()=>{await p.locator('#versions [data-version-more]').last().click();await p.locator('#context-menu').getByRole('button',{name:/^拉取主线/}).click()};
 const counts=()=>p.evaluate(async()=>{const st=await (await fetch('/api/state')).json();const v=st.versions.at(-1);return {cases:st.cases.filter(c=>c.VersionID===v.id).map(c=>c.ID),folders:st.folders.filter(f=>f.VersionID===v.id).length}});
 await p.click('#create-version');await p.fill('[name="Name"]','空');await p.click('#modal-form button[type="submit"]');await p.locator('#modal').waitFor({state:'hidden'});
-await p.locator('[data-sync]').last().click();
+await openPull();
 await p.locator('#modal[open] .sync-row').first().waitFor();
 assert.equal(await p.locator('.sync-row').count(),2);
 // 按主线用例树展示：全部用例 / 登录与认证；勾选文件夹批量选取其下用例，部分选中时为半选。
@@ -31,6 +32,6 @@ assert.equal(await p.locator('#modal').evaluate(m=>m.open),true,'empty choice ke
 await p.locator('.sync-row input').first().check();
 await p.click('#modal-form button[type="submit"]');await p.locator('#modal').waitFor({state:'hidden'});
 
-await p.locator('[data-sync]').last().click();await p.locator('#modal[open] .sync-row').first().waitFor();
+await openPull();await p.locator('#modal[open] .sync-row').first().waitFor();
 assert.equal(await p.locator('.sync-row').count(),1,'already-pulled case is no longer offered');
 assert.deepEqual(errs,[]);await b.close();console.log('ok')})().catch(e=>{console.error(e);process.exit(1)})

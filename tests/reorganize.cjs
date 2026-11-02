@@ -60,7 +60,8 @@ function fakePlanner(){
     page.on('pageerror',e=>errors.push(e.stack||e.message));
     page.on('dialog',d=>d.accept());
     await page.goto(process.env.CASEHUB_TEST_URL||'http://127.0.0.1:18081');
-    await page.waitForFunction(()=>typeof state!=='undefined'&&state&&document.querySelector('[data-reorganize-main]'));
+    await page.waitForFunction(()=>typeof state!=='undefined'&&state&&document.querySelector('#versions [data-version-more="main"]'));
+    const openVersionReorg=async id=>{await page.locator(`#versions [data-version-more="${id}"]`).click();await page.locator('#context-menu').getByRole('button',{name:/^用例重整/}).click()};
     const stamp=Date.now().toString(36);
     // 两个测试版本各在一个以版本命名的目录里写了同一功能的用例，并合并回主线——这就是要重整的结构。
     const names=await page.evaluate(async stamp=>{
@@ -77,13 +78,13 @@ function fakePlanner(){
     },stamp);
 
     // 版本还开着：只给出说明，不出表单。
-    await page.locator('[data-reorganize-main]').click();
+    await openVersionReorg('main');
     await page.locator('#reorg-body').getByText(names[0]).waitFor();
     assert.equal(await page.locator('#reorg-form').count(),0);
     await page.locator('#reorg-close').click();
     await page.evaluate(async names=>{for(const n of names)await act('archiveVersion',{VersionID:state.versions.find(v=>v.name===n).id})},names);
 
-    await page.locator('[data-reorganize-main]').click();
+    await openVersionReorg('main');
     await page.locator('#reorg-form').waitFor();
     await page.locator('#reorg-form [name="products"]').fill('AIGC | AIGC 平台 | http://127.0.0.1:18081/');
     await page.locator('#reorg-form [name="account"]').fill('test-user');
@@ -174,7 +175,7 @@ function fakePlanner(){
       await act('createCase',{VersionID:id,FolderID:folder,Title:`登录 ${stamp}`});
       return id;
     },stamp);
-    await page.locator(`[data-reorganize-version="${branch}"]`).click();
+    await openVersionReorg(branch);
     await page.locator('#reorg-form').waitFor();
     await page.locator('#reorg-form [name="products"]').fill('AIGC | AIGC 平台 | http://127.0.0.1:18081/');
     await page.locator('#reorg-form button[type="submit"]').click();

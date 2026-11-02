@@ -20,7 +20,8 @@ const BASE=process.env.CASEHUB_TEST_URL||'http://127.0.0.1:18081';
   assert.ok(await version.locator('.case-check').count()>0,'an active version has selection checkboxes');
   assert.equal(await page.locator('[data-view="archive"]').innerText(),'归档版本','archive is a tab beside 用例树 / 测试任务');
 
-  await version.locator('[data-archive]').click();
+  await version.locator('[data-version-more]').click();
+  await page.locator('#context-menu').getByRole('button',{name:/^标记完成/}).click();
   await page.waitForFunction(id=>!document.querySelector(`#versions .version[data-version="${id}"]`),vid);
   await page.click('[data-view="tasks"]');
   assert.ok(!(await page.locator('#tasks').innerText()).includes(NAME),'a finished version leaves the 测试任务 list');
@@ -31,11 +32,13 @@ const BASE=process.env.CASEHUB_TEST_URL||'http://127.0.0.1:18081';
   const archived=page.locator(`#archive .version[data-version="${vid}"]`);
   assert.match(await archived.locator('.badge').innerText(),/已完成/);
   assert.equal(await archived.locator('.case-check').count(),0,'archived version is read-only: no checkboxes');
-  assert.equal(await archived.locator('[data-sync],[data-merge],[data-archive]').count(),0,'no pull/merge/finish on an archived version');
-  assert.equal(await archived.locator('[data-unarchive]').count(),1);
+  await archived.locator('[data-version-more]').click();
+  const archivedMenu=page.locator('#context-menu');
+  assert.equal(await archivedMenu.getByRole('button',{name:/拉取主线|合并到主线|标记完成/}).count(),0,'no pull/merge/finish on an archived version');
+  assert.equal(await archivedMenu.getByRole('button',{name:/^重新打开/}).count(),1);
   assert.match(await archived.textContent(),/归档任务/,'its tasks are listed under the version');
 
-  await archived.locator('[data-unarchive]').click();
+  await archivedMenu.getByRole('button',{name:/^重新打开/}).click();
   await page.waitForFunction(id=>!document.querySelector(`#archive .version[data-version="${id}"]`),vid);
   assert.match(await page.locator('#archive').innerText(),/还没有已完成/);
   await page.click('[data-view="cases"]');
