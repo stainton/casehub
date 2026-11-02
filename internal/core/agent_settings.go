@@ -80,9 +80,13 @@ func ValidateAgentSettingsJSON(content string) error {
 	return nil
 }
 
-func (a AgentSettings) WithDefaults() AgentSettings {
+func (a AgentSettings) WithDefaults(id string) AgentSettings {
 	if a.TimeoutMinutes == 0 {
-		a.TimeoutMinutes = 15
+		if id == "playwright" {
+			a.TimeoutMinutes = 180
+		} else {
+			a.TimeoutMinutes = 15
+		}
 	}
 	return a
 }

@@ -75,7 +75,7 @@ const base=process.env.CASEHUB_TEST_URL||'http://127.0.0.1:18081';
   page.once('dialog',dialog=>dialog.accept());await page.locator('#agent-runtime-reload').click();
   await page.waitForFunction(()=>document.querySelector('#agent-runtime-json').value.includes('another-device'));
   await page.locator('#agent-settings-reset').click();
-  assert.equal(await field('testSecret').inputValue(),'');assert.equal(await field('timeoutMinutes').inputValue(),'15');
+  assert.equal(await field('testSecret').inputValue(),'');assert.equal(await field('timeoutMinutes').inputValue(),'180');
   await save();
   const reset=await (await page.request.get(base+'/api/agent-settings/playwright')).json();assert.equal(reset.testSecret,'');assert.equal(reset.baseUrl,'');
   // 脚本生成 agent 有自己的一行配置：切过去是空的，保存后不影响用例设计那份。

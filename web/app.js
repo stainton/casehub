@@ -914,10 +914,10 @@ function aiFormState(doc,ensure){
 const REQ_CODE_RE=/^[A-Z][A-Z0-9]{1,11}$/;
 const liveReqDoc=doc=>state.reqDocs.find(x=>x.ID===doc.ID)||doc;
 const AI_DEFAULT_CASE_COUNT=10, AI_MAX_CASE_COUNT=500, AI_CASE_COUNT_SLACK=5;
-// 设计任务的时限由发起人决定：探索耗时取决于被测系统和用例数量，服务端的固定默认值（15 分钟）
-// 对大需求经常不够。服务端接受 1 分钟–4 小时并自行封顶；这里沿用上次填的值（跨需求、跨刷新）。
+// 设计任务的时限由发起人决定：探索耗时取决于被测系统和用例数量。
+// 默认 180 分钟；服务端接受 1 分钟–4 小时并自行封顶。这里沿用上次填的值（跨需求、跨刷新）。
 const AI_TIMEOUT_KEY='casehub-ai-timeout-minutes';
-const AI_DEFAULT_TIMEOUT_MIN=15, AI_MIN_TIMEOUT_MIN=1, AI_MAX_TIMEOUT_MIN=240;
+const AI_DEFAULT_TIMEOUT_MIN=180, AI_MIN_TIMEOUT_MIN=1, AI_MAX_TIMEOUT_MIN=240;
 function aiTimeoutMinutes(){
   const n=Number(localStorage.getItem(AI_TIMEOUT_KEY));
   return Number.isInteger(n)&&n>=AI_MIN_TIMEOUT_MIN&&n<=AI_MAX_TIMEOUT_MIN?n:AI_DEFAULT_TIMEOUT_MIN;
@@ -976,7 +976,7 @@ async function loadAgentDefaults(id){
 }
 function agentDefaults(agent){
   const saved=agentDefaultsCache.get(agent.id)||{};
-  return Object.fromEntries(agent.settingsFields.map(field=>[field.name,saved[field.name]??(field.name==='timeoutMinutes'?AI_DEFAULT_TIMEOUT_MIN:field.name==='caseTimeoutMinutes'?40:'')]));
+  return Object.fromEntries(agent.settingsFields.map(field=>[field.name,saved[field.name]??(field.name==='timeoutMinutes'?(agent.id==='playwright'?AI_DEFAULT_TIMEOUT_MIN:15):field.name==='caseTimeoutMinutes'?40:'')]));
 }
 let agentSettingsDrafts=new Map(),agentRuntimeFiles=new Map(),agentSettingsGeneration=0;
 function renderAgentSettings(agent){
@@ -994,7 +994,7 @@ function renderAgentSettings(agent){
   if(form){
   form.oninput=()=>{agentSettingsDrafts.set(agent.id,Object.fromEntries(new FormData(form)));$('#agent-settings-status').textContent='有未保存的修改'};
   $('#agent-settings-reset').onclick=()=>{
-    agentSettingsDrafts.set(agent.id,Object.fromEntries(agent.settingsFields.map(field=>[field.name,field.name==='timeoutMinutes'?AI_DEFAULT_TIMEOUT_MIN:''])));
+    agentSettingsDrafts.set(agent.id,Object.fromEntries(agent.settingsFields.map(field=>[field.name,field.name==='timeoutMinutes'?(agent.id==='playwright'?AI_DEFAULT_TIMEOUT_MIN:15):''])));
     renderAgentSettings(agent);$('#agent-settings-status').textContent='已恢复初始值，点击保存后生效';
   };
   form.onsubmit=async e=>{

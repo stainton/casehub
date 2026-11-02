@@ -150,7 +150,7 @@ CaseHub 不读写 agent 的文件系统，也不需要共享目录：每次发�
 
 业务配置接口为 `GET/PUT /api/agent-settings/{agent}`（`playwright`、`generator`）；setting.json 为 `GET/PUT /api/agent-settings/{agent}/runtime`（`content` 为完整 JSON 文本，保存时带上读取到的 `revision`，版本号不一致返回 409）。关闭弹窗会放弃未保存的修改，「恢复初始值」需保存后生效。用例数量与需求缩写仍根据具体需求评估。
 
-「AI 设计」抽屉里可以设置本次设计任务的超时时间（分钟，1–240，新任务采用 agent 业务默认时长，初始为 15），随请求的 `timeoutMs` 一起提交；
+「AI 设计」抽屉里可以设置本次设计任务的超时时间（分钟，1–240，新任务采用 agent 业务默认时长，初始为 180），随请求的 `timeoutMs` 一起提交；
 探索耗时取决于被测系统和用例数量，服务端的固定默认值对大需求常常不够。实际生效的时限会显示在任务进行中的面板上，
 最终由 planner 服务按 `PLANNER_MAX_TIMEOUT_MS` 封顶。
 

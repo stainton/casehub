@@ -21,6 +21,9 @@ func TestAgentSettingsPersistAndValidate(t *testing.T) {
 		handler.ServeHTTP(w, httptest.NewRequest(method, path, strings.NewReader(body)))
 		return w
 	}
+	if initial := send("GET", "/api/agent-settings/playwright", ""); initial.Code != 200 || !strings.Contains(initial.Body.String(), `"timeoutMinutes":180`) {
+		t.Fatalf("planner default timeout: %s", initial.Body.String())
+	}
 	saved := send("PUT", "/api/agent-settings/playwright", `{"baseUrl":"https://target.test","instructions":"覆盖登录","testAccount":"tester","testSecret":"default-password","timeoutMinutes":30}`)
 	if saved.Code != 200 {
 		t.Fatal(saved.Body.String())
@@ -31,7 +34,7 @@ func TestAgentSettingsPersistAndValidate(t *testing.T) {
 		t.Fatal(out.Body.String())
 	}
 	// Each agent is configured on its own; the generator does not inherit the planner's defaults.
-	if out = send("GET", "/api/agent-settings/generator", ""); out.Code != 200 || strings.Contains(out.Body.String(), "target.test") {
+	if out = send("GET", "/api/agent-settings/generator", ""); out.Code != 200 || strings.Contains(out.Body.String(), "target.test") || !strings.Contains(out.Body.String(), `"timeoutMinutes":15`) {
 		t.Fatal(out.Body.String())
 	}
 	for _, body := range []string{`{"timeoutMinutes":0}`, `{"timeoutMinutes":241}`, `{"timeoutMinutes":15,"baseUrl":"file:///tmp/key"}`} {

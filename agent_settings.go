@@ -37,7 +37,7 @@ func (a *api) agentSettings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if r.Method == http.MethodGet {
-		jsonOut(w, 200, cfg.Defaults.WithDefaults())
+		jsonOut(w, 200, cfg.Defaults.WithDefaults(r.PathValue("id")))
 		return
 	}
 	var in core.AgentSettings
