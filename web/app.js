@@ -1305,14 +1305,25 @@ function aiProgressLine(ev){
   const duration=Number.isFinite(ev.durationMs)?` · ${(ev.durationMs/1000).toFixed(1)} 秒`:'';
   return `[${fmt(ev.createdAt)}] ${detail}${duration}`.trim();
 }
+function progressLogContent(line,msg,ev){
+  const wasOpen=line.querySelector('details')?.open;
+  line.replaceChildren();
+  if(!ev?.toolCode){line.textContent=msg;return}
+  const details=document.createElement('details');
+  details.className='ai-tool-detail';details.open=Boolean(wasOpen);
+  const summary=document.createElement('summary');summary.textContent=msg;
+  const intent=document.createElement('div');intent.textContent=`意图：${ev.toolIntent||ev.message||''}`;
+  const code=document.createElement('pre');code.textContent=ev.toolCode;
+  details.append(summary,intent,code);line.appendChild(details);
+}
 function aiLogLine(msg,ev){
   const log=$('#ai-log');
   if(!log)return;
   const atBottom=log.scrollTop+log.clientHeight>=log.scrollHeight-4;
   const operationID=ev?.operationId;
   let line=operationID&&ev.toolStatus!=='started'?[...log.children].find(x=>x.dataset.operationId===operationID):null;
-  if(line)line.textContent=msg;
-  else{line=document.createElement('div');line.textContent=msg;if(operationID)line.dataset.operationId=operationID;log.appendChild(line)}
+  if(!line){line=document.createElement('div');if(operationID)line.dataset.operationId=operationID;log.appendChild(line)}
+  progressLogContent(line,msg,ev);
   while(log.childElementCount>200)log.removeChild(log.firstChild);
   if(atBottom)log.scrollTop=log.scrollHeight;
 }
@@ -2629,7 +2640,7 @@ function genTaskHTML(task){
     <p class="meta">${esc(task.versionName||'')} · 提交于 ${fmt(task.createdAt)}</p>
     ${genCaseLinksHTML(task)}
     ${done}${limitations}${error}
-    <div class="ai-log" data-gen-log="${task.jobId}">${(runtime?.log||[]).map(line=>`<div${line?.operationId?` data-operation-id="${esc(line.operationId)}"`:''}>${esc(typeof line==='string'?line:line.text)}</div>`).join('')}</div>
+    <div class="ai-log" data-gen-log="${task.jobId}">${(runtime?.log||[]).map(line=>`<div${line?.operationId?` data-operation-id="${esc(line.operationId)}"`:''}>${line?.toolCode?`<details class="ai-tool-detail"><summary>${esc(line.text)}</summary><div>意图：${esc(line.toolIntent||'')}</div><pre>${esc(line.toolCode)}</pre></details>`:esc(typeof line==='string'?line:line.text)}</div>`).join('')}</div>
     <p class="drawer-actions">${actions}</p>
   </details>`;
 }
@@ -2705,16 +2716,16 @@ function genLogLine(jobId,msg,ev){
   const runtime=genRuntime.get(jobId)||{log:[]};
   const operationID=ev?.operationId;
   const index=operationID&&ev.toolStatus!=='started'?runtime.log.findIndex(x=>x?.operationId===operationID):-1;
-  if(index>=0)runtime.log[index]={text:msg,operationId:operationID};
-  else runtime.log.push(operationID?{text:msg,operationId:operationID}:msg);
+  if(index>=0)runtime.log[index]={text:msg,operationId:operationID,toolCode:ev?.toolCode,toolIntent:ev?.toolIntent};
+  else runtime.log.push(operationID?{text:msg,operationId:operationID,toolCode:ev?.toolCode,toolIntent:ev?.toolIntent}:msg);
   if(runtime.log.length>200)runtime.log.shift();
   genRuntime.set(jobId,runtime);
   const box=$(`#gen-drawer-body [data-gen-log="${jobId}"]`);
   if(!box)return;
   const atBottom=box.scrollTop+box.clientHeight>=box.scrollHeight-4;
   let line=operationID&&ev.toolStatus!=='started'?[...box.children].find(x=>x.dataset.operationId===operationID):null;
-  if(line)line.textContent=msg;
-  else{line=document.createElement('div');line.textContent=msg;if(operationID)line.dataset.operationId=operationID;box.appendChild(line)}
+  if(!line){line=document.createElement('div');if(operationID)line.dataset.operationId=operationID;box.appendChild(line)}
+  progressLogContent(line,msg,ev);
   while(box.childElementCount>200)box.removeChild(box.firstChild);
   if(atBottom)box.scrollTop=box.scrollHeight;
 }
