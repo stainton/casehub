@@ -1293,7 +1293,7 @@ function routeAiJob(doc,job){
 }
 function renderAiRunning(doc,job){
   const limit=job.timeoutMs?`<span>时限 <b>${Math.round(job.timeoutMs/60000)} 分钟</b></span>`:'';
-  $('#ai-drawer-body').innerHTML=`<div class="card meta-grid"><span>状态 <b>${aiStageLabel(job)}</b></span>${limit}</div><div id="ai-log" class="ai-log"></div><p class="drawer-actions"><button type="button" class="secondary" id="ai-cancel">取消任务</button></p>`;
+  $('#ai-drawer-body').innerHTML=`<div class="card meta-grid"><span>状态 <b>${aiStageLabel(job)}</b></span>${limit}</div><div id="ai-log" class="ai-log"></div><p class="drawer-actions"><a class="secondary" href="/api/planner/jobs/${job.id}/log" download>下载完整日志</a><button type="button" class="secondary" id="ai-cancel">取消任务</button></p>`;
   $('#ai-cancel').onclick=async()=>{
     try{await serviceRequest(`/api/planner/jobs/${job.id}`,{method:'DELETE'})}catch(e){toast(e.message,true)}
   };
@@ -1372,7 +1372,7 @@ function ensureAiStream(doc,jobId){
 function renderAiTerminal(doc,job){
   const cancelled=job.status==='cancelled';
   const hint=job.continuable?'<p class="meta">中断前的探索还留在服务端：「继续」接着往下做（可以先调大超时时间），「重试」用同样的表单从头开始。</p>':'';
-  $('#ai-drawer-body').innerHTML=`<div class="card meta-grid"><span>状态 <b>${aiStageLabel(job)}</b></span></div>${job.error?`<p class="meta">${esc(job.error.code)}：${esc(job.error.message)}</p>`:cancelled?'<p class="meta">任务已取消。</p>':''}${hint}<p class="drawer-actions"><button type="button"${job.continuable?' class="secondary"':''} id="ai-retry">重试</button>${job.continuable?'<button type="button" id="ai-continue">继续</button>':''}</p>`;
+  $('#ai-drawer-body').innerHTML=`<div class="card meta-grid"><span>状态 <b>${aiStageLabel(job)}</b></span></div>${job.error?`<p class="meta">${esc(job.error.code)}：${esc(job.error.message)}</p>`:cancelled?'<p class="meta">任务已取消。</p>':''}${hint}<p class="drawer-actions"><a class="secondary" href="/api/planner/jobs/${job.id}/log" download>下载完整日志</a><button type="button"${job.continuable?' class="secondary"':''} id="ai-retry">重试</button>${job.continuable?'<button type="button" id="ai-continue">继续</button>':''}</p>`;
   $('#ai-retry').onclick=()=>{clearAiJob(doc);renderAiForm(doc)};
   if(job.continuable)$('#ai-continue').onclick=()=>renderAiForm(doc,'',job.id);
 }
@@ -2133,7 +2133,7 @@ function renderScriptRunDrawer(){
     const runtime=scriptRunRuntime.get(task.jobId),active=!SCRIPT_RUN_TERMINAL.includes(task.status);
     const failure=task.error?.message||task.failure||'';
     const failureDetails=failure?`<details class="card run-failure"><summary>失败详情</summary><p>${esc(task.error?.code?`${task.error.code}：${failure}`:failure)}</p>${task.output?`<pre class="ai-log">${esc(task.output)}</pre>`:''}</details>`:'';
-    return `<details class="gen-task" data-run-panel="${task.jobId}"${scriptRunOpen.has(task.jobId)?' open':''}><summary><span class="gen-task-title">${esc(task.caseID)} · ${esc(task.title||'脚本执行')}</span><span class="gen-chip gen-status-${active?'running':task.status}">${esc(scriptRunStatus(task))}${task.stage&&active?` · ${esc(task.stage)}`:''}</span></summary><p class="meta">${esc(task.versionName||'')} · 提交于 ${fmt(task.createdAt)}${task.script?`<br>执行的${esc(scriptRunInfoText(task.script))}`:''}</p><div class="ai-log" data-run-log="${task.jobId}">${(runtime?.log||[]).map(line=>`<div>${esc(line)}</div>`).join('')}</div>${failureDetails}<p class="drawer-actions">${task.passed===false?`<button type="button" class="secondary" data-run-report="${task.jobId}">查看测试记录</button>`:''}${active?`<button type="button" class="secondary" data-run-cancel="${task.jobId}">取消任务</button>`:`<button type="button" class="secondary" data-run-forget="${task.jobId}">移除记录</button>`}</p></details>`;
+    return `<details class="gen-task" data-run-panel="${task.jobId}"${scriptRunOpen.has(task.jobId)?' open':''}><summary><span class="gen-task-title">${esc(task.caseID)} · ${esc(task.title||'脚本执行')}</span><span class="gen-chip gen-status-${active?'running':task.status}">${esc(scriptRunStatus(task))}${task.stage&&active?` · ${esc(task.stage)}`:''}</span></summary><p class="meta">${esc(task.versionName||'')} · 提交于 ${fmt(task.createdAt)}${task.script?`<br>执行的${esc(scriptRunInfoText(task.script))}`:''}</p><div class="ai-log" data-run-log="${task.jobId}">${(runtime?.log||[]).map(line=>`<div>${esc(line)}</div>`).join('')}</div>${failureDetails}<p class="drawer-actions"><a class="secondary" href="/api/executor/jobs/${task.jobId}/log" download>下载完整日志</a>${task.passed===false?`<button type="button" class="secondary" data-run-report="${task.jobId}">查看测试记录</button>`:''}${active?`<button type="button" class="secondary" data-run-cancel="${task.jobId}">取消任务</button>`:`<button type="button" class="secondary" data-run-forget="${task.jobId}">移除记录</button>`}</p></details>`;
   }).join(''):(scriptRunTasks.length?tcEmptyHTML('run'):'<p class="meta">还没有脚本执行任务。</p>');
   $$('#run-drawer-body [data-run-panel]').forEach(el=>el.ontoggle=()=>{el.open?scriptRunOpen.add(el.dataset.runPanel):scriptRunOpen.delete(el.dataset.runPanel)});
   $$('#run-drawer-body [data-run-cancel]').forEach(button=>button.onclick=async()=>{button.disabled=true;try{await serviceRequest(`/api/executor/jobs/${button.dataset.runCancel}`,{method:'DELETE'})}catch(error){toast(error.message,true);button.disabled=false}});
@@ -2309,7 +2309,7 @@ function renderAutoFocusInner(){
   const c=caseOfScript(s),stale=scriptStale(s),blocked=s.Status==='blocked';
   const regenerating=hasGenerationForCases(s.VersionID,[s.CaseID]),healing=hasHealing(s.VersionID,s.CaseID);
   const run=scriptRunResults.get(`${s.VersionID}:${s.CaseID}`);
-  const deviations=s.Deviations?.length?`<div class="card"><h3>${s.Summary==='生成超时，脚本待人工复核'?'生成未完成 · 请人工复核':'与用例预期的实测偏差'}${s.Summary==='生成超时，脚本待人工复核'?'':' <small class="meta">脚本按实测行为断言，并在对应行标注 // deviation:</small>'}</h3>${aiRiskListHTML(s.Deviations.map(d=>({risk:d.Risk,summary:d.Summary})),d=>esc(d.summary))}</div>`:'';
+  const deviations=s.Deviations?.length?`<div class="card"><h3>${s.Summary==='生成超时，脚本待人工复核'?'生成未完成 · 请人工复核':'与用例预期的实测偏差'}${blocked?' <small class="meta">用例已受阻，未生成脚本</small>':''}</h3>${aiRiskListHTML(s.Deviations.map(d=>({risk:d.Risk,summary:d.Summary})),d=>esc(d.summary))}</div>`:'';
   const staleHint=stale?`<div class="card script-stale"><b>用例内容已变更</b><p class="meta">这个脚本是按变更前的用例生成的，断言可能已经不符合当前用例。确认用例后可以重新生成。</p><p class="drawer-actions"><button type="button" id="script-regen-stale" class="${regenerating?'ai-running':''}">${regenerating?'重新生成中':'重新生成'}</button></p></div>`:'';
   const editing=scriptEdit?.versionID===s.VersionID&&scriptEdit.caseID===s.CaseID;
   const scriptKey=`${s.VersionID}:${s.CaseID}`,codeExpanded=expandedScriptCode.has(scriptKey);
@@ -2641,7 +2641,7 @@ function genTaskHTML(task){
     ${genCaseLinksHTML(task)}
     ${done}${limitations}${error}
     <div class="ai-log" data-gen-log="${task.jobId}">${(runtime?.log||[]).map(line=>`<div${line?.operationId?` data-operation-id="${esc(line.operationId)}"`:''}>${line?.toolCode?`<details class="ai-tool-detail"><summary>${esc(line.text)}</summary><div>意图：${esc(line.toolIntent||'')}</div><pre>${esc(line.toolCode)}</pre></details>`:esc(typeof line==='string'?line:line.text)}</div>`).join('')}</div>
-    <p class="drawer-actions">${actions}</p>
+    <p class="drawer-actions"><a class="secondary" href="/api/${taskService(task)}/jobs/${task.jobId}/log" download>下载完整日志</a>${actions}</p>
   </details>`;
 }
 function bindGenTasks(){
@@ -2807,7 +2807,7 @@ async function importGenResult(task){
         if(taskService(task)==='generator'&&sc.summary!=='生成超时，脚本待人工复核'&&sc.deviations?.length){
           const c=state.cases.find(x=>x.VersionID===task.versionID&&x.ID===sc.caseId);
           const docId=(c&&reqDocForCase(c)?.ID)||task.requirementIDs?.[0];
-          if(docId)await reportDefects(sc.deviations.map(d=>({RequirementID:docId,Title:`[${RISK_LABEL[d.risk]||'未评级'}] ${sc.caseId} ${d.summary}`,Description:`**用例**：${sc.caseId} ${c?.Title||''}\n\n**缺陷**：${d.summary}\n\n**风险**：${RISK_LABEL[d.risk]||'未评级'}\n\n来源：脚本生成发现的预期与实际不符，脚本已按预期断言，运行会失败。生成任务 ${task.jobId}`,Source:`generator:${sc.caseId}:${d.summary}`})));
+          if(docId)await reportDefects(sc.deviations.map(d=>({RequirementID:docId,Title:`[${RISK_LABEL[d.risk]||'未评级'}] ${sc.caseId} ${d.summary}`,Description:`**用例**：${sc.caseId} ${c?.Title||''}\n\n**缺陷**：${d.summary}\n\n**风险**：${RISK_LABEL[d.risk]||'未评级'}\n\n来源：脚本生成发现的预期与实际不符，${sc.status==='blocked'?'该用例已受阻，未生成脚本':'请人工复核生成结果'}。生成任务 ${task.jobId}`,Source:`generator:${sc.caseId}:${d.summary}`})));
           else toast(`${sc.caseId} 发现产品缺陷但无法关联需求，未记入问题单`,true);
         }
       }catch(error){failed++;task.error={code:'SAVE_FAILED',message:error.message}} // act 已提示失败原因（例如用例在生成期间被删除）
@@ -2844,14 +2844,15 @@ async function resumeGenTasks(){
 
 // ---- 任务中心：四类任务（设计 / AI 托管 / 生成修复 / 执行）共用一排标签，随抽屉一起弹出 ----
 // AI 托管和设计共用 AI 抽屉：托管的设计任务不出现在「设计」里（它的结果由服务端自动处理），在「AI 托管」里按需求查看。
-const TC_TABS=[['plan','Planner · 设计','#ai-drawer'],['host','AI 托管','#ai-drawer'],['gen','Generator · 生成/修复','#gen-drawer'],['run','Executor · 执行','#run-drawer']];
+const TC_TABS=[['plan','Planner · 设计','#ai-drawer'],['host','AI 托管','#ai-drawer'],['gen','Generator · 生成/修复','#gen-drawer'],['run','Executor · 执行','#run-drawer'],['logs','任务日志','#ai-drawer']];
 // 「进行中」= 还没完成的托管，包括停下等人处理（重试/放弃）的；「已完成」= 已归档的。
 const tcHostings=()=>(state?.hostings||[]).filter(h=>isCaseHost(h)||state.reqDocs.some(d=>d.ID===h.DocID));
 const hostUnfinished=h=>h.Stage!=='done';
 const tcPlannerDocs=()=>(state?.reqDocs||[]).filter(doc=>aiJobOf(doc)||isAiActive(doc));
-const tcActiveOf={plan:()=>tcPlannerDocs().filter(isAiActive).length,host:()=>tcHostings().filter(hostUnfinished).length,gen:()=>genRunning().length,run:()=>activeScriptRuns().length};
-const tcTotalOf={plan:()=>tcPlannerDocs().length,host:()=>tcHostings().length,gen:()=>genTasks.length,run:()=>scriptRunTasks.length};
-const tcFilter={plan:'active',host:'active',gen:'active',run:'active'};
+let tcLogTasks=[],tcLogHasMore=true;
+const tcActiveOf={plan:()=>tcPlannerDocs().filter(isAiActive).length,host:()=>tcHostings().filter(hostUnfinished).length,gen:()=>genRunning().length,run:()=>activeScriptRuns().length,logs:()=>tcLogTasks.filter(t=>!GEN_TERMINAL.includes(t.status)).length};
+const tcTotalOf={plan:()=>tcPlannerDocs().length,host:()=>tcHostings().length,gen:()=>genTasks.length,run:()=>scriptRunTasks.length,logs:()=>tcLogTasks.length};
+const tcFilter={plan:'active',host:'active',gen:'active',run:'active',logs:'done'};
 const tcShown=(key,active)=>tcFilter[key]==='active'?active:!active;
 const tcEmptyHTML=key=>`<p class="meta">${tcFilter[key]==='active'?'没有进行中的任务。':'没有已完成的任务。'}</p>`;
 let tcCurrent='gen';
@@ -2860,7 +2861,7 @@ let tcPinned=false;
 try{tcPinned=localStorage.getItem('casehub-tc-pinned')==='1'}catch{}
 const tcTabs=document.createElement('div');tcTabs.className='tc-tabs';tcTabs.setAttribute('role','tablist');
 function tcRenderTabs(){
-  const total=Object.values(tcActiveOf).reduce((n,f)=>n+f(),0),badge=$('#tc-badge');
+  const total=['plan','host','gen','run'].reduce((n,key)=>n+tcActiveOf[key](),0),badge=$('#tc-badge');
   badge.textContent=total;badge.classList.toggle('hidden',!total);
   const sig=JSON.stringify([tcCurrent,tcPinned,tcFilter,TC_TABS.map(([key])=>[tcActiveOf[key](),tcTotalOf[key]()])]);
   if(tcTabs.dataset.sig===sig)return;
@@ -2872,7 +2873,7 @@ function tcRenderTabs(){
   tcTabs.querySelector('#tc-pin')?.addEventListener('click',()=>{tcPinned=!tcPinned;try{localStorage.setItem('casehub-tc-pinned',tcPinned?'1':'0')}catch{}tcTabs.dataset.sig='';tcRenderTabs()});
   tcTabs.querySelectorAll('[data-tc-filter]').forEach(b=>b.onclick=()=>{tcFilter[tcCurrent]=b.dataset.tcFilter;tcRenderTabs();tcRerender(tcCurrent)});
 }
-function tcRerender(key){if(key==='gen')renderGenDrawer();else if(key==='run')renderScriptRunDrawer();else if(key==='host')tcShowHosting();else tcShowPlanner()}
+function tcRerender(key){if(key==='gen')renderGenDrawer();else if(key==='run')renderScriptRunDrawer();else if(key==='host')tcShowHosting();else if(key==='logs')tcShowLogs();else tcShowPlanner()}
 function tcAttach(key){
   tcCurrent=key;
   tcTabs.dataset.sig='';
@@ -2904,10 +2905,55 @@ function tcExpand(row,open){
 function tcSwitch(key){
   tcCollapse();
   TC_TABS.forEach(([,,sel])=>$(sel).classList.add('hidden'));
-  if(key==='gen')openGenDrawer();
+  if(key==='logs')tcShowLogs();
+  else if(key==='gen')openGenDrawer();
   else if(key==='run')openScriptRunDrawer();
   else if(key==='host')tcShowHosting();
   else tcShowPlanner();
+}
+const tcTaskName=t=>t.meta?.label||t.meta?.title||t.subject||t.id;
+async function tcShowTaskLog(task){
+  const box=$('#ai-drawer-body');
+  box.innerHTML=`<p class="meta">${esc(task.kind)} · ${esc(task.id)}</p><p class="drawer-actions"><a class="secondary" href="/api/${encodeURIComponent(task.kind)}/jobs/${encodeURIComponent(task.id)}/log" download>下载完整日志 JSONL</a><button type="button" class="secondary" id="tc-log-refresh">刷新日志</button></p><div class="ai-log" id="tc-log-content">正在读取日志…</div>`;
+  $('#tc-log-refresh').onclick=()=>tcShowTaskLog(task);
+  try{
+    const response=await fetch(`/api/${encodeURIComponent(task.kind)}/jobs/${encodeURIComponent(task.id)}/log`);
+    if(!response.ok)throw Error(`读取失败（HTTP ${response.status}）`);
+    const events=(await response.text()).split('\n').filter(Boolean).slice(-500).map(line=>JSON.parse(line));
+    const log=box.querySelector('#tc-log-content');if(!box.isConnected||!log)return;
+    log.replaceChildren();
+    const calls=new Map();
+    for(const event of events){
+      let row=event.operationId&&event.toolStatus!=='started'?calls.get(event.operationId):null;
+      if(!row){row=document.createElement('div');log.appendChild(row)}
+      progressLogContent(row,aiProgressLine(event),event);
+      if(event.operationId)calls.set(event.operationId,row);
+    }
+    if(!events.length)log.textContent='此任务尚无进度日志。';
+    else if(task.lastEventId>500){const note=document.createElement('p');note.className='meta';note.textContent='界面显示最近 500 条事件；下载包含完整日志。';log.prepend(note)}
+  }catch(error){const log=box.querySelector('#tc-log-content');if(box.isConnected&&log)log.textContent=error.message}
+}
+function tcRenderLogList(){
+  const shown=tcLogTasks.filter(t=>tcShown('logs',!GEN_TERMINAL.includes(t.status)));
+  $('#ai-drawer-body').innerHTML=`<p class="meta">任务记录保存在 CaseHub；展开查看，或下载每条任务的完整日志。</p><div class="tc-list">${shown.length?shown.map(t=>`<button type="button" class="tc-row" data-tc-log="${esc(t.id)}"><span>${esc(tcTaskName(t))}<small class="meta">${esc(t.kind)} · ${fmt(t.createdAt)}</small></span><small>${esc(t.status)}</small></button>`).join(''):tcEmptyHTML('logs')}</div>${tcLogHasMore?'<p class="drawer-actions"><button type="button" class="secondary" id="tc-log-more">加载更早任务</button></p>':''}`;
+  $$('#ai-drawer-body [data-tc-log]').forEach(row=>row.onclick=()=>{const task=tcLogTasks.find(t=>t.id===row.dataset.tcLog);if(task)tcExpand(row,()=>tcShowTaskLog(task))});
+  $('#tc-log-more')?.addEventListener('click',async()=>{
+    const button=$('#tc-log-more');button.disabled=true;
+    try{const page=(await serviceRequest(`/api/tasks?limit=200&offset=${tcLogTasks.length}`)).tasks||[];
+      tcLogTasks.push(...page);tcLogHasMore=page.length===200;tcCollapse();tcRenderLogList()}
+    catch(error){button.disabled=false;toast(error.message,true)}
+  });
+  tcRenderTabs();
+}
+async function tcShowLogs(){
+  tcCollapse();aiDoc=null;hostCase=null;closeHostLog();
+  $('#ai-drawer .panel-head strong').textContent='任务日志';
+  $('#ai-drawer-doc').textContent='';$('#ai-drawer').classList.remove('hidden');
+  $('#ai-drawer-body').innerHTML='<p class="meta">正在读取任务记录…</p>';tcAttach('logs');
+  try{tcLogTasks=(await serviceRequest('/api/tasks?limit=200')).tasks||[]}
+  catch(error){$('#ai-drawer-body').innerHTML=`<p class="meta">${esc(error.message)}</p>`;return}
+  if(tcCurrent!=='logs')return;
+  tcLogHasMore=tcLogTasks.length===200;tcRenderLogList();
 }
 const HOST_STAGE_LABELS={estimating:'评估中',designing:'设计中',reviewing:'自动评审中',archiving:'归档中',generating:'生成脚本中',running:'自动执行中',done:'已完成'};
 function hostStatusText(h){

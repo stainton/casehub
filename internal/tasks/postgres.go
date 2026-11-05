@@ -76,6 +76,9 @@ func (p *Postgres) ListTasks(ctx context.Context, f Filter) ([]Task, error) {
 	if f.Limit > 0 {
 		query += " LIMIT " + arg(f.Limit)
 	}
+	if f.Offset > 0 {
+		query += " OFFSET " + arg(f.Offset)
+	}
 	rows, err := p.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err

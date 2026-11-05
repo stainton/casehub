@@ -125,6 +125,7 @@ type Filter struct {
 	Active   bool // only unfinished tasks, and finished ones the frontend has not handled yet
 	Statuses []string
 	Limit    int
+	Offset   int
 }
 
 func (f Filter) Match(t Task) bool {

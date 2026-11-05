@@ -29,6 +29,9 @@ func conformance(t *testing.T, s Store, reopen func() Store) {
 		if err := s.AppendEvent(ctx, open.ID, i, json.RawMessage(`{"id":`+strconv.FormatInt(i, 10)+`}`), 3); err != nil {
 			t.Fatal(err)
 		}
+		if err := s.AppendEvent(ctx, done.ID, i, json.RawMessage(`{"id":`+strconv.FormatInt(i, 10)+`}`), -1); err != nil {
+			t.Fatal(err)
+		}
 	}
 	if err := s.PutBlob(ctx, done.ID, BlobCheckpoint, []byte("session")); err != nil {
 		t.Fatal(err)
@@ -52,6 +55,9 @@ func conformance(t *testing.T, s Store, reopen func() Store) {
 	if events, _ := s.Events(ctx, open.ID, 0); len(events) != 3 {
 		t.Fatalf("only the last keep events are kept, got %d", len(events))
 	}
+	if events, _ := s.Events(ctx, done.ID, 0); len(events) != 5 {
+		t.Fatalf("uncapped downloadable history must survive reopen, got %d", len(events))
+	}
 	if blob, _ := s.GetBlob(ctx, done.ID, BlobCheckpoint); string(blob) != "session v2" {
 		t.Fatalf("blob = %q", blob)
 	}
@@ -70,6 +76,9 @@ func conformance(t *testing.T, s Store, reopen func() Store) {
 	}
 	if list, _ := s.ListTasks(ctx, Filter{Limit: 1}); len(list) != 1 {
 		t.Fatal("limit")
+	}
+	if list, _ := s.ListTasks(ctx, Filter{Limit: 1, Offset: 1}); len(list) != 1 || list[0].ID != handled.ID {
+		t.Fatalf("offset: %+v", list)
 	}
 	if n, _ := s.DeleteFinishedBefore(ctx, time.Now().Add(-time.Hour)); n != 2 {
 		t.Fatalf("old finished tasks are pruned, unfinished ones never: %d", n)

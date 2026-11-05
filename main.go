@@ -242,7 +242,8 @@ func dispatchConfig() dispatch.Config {
 	}
 	return dispatch.Config{
 		QueueTimeout:  duration("CASEHUB_TASK_QUEUE_TIMEOUT", 30*time.Minute),
-		Retention:     duration("CASEHUB_TASK_RETENTION", 7*24*time.Hour),
+		Retention:     duration("CASEHUB_TASK_RETENTION", -1),
+		KeepEvents:    -1,
 		NodeLostAfter: duration("CASEHUB_NODE_LOST_AFTER", 2*time.Minute),
 	}
 }

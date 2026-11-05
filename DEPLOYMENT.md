@@ -28,7 +28,7 @@ AI 设计（planner）、脚本生成（generator）、脚本修复（healer）�
 
 - **file 存储的数据目录必须是持久目录。** Kubernetes 清单里 `DATABASE_URL` 留空时，数据目录是 `emptyDir`，Pod 重建后用例和任务都会丢失。
 - **请求内容不会写入任何存储。** 测试账号、密码和 storageState 只保存在 CaseHub 进程内存里，直到任务结束；数据库和文件中只有任务状态、进度和结果。
-- **会话包和诊断包会占用空间。** 会话包通常几 KB 到几 MB，诊断包最大 50 MiB。已结束的任务在 `CASEHUB_TASK_RETENTION`（默认 7 天）后连同这些文件一起删除。
+- **任务日志、会话包和诊断包会占用空间。** 任务进度事件完整保留，任务中心可查看和下载 JSONL。默认永久保存任务；如需自动清理，可把 `CASEHUB_TASK_RETENTION` 设为正的时长。会话包通常几 KB 到几 MB，诊断包最大 50 MiB。
 
 ## 3. 连接 auto-test 节点
 
@@ -90,7 +90,7 @@ CASEHUB_GENERATOR_URL=http://10.0.0.5:4502 \
 | --- | --- | --- |
 | `CASEHUB_TASK_QUEUE_TIMEOUT` | `30m` | 任务排队超过这个时间仍没有节点接收，就以 `NO_NODE_AVAILABLE` 失败。节点按需从零扩容时，应留出拉起 Pod 的时间 |
 | `CASEHUB_NODE_LOST_AFTER` | `2m` | 节点连续联系不上超过这个时间，视为其上的任务已丢失 |
-| `CASEHUB_TASK_RETENTION` | `168h` | 已结束任务及其会话包、诊断包的保留时长 |
+| `CASEHUB_TASK_RETENTION` | 永久 | 已结束任务及其完整日志、会话包、诊断包的保留时长；可设为正的时长启用自动清理 |
 
 ## 6. 重启与升级
 

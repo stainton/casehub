@@ -31,7 +31,7 @@ func writeError(w http.ResponseWriter, err error) {
 	writeJSON(w, http.StatusInternalServerError, map[string]any{"error": map[string]string{"code": "INTERNAL_ERROR", "message": err.Error()}})
 }
 
-var jobRoute = regexp.MustCompile(`^/([0-9a-f-]{36})(?:/(result|events|diagnostics))?$`)
+var jobRoute = regexp.MustCompile(`^/([0-9a-f-]{36})(?:/(result|events|diagnostics|log))?$`)
 
 // Jobs serves /api/<kind>/jobs and below with the same contract as a node's /v1/<kind>/jobs — the frontend
 // talks to CaseHub's tasks exactly as it talked to the node's jobs — plus PATCH for the frontend's own
@@ -113,6 +113,23 @@ func (d *Dispatcher) Jobs(kind string) http.Handler {
 			w.Header().Set("Content-Type", "application/gzip")
 			w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s-%s-diagnostics.tar.gz"`, kind, id))
 			_, _ = w.Write(data)
+		case resource == "log":
+			if _, err := d.Get(r.Context(), kind, id); err != nil {
+				writeError(w, err)
+				return
+			}
+			events, err := d.store.Events(r.Context(), id, 0)
+			if err != nil {
+				writeError(w, err)
+				return
+			}
+			w.Header().Set("Content-Type", "application/x-ndjson; charset=utf-8")
+			w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s-%s-log.jsonl"`, kind, id))
+			w.Header().Set("Cache-Control", "no-store")
+			for _, event := range events {
+				_, _ = w.Write(event)
+				_, _ = w.Write([]byte("\n"))
+			}
 		default:
 			d.events(w, r, kind, id)
 		}
@@ -260,6 +277,14 @@ func (d *Dispatcher) Tasks() http.Handler {
 		}
 		if n, err := strconv.Atoi(q.Get("limit")); err == nil && n > 0 && n < f.Limit {
 			f.Limit = n
+		}
+		if raw := q.Get("offset"); raw != "" {
+			n, err := strconv.Atoi(raw)
+			if err != nil || n < 0 {
+				writeError(w, &HTTPError{http.StatusBadRequest, "INVALID_OFFSET", "Offset must be a nonnegative integer"})
+				return
+			}
+			f.Offset = n
 		}
 		list, err := d.List(r.Context(), f)
 		if err != nil {

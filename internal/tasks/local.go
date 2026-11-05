@@ -111,6 +111,10 @@ func (l *Local) ListTasks(_ context.Context, f Filter) ([]Task, error) {
 		}
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt.After(out[j].CreatedAt) })
+	if f.Offset >= len(out) {
+		return []Task{}, nil
+	}
+	out = out[f.Offset:]
 	if f.Limit > 0 && len(out) > f.Limit {
 		out = out[:f.Limit]
 	}

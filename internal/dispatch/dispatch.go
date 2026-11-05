@@ -34,10 +34,10 @@ type Kind struct {
 
 type Config struct {
 	QueueTimeout  time.Duration // a task no node took within this fails with NO_NODE_AVAILABLE
-	Retention     time.Duration // finished tasks (and their blobs) are deleted after this
+	Retention     time.Duration // finished tasks are deleted after this; negative disables pruning
 	NodeLostAfter time.Duration // a node unreachable this long has lost its task
 	MaxAttempts   int           // a task interrupted by its node is run again at most this many times in all
-	KeepEvents    int
+	KeepEvents    int           // negative keeps every event
 	Client        *http.Client
 	Logf          func(format string, args ...any)
 }
@@ -46,7 +46,7 @@ func (c *Config) defaults() {
 	if c.QueueTimeout <= 0 {
 		c.QueueTimeout = 30 * time.Minute
 	}
-	if c.Retention <= 0 {
+	if c.Retention == 0 {
 		c.Retention = 7 * 24 * time.Hour
 	}
 	if c.NodeLostAfter <= 0 {
@@ -55,7 +55,7 @@ func (c *Config) defaults() {
 	if c.MaxAttempts <= 0 {
 		c.MaxAttempts = 3
 	}
-	if c.KeepEvents <= 0 {
+	if c.KeepEvents == 0 {
 		c.KeepEvents = 500
 	}
 	if c.Client == nil {
@@ -612,6 +612,10 @@ func (d *Dispatcher) dispatchQueued() {
 
 func (d *Dispatcher) prune() {
 	defer d.wg.Done()
+	if d.cfg.Retention < 0 {
+		<-d.ctx.Done()
+		return
+	}
 	ticker := time.NewTicker(time.Hour)
 	defer ticker.Stop()
 	for {

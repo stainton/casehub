@@ -390,6 +390,9 @@ func TestTheHTTPContractMatchesANodes(t *testing.T) {
 	if code != 200 || kinds[0] != "snapshot" || kinds[len(kinds)-1] != "progress" || !strings.Contains(stream, `"status":"succeeded"`) {
 		t.Fatalf("events: %d %v\n%s", code, kinds, stream)
 	}
+	if code, log := get("/api/planner/jobs/" + id + "/log"); code != 200 || !strings.Contains(log, `"status":"succeeded"`) || strings.Contains(log, "event: ") {
+		t.Fatalf("downloadable JSONL log: %d %s", code, log)
+	}
 	if code, _ := get("/api/planner/jobs/" + id + "/events?after=999"); code != 400 {
 		t.Fatalf("a cursor beyond lastEventId is a 400, got %d", code)
 	}
@@ -402,6 +405,9 @@ func TestTheHTTPContractMatchesANodes(t *testing.T) {
 	}
 	if _, body := get("/api/tasks?kind=planner&subject=req:42&active=1"); strings.Contains(body, id) {
 		t.Fatal("a handled task leaves the active listing")
+	}
+	if code, log := get("/api/planner/jobs/" + id + "/log"); code != 200 || !strings.Contains(log, `"status":"succeeded"`) {
+		t.Fatalf("handled task log remains downloadable: %d %s", code, log)
 	}
 	if code, _ := get("/api/planner/jobs/" + id + "/diagnostics"); code != 404 {
 		t.Fatalf("diagnostics of a task that kept none: %d", code)
