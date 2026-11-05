@@ -1298,13 +1298,21 @@ function renderAiRunning(doc,job){
     try{await serviceRequest(`/api/planner/jobs/${job.id}`,{method:'DELETE'})}catch(e){toast(e.message,true)}
   };
 }
-function aiLogLine(msg){
+const aiProgressStages={preparing:'准备',exploring:'探索',generating:'编写',verifying:'验证',finalizing:'收尾',completed:'完成',failed:'失败',reading_cases:'读取用例',reading_requirements:'读取需求'};
+function aiProgressLine(ev){
+  const stage=aiProgressStages[ev.stage]||ev.stage||'';
+  const detail=ev.tool?ev.message||stage:[stage,ev.message].filter(Boolean).join(' · ');
+  const duration=Number.isFinite(ev.durationMs)?` · ${(ev.durationMs/1000).toFixed(1)} 秒`:'';
+  return `[${fmt(ev.createdAt)}] ${detail}${duration}`.trim();
+}
+function aiLogLine(msg,ev){
   const log=$('#ai-log');
   if(!log)return;
   const atBottom=log.scrollTop+log.clientHeight>=log.scrollHeight-4;
-  const line=document.createElement('div');
-  line.textContent=msg;
-  log.appendChild(line);
+  const operationID=ev?.operationId;
+  let line=operationID&&ev.toolStatus!=='started'?[...log.children].find(x=>x.dataset.operationId===operationID):null;
+  if(line)line.textContent=msg;
+  else{line=document.createElement('div');line.textContent=msg;if(operationID)line.dataset.operationId=operationID;log.appendChild(line)}
   while(log.childElementCount>200)log.removeChild(log.firstChild);
   if(atBottom)log.scrollTop=log.scrollHeight;
 }
@@ -1338,7 +1346,7 @@ function ensureAiStream(doc,jobId){
     if(isAiDrawerOpen(doc)){
       const badge=$('#ai-drawer-body .meta-grid b');
       if(badge)badge.textContent=aiStageLabel(ev);
-      aiLogLine(`[${fmt(ev.createdAt)}] ${ev.stage||''} ${ev.message||''}${ev.tool?` (${ev.tool} ${ev.toolStatus||''})`:''}`.trim());
+      aiLogLine(aiProgressLine(ev),ev);
     }
     if(['succeeded','failed','cancelled'].includes(ev.status))serviceRequest(`/api/planner/jobs/${jobId}`).then(job=>routeAiJob(doc,job));
   });
@@ -1497,7 +1505,7 @@ function openHostLog(kind,taskID){
   closeHostLog();
   const source=new EventSource(`/api/${kind}/jobs/${taskID}/events`);
   hostLog={taskID,source};
-  source.addEventListener('progress',e=>{const ev=JSON.parse(e.data);aiLogLine(`[${fmt(ev.createdAt)}] ${ev.stage||''} ${ev.message||''}${ev.tool?` (${ev.tool} ${ev.toolStatus||''})`:''}`.trim())});
+  source.addEventListener('progress',e=>{const ev=JSON.parse(e.data);aiLogLine(aiProgressLine(ev),ev)});
 }
 const hostSig=h=>JSON.stringify(h||null);
 let hostShown=null; // 抽屉里正在显示的托管记录：没变就不重绘，以免清掉进度日志
@@ -2621,7 +2629,7 @@ function genTaskHTML(task){
     <p class="meta">${esc(task.versionName||'')} · 提交于 ${fmt(task.createdAt)}</p>
     ${genCaseLinksHTML(task)}
     ${done}${limitations}${error}
-    <div class="ai-log" data-gen-log="${task.jobId}">${(runtime?.log||[]).map(line=>`<div>${esc(line)}</div>`).join('')}</div>
+    <div class="ai-log" data-gen-log="${task.jobId}">${(runtime?.log||[]).map(line=>`<div${line?.operationId?` data-operation-id="${esc(line.operationId)}"`:''}>${esc(typeof line==='string'?line:line.text)}</div>`).join('')}</div>
     <p class="drawer-actions">${actions}</p>
   </details>`;
 }
@@ -2674,7 +2682,7 @@ function continueGenTask(task){
     task.continuable=false;saveGenTasks();renderGenDrawer();toast('已从上次会话继续生成');
   });
 }
-const genEventLine=ev=>`[${fmt(ev.createdAt)}] ${ev.stage||''} ${ev.message||''}${ev.tool?` (${ev.tool} ${ev.toolStatus||''})`:''}`.trim();
+const genEventLine=aiProgressLine;
 // 日志只存在浏览器内存里，刷新页面后已结束任务的日志框是空的。服务端在保留期内（默认 24 小时）还留着这些事件，
 // 对已结束的任务它会一次性回放全部事件并关闭连接，所以展开任务时取一次回填即可。每个任务只尝试一次。
 async function backfillGenLog(task){
@@ -2688,20 +2696,25 @@ async function backfillGenLog(task){
     for(const block of (await res.text()).split('\n\n')){
       const type=/^event: (\w+)/m.exec(block)?.[1],data=/^data: (.*)$/m.exec(block)?.[1];
       if(!data)continue;
-      if(type==='progress')genLogLine(task.jobId,genEventLine(JSON.parse(data)));
+      if(type==='progress'){const ev=JSON.parse(data);genLogLine(task.jobId,genEventLine(ev),ev)}
       else if(type==='reset')genLogLine(task.jobId,`……${JSON.parse(data).message||'更早的进度记录已丢失'}`);
     }
   }catch{} // 任务已过期（404）或服务不可达：保持空日志，不打扰
 }
-function genLogLine(jobId,msg){
+function genLogLine(jobId,msg,ev){
   const runtime=genRuntime.get(jobId)||{log:[]};
-  runtime.log.push(msg);
+  const operationID=ev?.operationId;
+  const index=operationID&&ev.toolStatus!=='started'?runtime.log.findIndex(x=>x?.operationId===operationID):-1;
+  if(index>=0)runtime.log[index]={text:msg,operationId:operationID};
+  else runtime.log.push(operationID?{text:msg,operationId:operationID}:msg);
   if(runtime.log.length>200)runtime.log.shift();
   genRuntime.set(jobId,runtime);
   const box=$(`#gen-drawer-body [data-gen-log="${jobId}"]`);
   if(!box)return;
   const atBottom=box.scrollTop+box.clientHeight>=box.scrollHeight-4;
-  const line=document.createElement('div');line.textContent=msg;box.appendChild(line);
+  let line=operationID&&ev.toolStatus!=='started'?[...box.children].find(x=>x.dataset.operationId===operationID):null;
+  if(line)line.textContent=msg;
+  else{line=document.createElement('div');line.textContent=msg;if(operationID)line.dataset.operationId=operationID;box.appendChild(line)}
   while(box.childElementCount>200)box.removeChild(box.firstChild);
   if(atBottom)box.scrollTop=box.scrollHeight;
 }
@@ -2754,7 +2767,7 @@ function ensureGenStream(task){
   source.addEventListener('progress',e=>{
     const ev=JSON.parse(e.data);
     task.stage=ev.stage;updateGenStatusChip(task);
-    genLogLine(task.jobId,genEventLine(ev));
+    genLogLine(task.jobId,genEventLine(ev),ev);
     if(GEN_TERMINAL.includes(ev.status))serviceRequest(`/api/${taskService(task)}/jobs/${task.jobId}`).then(job=>routeGenJob(task,job)).catch(()=>{});
   });
   source.addEventListener('reset',e=>{
