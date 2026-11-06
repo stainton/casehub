@@ -779,6 +779,7 @@ function renameReqDocModal(doc){showModal('重命名需求文档',`<label>标题
 const aiJobs=new Map();
 const aiJobOf=doc=>aiJobs.get(doc.ID)||null;
 const aiJobStatus=new Map(); // 需求 ID -> 最近一次任务的结束状态（succeeded/failed/cancelled），任务中心用它区分成功和失败
+const tcPlannerHistory=new Map(); // 所有设计任务，包括已导入、重试或取消的历史记录
 function clearAiJob(doc){
   const id=aiJobs.get(doc.ID);aiJobs.delete(doc.ID);aiJobStatus.delete(doc.ID);
   if(id)markTaskHandled('planner',id);
@@ -812,15 +813,20 @@ function syncAiButton(){
 function closeAiStream(jobId){aiSources.get(jobId)?.close();aiSources.delete(jobId)}
 // 两个 auto-test 服务（planner / generator）共用：它们的错误体格式相同，CaseHub 的代理在
 // 服务未配置或不可达时也返回同样的形状。
-// ---- CaseHub 的任务记录（/api/tasks）：任务 ID 不再存本地，启动时从服务端找回未处理完的任务 ----
+// ---- CaseHub 的任务记录（/api/tasks）：启动时从服务端找回运行中和已结束的历史任务 ----
 function patchTask(kind,id,body){serviceRequest(`/api/${kind}/jobs/${id}`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}).catch(()=>{})}
 const markTaskHandled=(kind,id)=>patchTask(kind,id,{handled:true});
 async function restoreServerTasks(){
   for(let i=localStorage.length-1;i>=0;i--){const key=localStorage.key(i);if(key?.startsWith('casehub-ai-job-'))localStorage.removeItem(key)} // 旧版本的本地任务 ID
-  let list;
-  try{list=(await serviceRequest('/api/tasks?active=1&kind=planner,generator,healer')).tasks||[]}catch{return}
+  let list=[];
+  for(let offset=0;;offset+=200){
+    let page;
+    try{page=(await serviceRequest(`/api/tasks?kind=planner,generator,healer,executor&limit=200&offset=${offset}`)).tasks||[]}
+    catch{if(!list.length)return;break}
+    list.push(...page);if(page.length<200)break;
+  }
   for(const t of list){ // 新的在前
-    if(t.kind==='planner'){const docId=t.subject?.startsWith('req:')?t.subject.slice(4):'';if(docId&&!aiJobs.has(docId)){
+    if(t.kind==='planner'){tcPlannerHistory.set(t.id,t);const docId=t.subject?.startsWith('req:')?t.subject.slice(4):'';if(!t.handled&&docId&&!aiJobs.has(docId)){
       aiJobs.set(docId,t.id);aiJobStatus.set(docId,t.status);
       // 页面刷新后，服务端还在跑的任务要马上算"进行中"并接上进度订阅；否则要等用户点开那份需求才被发现，
       // 在此之前一直显示成"已完成 / 待查看"，等点开后又跳回进行中。
@@ -828,6 +834,11 @@ async function restoreServerTasks(){
       if(doc&&['queued','running'].includes(t.status)){setAiActive(doc);ensureAiStream(doc,t.id)}
     }
     continue}
+    if(t.kind==='executor'){
+      const meta=t.meta||{};
+      if(!scriptRunTask(t.id))scriptRunTasks.push({...meta,jobId:t.id,caseID:meta.caseID||'历史任务',title:meta.title||'脚本执行',status:meta.status==='completed'?'completed':t.status,stage:t.stage,error:t.error,createdAt:meta.createdAt||t.createdAt});
+      continue;
+    }
     const {group,...meta}=t.meta||{};
     if(!meta.versionID||!Array.isArray(meta.caseIDs)||genTasks.some(task=>task.jobId===t.id))continue; // 还没同步过记账的任务无从展示
     if(group?.id&&!genGroup(group.id))genGroups.push(group);
@@ -836,9 +847,12 @@ async function restoreServerTasks(){
   }
   genTasks.sort((a,b)=>String(b.createdAt||'').localeCompare(String(a.createdAt||'')));
   genGroups.sort((a,b)=>String(b.createdAt||'').localeCompare(String(a.createdAt||'')));
-  // 和以前本地只保留最近 30 条一样：更早的已结束任务视为已处理。
-  const stale=genTasks.filter(task=>!isLocalGen(task)).slice(30).filter(task=>GEN_TERMINAL.includes(task.status));
-  if(stale.length){genTasks=genTasks.filter(task=>!stale.includes(task));saveGenTasks()}
+  scriptRunTasks.sort((a,b)=>String(b.createdAt||'').localeCompare(String(a.createdAt||'')));
+  for(const task of scriptRunTasks){
+    if(SCRIPT_RUN_TERMINAL.includes(task.status)&&task.status!=='succeeded')continue;
+    const script=scriptFor(task.versionID,task.caseID);
+    if(script)watchScriptRun(script,task.jobId,true);
+  }
 }
 async function serviceRequest(path,options){
   const r=await fetch(path,options),ct=r.headers.get('content-type')||'';
@@ -1276,6 +1290,7 @@ function aiStageLabel(job){
 // 都会在这里更新"AI 设计中"按钮态、维持 SSE 订阅，并在完成后等待用户确认导入。
 function routeAiJob(doc,job){
   aiJobStatus.set(doc.ID,job.status);
+  tcPlannerHistory.set(job.id,{...tcPlannerHistory.get(job.id),...job,kind:'planner',subject:`req:${doc.ID}`});
   const terminal=['succeeded','failed','cancelled'].includes(job.status);
   if(terminal)closeAiStream(job.id);
   if(!terminal){
@@ -2110,6 +2125,10 @@ const scriptRunResults=new Map();
 const SCRIPT_RUN_TERMINAL=['succeeded','failed','cancelled','completed'];
 const scriptRunTasks=[], scriptRunOpen=new Set(), scriptRunRuntime=new Map();
 const scriptRunTask=id=>scriptRunTasks.find(task=>task.jobId===id);
+function saveScriptRunTask(task){
+  const {jobId,status,stage,error,output,failure,passed,...meta}=task;
+  patchTask('executor',jobId,{meta:{...meta,...(status==='completed'?{status,passed}:{}),...(failure?{failure}:{} )}});
+}
 const activeScriptRuns=()=>scriptRunTasks.filter(task=>!SCRIPT_RUN_TERMINAL.includes(task.status));
 function scriptRunStatus(task){if(task.status==='completed')return task.passed===false?'失败（记录已保存）':'已完成';return ({queued:'排队中',running:'执行中',summarizing:'整理测试记录',succeeded:'保存测试记录中',failed:'执行失败',cancelled:'已取消'})[task.status]||task.status;}
 function openScriptRunDrawer(){ $('#run-drawer').classList.remove('hidden');renderScriptRunDrawer(); }
@@ -2133,12 +2152,11 @@ function renderScriptRunDrawer(){
     const runtime=scriptRunRuntime.get(task.jobId),active=!SCRIPT_RUN_TERMINAL.includes(task.status);
     const failure=task.error?.message||task.failure||'';
     const failureDetails=failure?`<details class="card run-failure"><summary>失败详情</summary><p>${esc(task.error?.code?`${task.error.code}：${failure}`:failure)}</p>${task.output?`<pre class="ai-log">${esc(task.output)}</pre>`:''}</details>`:'';
-    return `<details class="gen-task" data-run-panel="${task.jobId}"${scriptRunOpen.has(task.jobId)?' open':''}><summary><span class="gen-task-title">${esc(task.caseID)} · ${esc(task.title||'脚本执行')}</span><span class="gen-chip gen-status-${active?'running':task.status}">${esc(scriptRunStatus(task))}${task.stage&&active?` · ${esc(task.stage)}`:''}</span></summary><p class="meta">${esc(task.versionName||'')} · 提交于 ${fmt(task.createdAt)}${task.script?`<br>执行的${esc(scriptRunInfoText(task.script))}`:''}</p><div class="ai-log" data-run-log="${task.jobId}">${(runtime?.log||[]).map(line=>`<div>${esc(line)}</div>`).join('')}</div>${failureDetails}<p class="drawer-actions"><a class="secondary" href="/api/executor/jobs/${task.jobId}/log" download>下载完整日志</a>${task.passed===false?`<button type="button" class="secondary" data-run-report="${task.jobId}">查看测试记录</button>`:''}${active?`<button type="button" class="secondary" data-run-cancel="${task.jobId}">取消任务</button>`:`<button type="button" class="secondary" data-run-forget="${task.jobId}">移除记录</button>`}</p></details>`;
+    return `<details class="gen-task" data-run-panel="${task.jobId}"${scriptRunOpen.has(task.jobId)?' open':''}><summary><span class="gen-task-title">${esc(task.caseID)} · ${esc(task.title||'脚本执行')}</span><span class="gen-chip gen-status-${active?'running':task.status}">${esc(scriptRunStatus(task))}${task.stage&&active?` · ${esc(task.stage)}`:''}</span></summary><p class="meta">${esc(task.versionName||'')} · 提交于 ${fmt(task.createdAt)}${task.script?`<br>执行的${esc(scriptRunInfoText(task.script))}`:''}</p><div class="ai-log" data-run-log="${task.jobId}">${(runtime?.log||[]).map(line=>`<div>${esc(line)}</div>`).join('')}</div>${failureDetails}<p class="drawer-actions"><a class="secondary" href="/api/executor/jobs/${task.jobId}/log" download>下载完整日志</a>${task.passed===false?`<button type="button" class="secondary" data-run-report="${task.jobId}">查看测试记录</button>`:''}${active?`<button type="button" class="secondary" data-run-cancel="${task.jobId}">取消任务</button>`:''}</p></details>`;
   }).join(''):(scriptRunTasks.length?tcEmptyHTML('run'):'<p class="meta">还没有脚本执行任务。</p>');
   $$('#run-drawer-body [data-run-panel]').forEach(el=>el.ontoggle=()=>{el.open?scriptRunOpen.add(el.dataset.runPanel):scriptRunOpen.delete(el.dataset.runPanel)});
   $$('#run-drawer-body [data-run-cancel]').forEach(button=>button.onclick=async()=>{button.disabled=true;try{await serviceRequest(`/api/executor/jobs/${button.dataset.runCancel}`,{method:'DELETE'})}catch(error){toast(error.message,true);button.disabled=false}});
   $$('#run-drawer-body [data-run-report]').forEach(button=>button.onclick=()=>{const task=scriptRunTask(button.dataset.runReport);if(task){setAutoFocus({type:'script',versionID:task.versionID,id:task.caseID});$('#run-drawer').classList.add('hidden')}});
-  $$('#run-drawer-body [data-run-forget]').forEach(button=>button.onclick=()=>{const id=button.dataset.runForget,index=scriptRunTasks.findIndex(task=>task.jobId===id);if(index>=0)scriptRunTasks.splice(index,1);scriptRunRuntime.delete(id);scriptRunOpen.delete(id);renderScriptRunDrawer()});
 }
 function openScriptRunProgress(jobID){if(!scriptRunTask(jobID))return;scriptRunOpen.add(jobID);openScriptRunDrawer();}
 const scriptsIn=vid=>state.scripts.filter(s=>s.VersionID===vid);
@@ -2243,7 +2261,7 @@ function runScriptModal(s){
   showModal('运行脚本',`<p class="meta">脚本将在 executor 服务中运行。结束后会收集步骤截图和日志，并自动整理为可下载的 Markdown 测试记录。</p><label>被测系统 URL<input name="baseUrl" type="url" required value="${esc(defaults.baseUrl||'')}" placeholder="https://test.example.com"></label>`,async values=>{
     const job=await serviceRequest('/api/executor/jobs',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({code:s.Code,fileName:s.FileName,target:{baseUrl:values.baseUrl.trim()},title:s.Title})});
     const key=`${s.VersionID}:${s.CaseID}`,task={jobId:job.id,versionID:s.VersionID,versionName:version(s.VersionID)?.name||'',caseID:s.CaseID,title:s.Title,createdAt:job.createdAt||new Date().toISOString(),status:job.status,stage:job.stage,script:scriptRunInfo(s)};
-    scriptRunTasks.unshift(task);scriptRunOpen.add(job.id);scriptRunResults.set(key,{status:job.status,jobId:job.id,stage:job.stage});renderAutoFocus();openScriptRunDrawer();watchScriptRun(s,job.id);toast('脚本运行任务已提交');
+    scriptRunTasks.unshift(task);saveScriptRunTask(task);scriptRunOpen.add(job.id);scriptRunResults.set(key,{status:job.status,jobId:job.id,stage:job.stage});renderAutoFocus();openScriptRunDrawer();watchScriptRun(s,job.id);toast('脚本运行任务已提交');
   });
 }
 // poll=true 用轮询代替 SSE：批量执行时每个任务一条 SSE 会占满浏览器对同一来源的连接数（HTTP/1.1 最多 6 条）。
@@ -2257,7 +2275,8 @@ function bulkRunModal(versionID,caseIDs){
     for(const s of scripts){
       try{
         const job=await serviceRequest('/api/executor/jobs',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({code:s.Code,fileName:s.FileName,target:{baseUrl},title:s.Title})});
-        scriptRunTasks.unshift({jobId:job.id,versionID:s.VersionID,versionName:version(s.VersionID)?.name||'',caseID:s.CaseID,title:s.Title,createdAt:job.createdAt||new Date().toISOString(),status:job.status,stage:job.stage,script:scriptRunInfo(s)});
+        const task={jobId:job.id,versionID:s.VersionID,versionName:version(s.VersionID)?.name||'',caseID:s.CaseID,title:s.Title,createdAt:job.createdAt||new Date().toISOString(),status:job.status,stage:job.stage,script:scriptRunInfo(s)};
+        scriptRunTasks.unshift(task);saveScriptRunTask(task);
         scriptRunResults.set(`${s.VersionID}:${s.CaseID}`,{status:job.status,jobId:job.id,stage:job.stage});
         watchScriptRun(s,job.id,true);submitted++;
       }catch(e){failed++;lastError=e.message}
@@ -2272,7 +2291,7 @@ function bulkRunModal(versionID,caseIDs){
 function watchScriptRun(s,jobID,poll=false){
   let timer=null;
   const key=`${s.VersionID}:${s.CaseID}`,source=poll?{close:()=>clearInterval(timer),addEventListener(){}}:new EventSource(`/api/executor/jobs/${jobID}/events`);
-  const update=job=>{const item=scriptRunResults.get(key)||{},terminal=['succeeded','failed','cancelled'].includes(job.status);scriptRunResults.set(key,{...item,status:job.status,stage:job.stage,jobId:jobID,terminalHandled:item.terminalHandled||terminal});updateScriptRunTask({...job,id:jobID});if(autoFocus?.type==='script'&&autoFocus.versionID===s.VersionID&&autoFocus.id===s.CaseID)renderAutoFocus();if(!terminal||item.terminalHandled)return;source.close();if(job.status==='succeeded')serviceRequest(`/api/executor/jobs/${jobID}/result`).then(async result=>{scriptRunResults.set(key,{status:'completed',jobId:jobID,result,terminalHandled:true});const task=scriptRunTask(jobID);if(task){task.status='completed';task.stage='completed';task.passed=result.passed;task.output=result.output||'';task.failure=result.passed?'':'脚本断言失败；完整执行输出如下，测试记录中含有对应的步骤截图证据。';addScriptRunLog(jobID,result.passed?'脚本运行通过，测试记录已保存':'脚本运行失败，测试记录已保存');renderScriptRunDrawer()}await act('submitRecord',{VersionID:s.VersionID,CaseID:s.CaseID,Result:result.passed?'passed':'failed',Note:`> 执行的${scriptRunInfoText(scriptRunInfo(s))}\n\n${result.markdown}`,Submitted:true});if(!poll)toast(result.passed?'脚本运行通过，测试记录已保存':'脚本运行失败，测试记录已保存');if(autoFocus?.type==='script')renderAutoFocus()}).catch(e=>toast(`读取运行记录失败：${e.message}`,true));};
+  const update=job=>{const item=scriptRunResults.get(key)||{},terminal=['succeeded','failed','cancelled'].includes(job.status);scriptRunResults.set(key,{...item,status:job.status,stage:job.stage,jobId:jobID,terminalHandled:item.terminalHandled||terminal});updateScriptRunTask({...job,id:jobID});if(autoFocus?.type==='script'&&autoFocus.versionID===s.VersionID&&autoFocus.id===s.CaseID)renderAutoFocus();if(!terminal||item.terminalHandled)return;source.close();if(job.status==='succeeded')serviceRequest(`/api/executor/jobs/${jobID}/result`).then(async result=>{scriptRunResults.set(key,{status:'completed',jobId:jobID,result,terminalHandled:true});const task=scriptRunTask(jobID);if(task){task.status='completed';task.stage='completed';task.passed=result.passed;task.output=result.output||'';task.failure=result.passed?'':'脚本断言失败；完整执行输出如下，测试记录中含有对应的步骤截图证据。';addScriptRunLog(jobID,result.passed?'脚本运行通过，测试记录已保存':'脚本运行失败，测试记录已保存')}await act('submitRecord',{VersionID:s.VersionID,CaseID:s.CaseID,Result:result.passed?'passed':'failed',Note:`> 执行的${scriptRunInfoText(scriptRunInfo(s))}\n\n${result.markdown}`,Submitted:true});if(task){saveScriptRunTask(task);renderScriptRunDrawer()}if(!poll)toast(result.passed?'脚本运行通过，测试记录已保存':'脚本运行失败，测试记录已保存');if(autoFocus?.type==='script')renderAutoFocus()}).catch(e=>toast(`读取运行记录失败：${e.message}`,true));};
   source.addEventListener('snapshot',e=>update(JSON.parse(e.data)));source.addEventListener('progress',e=>{const event=JSON.parse(e.data);update({...event,id:jobID});if(['succeeded','failed','cancelled'].includes(event.status))serviceRequest(`/api/executor/jobs/${jobID}`).then(update)});source.onerror=()=>{};
   if(poll)timer=setInterval(async()=>{try{update(await serviceRequest(`/api/executor/jobs/${jobID}`))}catch(e){if(e.status===404)source.close()}},3000);
 }
@@ -2412,18 +2431,14 @@ function loadGenTasks(){try{const x=JSON.parse(localStorage.getItem(GEN_TASKS_KE
 const genSynced=new Map(); // jobId -> {kind, meta:最近一次同步到服务端的 meta JSON}
 function genMeta(task){const {status,stage,error,continuable,diagnostics,jobId,...meta}=task,group=meta.groupID&&genGroup(meta.groupID);return group?{...meta,group}:meta}
 function saveGenTasks(){
-  try{const local=genTasks.filter(isLocalGen).slice(0,30);localStorage.setItem(GEN_TASKS_KEY,JSON.stringify(local));localStorage.setItem(GEN_GROUPS_KEY,JSON.stringify(genGroups.filter(group=>local.some(task=>task.groupID===group.id)).slice(0,20)))}catch{}
-  const present=new Set();
+  try{const local=genTasks.filter(isLocalGen);localStorage.setItem(GEN_TASKS_KEY,JSON.stringify(local));localStorage.setItem(GEN_GROUPS_KEY,JSON.stringify(genGroups.filter(group=>local.some(task=>task.groupID===group.id))))}catch{}
   for(const task of genTasks){
     if(isLocalGen(task))continue;
-    present.add(task.jobId);
     const meta=JSON.stringify(genMeta(task)),kind=taskService(task);
     if(genSynced.get(task.jobId)?.meta===meta)continue;
     genSynced.set(task.jobId,{kind,meta});
     patchTask(kind,task.jobId,{meta:JSON.parse(meta)});
   }
-  // 从列表里移除的任务（删除、转入分组后清理）在服务端标记为已处理，不再出现在任务列表里。
-  for(const [id,{kind}] of genSynced)if(!present.has(id)){genSynced.delete(id);markTaskHandled(kind,id)}
 }
 function loadGenGroups(){try{const x=JSON.parse(localStorage.getItem(GEN_GROUPS_KEY));return Array.isArray(x)?x:[]}catch{return []}}
 const genGroup=id=>genGroups.find(group=>group.id===id);
@@ -2633,7 +2648,7 @@ function genTaskHTML(task){
   const limitations=task.limitations?.length?`<div class="card"><h3>${taskService(task)==='healer'?'未完成修复':'未生成的用例'} <small class="meta">按风险从高到低</small></h3>${aiRiskListHTML(task.limitations,l=>esc(l.summary))}</div>`:'';
   const error=task.error?`<div class="card"><h3>失败原因</h3><p class="meta" style="white-space:pre-wrap">${esc(task.error.code||'')}${task.error.code?'：':''}${esc(task.error.message||'任务未返回详细原因，请查看下方运行日志')}</p></div>`:'';
   const actions=GEN_TERMINAL.includes(task.status)
-    ?`<button type="button" class="secondary" data-gen-forget="${task.jobId}">移除记录</button>${taskService(task)==='generator'&&task.status==='failed'&&task.continuable&&task.error?.code==='JOB_TIMEOUT'?`<button type="button" data-gen-continue="${task.jobId}">继续生成</button>`:''}${task.diagnostics?`<a class="secondary" href="/api/${taskService(task)}/jobs/${task.jobId}/diagnostics" download>下载诊断包</a>`:''}${taskService(task)==='healer'&&task.status==='succeeded'?`<button type="button" class="secondary" data-heal-download="${task.jobId}">下载修复结果</button>`:''}${task.status==='succeeded'&&(!task.saved||task.saved.failed)?`<button type="button" data-gen-import="${task.jobId}">重试保存</button>`:''}${task.status!=='succeeded'||task.saved?.blocked||task.saved?.failed?`<button type="button" data-gen-intervene="${task.jobId}">${taskService(task)==='healer'?'补充说明并再次修复':'故障排查并重新生成'}</button>`:''}`
+    ?`${taskService(task)==='generator'&&task.status==='failed'&&task.continuable&&task.error?.code==='JOB_TIMEOUT'?`<button type="button" data-gen-continue="${task.jobId}">继续生成</button>`:''}${task.diagnostics?`<a class="secondary" href="/api/${taskService(task)}/jobs/${task.jobId}/diagnostics" download>下载诊断包</a>`:''}${taskService(task)==='healer'&&task.status==='succeeded'?`<button type="button" class="secondary" data-heal-download="${task.jobId}">下载修复结果</button>`:''}${task.status==='succeeded'&&(!task.saved||task.saved.failed)?`<button type="button" data-gen-import="${task.jobId}">重试保存</button>`:''}${task.status!=='succeeded'||task.saved?.blocked||task.saved?.failed?`<button type="button" data-gen-intervene="${task.jobId}">${taskService(task)==='healer'?'补充说明并再次修复':'故障排查并重新生成'}</button>`:''}`
     :`<button type="button" class="secondary" data-gen-cancel="${task.jobId}">取消任务</button>`;
   return `<details class="gen-task" data-gen-panel="${task.jobId}"${genOpen.has(task.jobId)?' open':''}>
     <summary><span class="gen-task-title">${esc(task.label)}</span><span class="gen-chip">${genCaseCount(task)} 条</span><span class="gen-chip gen-status-${GEN_TERMINAL.includes(task.status)?task.status:'running'}" data-gen-status="${task.jobId}">${genStatusText(task)}</span></summary>
@@ -2669,19 +2684,13 @@ function bindGenTasks(){
   $$('#gen-drawer-body [data-gen-import]').forEach(b=>b.onclick=()=>{const t=genTask(b.dataset.genImport);if(t)importGenResult(t)});
   $$('#gen-drawer-body [data-gen-intervene]').forEach(b=>b.onclick=()=>{const t=genTask(b.dataset.genIntervene);if(t)interveneGenTask(t)});
   $$('#gen-drawer-body [data-gen-continue]').forEach(b=>b.onclick=()=>{const t=genTask(b.dataset.genContinue);if(t)continueGenTask(t)});
-  $$('#gen-drawer-body [data-gen-forget]').forEach(b=>b.onclick=()=>{
-    const id=b.dataset.genForget;
-    closeGenStream(id);
-    genTasks=genTasks.filter(t=>t.jobId!==id);genGroups=genGroups.filter(group=>genTasks.some(task=>task.groupID===group.id));saveGenTasks();genRuntime.delete(id);genOpen.delete(id);
-    renderGenDrawer();
-  });
 }
 function interveneGenTask(task){
   const saved=task.input||genValues(taskService(task));
   if(taskService(task)==='healer'&&page!=='automation'){setPage('automation');setAutoFocus({type:'script',versionID:task.versionID,id:task.caseIDs[0]})}
   showModal(taskService(task)==='healer'?'修复故障排查':'生成故障排查',`<p class="meta">会为 ${esc(task.caseIDs.join('、'))} 新建独立任务；已生成的其他用例不会受影响。请补充故障现象、可用路径或账号条件，${taskService(task)==='healer'?'Healer 会基于已有脚本继续排查。':'Generator 会据此重新探索。'}</p><label>排查提示词<textarea name="instructions" required placeholder="例如：登录后需先进入素材管理；上传按钮在右侧工具栏；上次失败时显示的错误是…">${esc(saved.instructions||'')}</textarea></label><label>测试账号 · 用户名（可选）<input name="testAccount" value="${esc(saved.testAccount||'')}"></label><label>测试账号 · 密码（如需重新填写）<input name="testSecret" type="text" class="fake-password" autocomplete="off"></label>`,async values=>{const next={...saved,...values,assetIds:saved.assetIds||[],caseTimeoutMinutes:saved.caseTimeoutMinutes||(taskService(task)==='healer'?60:40)};await submitGenJob(task.versionID,task.caseIDs,`${task.label} · 故障排查`,next,task.groupID||'',taskService(task));
-    // 批量任务里的重试直接替换原来失败的子任务，状态就在父任务里刷新，不会掉到批量任务下方。
-    if(task.groupID){closeGenStream(task.jobId);genTasks=genTasks.filter(t=>t.jobId!==task.jobId);genRuntime.delete(task.jobId);genOpen.delete(task.jobId);saveGenTasks();genOpen.add(task.groupID)}
+    // 批量任务里的重试留在原分组，同时保留失败的旧任务供追溯。
+    if(task.groupID)genOpen.add(task.groupID);
     renderGenDrawer();toast('已提交故障排查任务')});
 }
 function continueGenTask(task){
@@ -2851,7 +2860,8 @@ const hostUnfinished=h=>h.Stage!=='done';
 const tcPlannerDocs=()=>(state?.reqDocs||[]).filter(doc=>aiJobOf(doc)||isAiActive(doc));
 let tcLogTasks=[],tcLogHasMore=true;
 const tcActiveOf={plan:()=>tcPlannerDocs().filter(isAiActive).length,host:()=>tcHostings().filter(hostUnfinished).length,gen:()=>genRunning().length,run:()=>activeScriptRuns().length,logs:()=>tcLogTasks.filter(t=>!GEN_TERMINAL.includes(t.status)).length};
-const tcTotalOf={plan:()=>tcPlannerDocs().length,host:()=>tcHostings().length,gen:()=>genTasks.length,run:()=>scriptRunTasks.length,logs:()=>tcLogTasks.length};
+const tcPlannerDoneTasks=()=>[...tcPlannerHistory.values()].filter(t=>t.subject?.startsWith('req:')&&GEN_TERMINAL.includes(t.status)).sort((a,b)=>String(b.createdAt||'').localeCompare(String(a.createdAt||'')));
+const tcTotalOf={plan:()=>tcActiveOf.plan()+tcPlannerDoneTasks().length,host:()=>tcHostings().length,gen:()=>genTasks.length,run:()=>scriptRunTasks.length,logs:()=>tcLogTasks.length};
 const tcFilter={plan:'active',host:'active',gen:'active',run:'active',logs:'done'};
 const tcShown=(key,active)=>tcFilter[key]==='active'?active:!active;
 const tcEmptyHTML=key=>`<p class="meta">${tcFilter[key]==='active'?'没有进行中的任务。':'没有已完成的任务。'}</p>`;
@@ -2986,9 +2996,10 @@ function tcShowPlanner(){
   $('#ai-drawer .panel-head strong').textContent='AI 设计';
   $('#ai-drawer-doc').textContent='';
   $('#ai-drawer').classList.remove('hidden');
-  const all=tcPlannerDocs(),docs=all.filter(doc=>tcShown('plan',isAiActive(doc)));
-  $('#ai-drawer-body').innerHTML=`<div class="tc-list">${docs.length?docs.map(doc=>`<button type="button" class="tc-row" data-tc-plan="${esc(doc.ID)}"><span>${esc(doc.Title)}</span>${aiRowStatusHTML(doc)}</button>`).join(''):(all.length?tcEmptyHTML('plan'):'<p class="meta">暂无设计任务。在「需求管理」里打开需求文档，点「AI 设计」发起。</p>')}</div>`;
+  const active=tcFilter.plan==='active',docs=tcPlannerDocs().filter(isAiActive),done=tcPlannerDoneTasks();
+  $('#ai-drawer-body').innerHTML=`<div class="tc-list">${active?docs.map(doc=>`<button type="button" class="tc-row" data-tc-plan="${esc(doc.ID)}"><span>${esc(doc.Title)}</span>${aiRowStatusHTML(doc)}</button>`).join(''):done.map(t=>{const doc=state.reqDocs.find(d=>d.ID===t.subject.slice(4));return `<button type="button" class="tc-row" data-tc-plan-job="${esc(t.id)}"><span>${esc(doc?.Title||t.subject)}<small class="meta">${fmt(t.createdAt)}</small></span><small>${esc(({succeeded:'已完成',failed:'失败',cancelled:'已取消'})[t.status]||t.status)}</small></button>`}).join('')}${(active?docs:done).length?'':tcEmptyHTML('plan')}</div>`;
   $$('#ai-drawer-body [data-tc-plan]').forEach(b=>b.onclick=()=>{const doc=state.reqDocs.find(d=>d.ID===b.dataset.tcPlan);if(doc)tcExpand(b,()=>openAiDrawer(doc))});
+  $$('#ai-drawer-body [data-tc-plan-job]').forEach(b=>b.onclick=()=>{const task=tcPlannerHistory.get(b.dataset.tcPlanJob);if(!task)return;const doc=state.reqDocs.find(d=>d.ID===task.subject.slice(4));if(doc&&aiJobOf(doc)===task.id&&!task.handled)tcExpand(b,()=>openAiDrawer(doc));else tcExpand(b,()=>tcShowTaskLog(task))});
   tcAttach('plan');
 }
 // 任何入口打开这三个抽屉，都带上标签，方便互相切换。
