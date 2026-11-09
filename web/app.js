@@ -1011,12 +1011,13 @@ function renderAgentSettings(agent){
   if(form){
   form.oninput=()=>{agentSettingsDrafts.set(agent.id,Object.fromEntries(new FormData(form)));$('#agent-settings-status').textContent='有未保存的修改'};
   $('#agent-settings-reset').onclick=()=>{
-    agentSettingsDrafts.set(agent.id,Object.fromEntries(agent.settingsFields.map(field=>[field.name,field.name==='timeoutMinutes'?(agent.id==='playwright'?AI_DEFAULT_TIMEOUT_MIN:15):''])));
+    agentSettingsDrafts.set(agent.id,Object.fromEntries(agent.settingsFields.map(field=>[field.name,field.name==='timeoutMinutes'?(agent.id==='playwright'?AI_DEFAULT_TIMEOUT_MIN:15):field.name==='caseTimeoutMinutes'?40:''])));
     renderAgentSettings(agent);$('#agent-settings-status').textContent='已恢复初始值，点击保存后生效';
   };
   form.onsubmit=async e=>{
     e.preventDefault();if(!form.reportValidity())return;
     const values=Object.fromEntries(new FormData(form));values.timeoutMinutes=Number(values.timeoutMinutes);
+    if(agent.id==='generator')values.caseTimeoutMinutes=Number(values.caseTimeoutMinutes);
     const button=form.querySelector('[type="submit"]'),status=form.querySelector('[role="status"]');button.disabled=true;
     const generation=agentSettingsGeneration;
     try{

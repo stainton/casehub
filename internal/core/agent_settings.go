@@ -16,11 +16,12 @@ import (
 // keeps no copy that must be kept in sync: a rebuilt container, a rolled-back image or a hand-edited
 // file all converge on what CaseHub holds the next time a task starts.
 type AgentSettings struct {
-	BaseURL        string `json:"baseUrl"`
-	Instructions   string `json:"instructions"`
-	TestAccount    string `json:"testAccount"`
-	TestSecret     string `json:"testSecret"`
-	TimeoutMinutes int    `json:"timeoutMinutes"`
+	BaseURL            string `json:"baseUrl"`
+	Instructions       string `json:"instructions"`
+	TestAccount        string `json:"testAccount"`
+	TestSecret         string `json:"testSecret"`
+	TimeoutMinutes     int    `json:"timeoutMinutes"`
+	CaseTimeoutMinutes int    `json:"caseTimeoutMinutes,omitempty"`
 }
 
 type AgentConfig struct {
@@ -88,10 +89,13 @@ func (a AgentSettings) WithDefaults(id string) AgentSettings {
 			a.TimeoutMinutes = 15
 		}
 	}
+	if id == "generator" && a.CaseTimeoutMinutes == 0 {
+		a.CaseTimeoutMinutes = 40
+	}
 	return a
 }
 
-func validateAgentDefaults(a AgentSettings) (AgentSettings, error) {
+func validateAgentDefaults(id string, a AgentSettings) (AgentSettings, error) {
 	a.BaseURL = strings.TrimSpace(a.BaseURL)
 	if a.BaseURL != "" {
 		u, err := url.Parse(a.BaseURL)
@@ -101,6 +105,13 @@ func validateAgentDefaults(a AgentSettings) (AgentSettings, error) {
 	}
 	if a.TimeoutMinutes < 1 || a.TimeoutMinutes > 240 {
 		return a, errors.New("任务超时时间需为 1–240 分钟的整数")
+	}
+	if id == "generator" {
+		if a.CaseTimeoutMinutes < 1 || a.CaseTimeoutMinutes > 60 {
+			return a, errors.New("单用例生成时长需为 1–60 分钟的整数")
+		}
+	} else if a.CaseTimeoutMinutes != 0 {
+		return a, errors.New("此 agent 不支持单用例生成时长")
 	}
 	if len(a.Instructions) > 200000 || len(a.TestAccount) > 2000 || len(a.BaseURL) > 4096 || len(a.TestSecret) > 8192 {
 		return a, errors.New("配置字段过长")
@@ -151,7 +162,7 @@ func (s *Service) SaveAgentDefaults(ctx context.Context, id string, a AgentSetti
 	if !KnownAgent(id) {
 		return AgentConfig{}, errors.New("未知 agent")
 	}
-	a, err := validateAgentDefaults(a)
+	a, err := validateAgentDefaults(id, a)
 	if err != nil {
 		return AgentConfig{}, err
 	}

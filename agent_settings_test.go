@@ -34,8 +34,20 @@ func TestAgentSettingsPersistAndValidate(t *testing.T) {
 		t.Fatal(out.Body.String())
 	}
 	// Each agent is configured on its own; the generator does not inherit the planner's defaults.
-	if out = send("GET", "/api/agent-settings/generator", ""); out.Code != 200 || strings.Contains(out.Body.String(), "target.test") || !strings.Contains(out.Body.String(), `"timeoutMinutes":15`) {
+	if out = send("GET", "/api/agent-settings/generator", ""); out.Code != 200 || strings.Contains(out.Body.String(), "target.test") || !strings.Contains(out.Body.String(), `"timeoutMinutes":15`) || !strings.Contains(out.Body.String(), `"caseTimeoutMinutes":40`) {
 		t.Fatal(out.Body.String())
+	}
+	generated := send("PUT", "/api/agent-settings/generator", `{"baseUrl":"https://generator.test","timeoutMinutes":15,"caseTimeoutMinutes":35}`)
+	if generated.Code != 200 {
+		t.Fatalf("save generator defaults: %s", generated.Body.String())
+	}
+	if out = send("GET", "/api/agent-settings/generator", ""); out.Code != 200 || !strings.Contains(out.Body.String(), `"caseTimeoutMinutes":35`) {
+		t.Fatalf("generator defaults not persisted: %s", out.Body.String())
+	}
+	for _, body := range []string{`{"timeoutMinutes":15,"caseTimeoutMinutes":0}`, `{"timeoutMinutes":15,"caseTimeoutMinutes":61}`, `{"timeoutMinutes":15,"caseTimeoutMinutes":"40"}`} {
+		if out = send("PUT", "/api/agent-settings/generator", body); out.Code != 400 {
+			t.Fatalf("invalid generator defaults accepted: %s", body)
+		}
 	}
 	for _, body := range []string{`{"timeoutMinutes":0}`, `{"timeoutMinutes":241}`, `{"timeoutMinutes":15,"baseUrl":"file:///tmp/key"}`} {
 		if send("PUT", "/api/agent-settings/playwright", body).Code != 400 {
