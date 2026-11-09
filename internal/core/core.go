@@ -350,6 +350,12 @@ type RiskNote struct {
 	Risk, Summary string
 }
 
+// FindingReview records a person's response to one agent finding on a specific task or hosting.
+type FindingReview struct {
+	SourceID, Kind, Text, Decision, Guidance string
+	UpdatedAt time.Time
+}
+
 type State struct {
 	// AgentSettings held the agents' business defaults before they moved into their own table.
 	// Read once per agent to carry an existing deployment over, never written again.
@@ -364,6 +370,7 @@ type State struct {
 	ReqFolders     []ReqFolder              `json:"reqFolders"`
 	ReqDocs        []ReqDoc                 `json:"reqDocs"`
 	Issues         []Issue                  `json:"issues"`
+	FindingReviews []FindingReview          `json:"findingReviews"`
 	PendingFolders []PendingFolder          `json:"pendingFolders"`
 	PendingCases   []PendingCase            `json:"pendingCases"`
 	Scripts        []Script                 `json:"scripts"`
@@ -394,6 +401,7 @@ type Action struct {
 	// IDPrefix (REQ-MODULE-CATEGORY) numbers a created pending case TC-<prefix>-NNN whatever folder it goes in.
 	IDPrefix                          string
 	IssueID, RequirementID, RootCause string
+	FindingSource, FindingKind, FindingText, FindingDecision, FindingGuidance string
 	ExplorationNotes                  string
 	Review                            string
 	TargetFolderID                    string
@@ -548,6 +556,7 @@ func Seed() State {
 		Scripts:        []Script{},
 		ScriptVersions: []ScriptVersion{},
 		Issues:         []Issue{},
+		FindingReviews: []FindingReview{},
 	}
 	s.Versions = []Version{{ID: "main", Name: "主线", Mainline: true, BaseMainRevision: 1, CreatedBy: "system", CreatedAt: t}}
 	s.Folders = []Folder{{ID: "root", VersionID: "main", Name: "全部用例", CreatedBy: "system", CreatedAt: t}, {ID: "auth", VersionID: "main", ParentID: "root", Name: "登录与认证", CreatedBy: "system", CreatedAt: t}}
@@ -593,6 +602,9 @@ func normalizeState(state *State) {
 	}
 	if state.Issues == nil {
 		state.Issues = []Issue{}
+	}
+	if state.FindingReviews == nil {
+		state.FindingReviews = []FindingReview{}
 	}
 	if state.PendingFolders == nil {
 		state.PendingFolders = []PendingFolder{}
@@ -739,6 +751,8 @@ func (s *Service) Apply(ctx context.Context, a Action) (Result, error) {
 		err = reportIssues(&st, a)
 	case "editIssue":
 		err = editIssue(&st, a)
+	case "reviewTaskFinding":
+		err = reviewTaskFinding(&st, a)
 	case "deleteIssue":
 		err = deleteIssue(&st, a)
 	case "createPendingFolder":
@@ -2476,6 +2490,25 @@ func createIssue(s *State, a Action) error {
 	}
 	t := now()
 	s.Issues = append(s.Issues, Issue{ID: nextIssueID(s), RequirementID: a.RequirementID, Title: strings.TrimSpace(a.Title), Description: a.Description, RootCause: a.RootCause, Resolved: a.Resolved && !a.NotIssue, NotIssue: a.NotIssue, CreatedBy: a.Author, UpdatedBy: a.Author, CreatedAt: t, UpdatedAt: t})
+	return nil
+}
+
+func reviewTaskFinding(s *State, a Action) error {
+	source, kind, text, decision, guidance := strings.TrimSpace(a.FindingSource), strings.TrimSpace(a.FindingKind), strings.TrimSpace(a.FindingText), strings.TrimSpace(a.FindingDecision), strings.TrimSpace(a.FindingGuidance)
+	if source == "" || len(source) > 200 || (kind != "issue" && kind != "limitation") || text == "" || len(text) > 2000 || guidance == "" || len(guidance) > 4000 {
+		return errors.New("问题处理意见缺少来源、内容或说明，或内容过长")
+	}
+	if decision != "solution" && decision != "not_issue" && decision != "workaround" {
+		return errors.New("处理方式必须是解决方案、非问题或规避手段")
+	}
+	for i := range s.FindingReviews {
+		r := &s.FindingReviews[i]
+		if r.SourceID == source && r.Kind == kind && r.Text == text {
+			r.Decision, r.Guidance, r.UpdatedAt = decision, guidance, now()
+			return nil
+		}
+	}
+	s.FindingReviews = append(s.FindingReviews, FindingReview{SourceID: source, Kind: kind, Text: text, Decision: decision, Guidance: guidance, UpdatedAt: now()})
 	return nil
 }
 

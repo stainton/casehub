@@ -21,7 +21,7 @@ const esc=s=>String(s??'').replace(/[&<>'"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&
 const fmt=s=>s?new Date(s).toLocaleString():'—';
 const version=id=>state.versions.find(v=>v.id===id), folders=id=>state.folders.filter(f=>f.VersionID===id), cases=id=>state.cases.filter(c=>c.VersionID===id);
 async function request(path,options){let r=await fetch(path,options),x;try{x=await r.json()}catch(err){if(r.ok)throw err;const e=Error(`服务返回了无法解析的响应（HTTP ${r.status}），可能被网关拦截或服务异常`);e.status=r.status;throw e}if(!r.ok){let e=Error(x.error||'请求失败');e.status=r.status;e.conflicts=x.conflicts;throw e}return x}
-function normalizeState(s){s=s||{};for(const key of ['versions','folders','cases','histories','records','tasks','reqFolders','reqDocs','issues','knowledgeFolders','knowledgeDocs','pendingFolders','pendingCases','scripts','scriptVersions','productExperiences','hostings'])if(!Array.isArray(s[key]))s[key]=[];return s}
+function normalizeState(s){s=s||{};for(const key of ['versions','folders','cases','histories','records','tasks','reqFolders','reqDocs','issues','findingReviews','knowledgeFolders','knowledgeDocs','pendingFolders','pendingCases','scripts','scriptVersions','productExperiences','hostings'])if(!Array.isArray(s[key]))s[key]=[];return s}
 async function refresh(){state=normalizeState(await request('/api/state'));let changed=false;state.folders.filter(f=>f.VersionID==='main').forEach(f=>{const key=`main:${f.ID}`;if(!openMainlineFolders.has(key)&&!closedFolders.has(key)){closedFolders.add(key);changed=true}});if(changed)saveClosedFolders();render();}
 async function act(type,data={},retry=false){try{let out=await request('/api/action',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({Type:type,Author:'本地用户',...data})});state=normalizeState(out.state);if(out.warnings?.length)toast(out.warnings.join('；'));render();return out}catch(e){if(e.status===409&&type.startsWith('merge')){alert(`${e.message}\n冲突用例：${(e.conflicts||[]).join(', ')}\n请拉取主线，然后打开冲突用例编辑并确认人工处理。`)}else if(e.status===409&&!retry&&confirm(`${e.message}\n冲突用例：${(e.conflicts||[]).join(', ')}\n是否以当前编辑内容作为人工解决结果？`))return act(type,{...data,Force:true},true);toast(e.message,true);throw e}}
 function render(){ renderVersions();renderTasks();renderFocus();if(recordTask)$('#edit-case')?.remove();updateBulk();if(location.hash)renderHistoryRoute();renderReqTree();renderReviewTree();renderScriptTree();renderAutoFocus();renderIssueList();renderIssueFocus();renderKnowledgeList();renderKnowledgeFocus(); }
@@ -777,6 +777,7 @@ function renameReqDocModal(doc){showModal('重命名需求文档',`<label>标题
 // 每份需求最近一次还没处理完的 planner 任务：任务归 CaseHub 所有（重启、换浏览器都还在），这里只是它的内存索引，
 // 启动时由 restoreServerTasks 从 /api/tasks 填回。处理完（导入、重试、重新开始、取消）即在服务端标记为已处理。
 const aiJobs=new Map();
+const aiReviewSource=new Map();
 const aiJobOf=doc=>aiJobs.get(doc.ID)||null;
 const aiJobStatus=new Map(); // 需求 ID -> 最近一次任务的结束状态（succeeded/failed/cancelled），任务中心用它区分成功和失败
 const tcPlannerHistory=new Map(); // 所有设计任务，包括已导入、重试或取消的历史记录
@@ -863,6 +864,7 @@ async function serviceRequest(path,options){
 function isAiDrawerOpen(doc){return aiDoc?.ID===doc.ID&&!$('#ai-drawer').classList.contains('hidden')}
 let aiDrawerMode='design'; // 'design'：AI 设计；'host'：AI 托管
 function openAiDrawer(doc,mode='design'){
+  if(mode==='host')hostReviewSource='';
   aiDoc=doc;aiDrawerMode=mode;hostCase=null;closeHostLog();
   $('#ai-drawer .panel-head strong').textContent=mode==='host'?'AI 托管':'AI 设计';
   $('#ai-drawer-doc').textContent=`${doc.ID} · ${doc.Title}`;
@@ -1193,10 +1195,12 @@ async function startAiJob(doc,values,caseCount,code,timeoutMinutes,{continueFrom
     if(reqFocus?.type==='doc'&&reqFocus.id===doc.ID&&$('#req-doc-code'))$('#req-doc-code').textContent=code;
   }
   const {requirements,instructions,explorationNotes,constraints}=aiRequirementPayload(doc,values,code),productExperience=productExperienceFor(values.baseUrl);
-  const payload={requirements,target:{baseUrl:values.baseUrl},context:{instructions,...(constraints?{constraints}:{}),...(explorationNotes?{explorationNotes}:{}),...(productExperience?{productExperience}:{}),...(values.assetIds?.length?{assetIds:values.assetIds}:{})},caseCount,timeoutMs:timeoutMinutes*60000,
+  const retryInstructions=withFindingGuidance(instructions,aiReviewSource.get(doc.ID));
+  const payload={requirements,target:{baseUrl:values.baseUrl},context:{instructions:retryInstructions,...(constraints?{constraints}:{}),...(explorationNotes?{explorationNotes}:{}),...(productExperience?{productExperience}:{}),...(values.assetIds?.length?{assetIds:values.assetIds}:{})},caseCount,timeoutMs:timeoutMinutes*60000,
     ...(continueFrom?{continueFrom}:{}),casehubTask:{subject:`req:${doc.ID}`}};
   if(values.testAccount||values.testSecret)payload.context.testData={username:values.testAccount||'',password:values.testSecret||''};
   const job=await serviceRequest('/api/planner/jobs',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+  aiReviewSource.delete(doc.ID);
   // 提交过的表单留着（新对象，作废仍在跑的评估），失败后重试/继续可以直接用。
   aiEstimates.set(doc.ID,{status:'done',count:caseCount,code,rationale,values});
   saveAiForm(doc,values,caseCount,code);
@@ -1420,19 +1424,40 @@ function aiRiskListHTML(list,textHTML){
   items.sort((a,b)=>rank(a.risk)-rank(b.risk)||a.i-b.i);
   return `<ul class="ai-risk-list">${items.map(l=>`<li>${l.risk in AI_RISKS?`<span class="risk-tag risk-${l.risk}">${AI_RISKS[l.risk]}</span>`:''}<span>${l.html}</span></li>`).join('')}</ul>`;
 }
+const findingText=(kind,item)=>typeof item==='string'?item:kind==='issue'?`${item.scenario}：${item.symptom}`:item.summary;
+const findingReview=(source,kind,text)=>state.findingReviews.find(x=>x.SourceID===source&&x.Kind===kind&&x.Text===text);
+function findingListHTML(source,kind,items){
+  return `<ul class="ai-risk-list">${(items||[]).map((item,index)=>{const text=findingText(kind,item),review=findingReview(source,kind,text);return `<li><button type="button" class="secondary" data-finding-kind="${kind}" data-finding-index="${index}" title="记录处理意见并用于重试">${esc(text)}</button>${review?` <small class="meta">已标记：${esc(({solution:'解决方案',not_issue:'非问题',workaround:'规避手段'})[review.Decision]||review.Decision)}</small>`:''}</li>`}).join('')}</ul>`;
+}
+function bindFindingReviews(source,groups,redraw,root=$('#ai-drawer-body')){
+  root.querySelectorAll('[data-finding-kind]').forEach(button=>button.onclick=()=>{
+    const kind=button.dataset.findingKind,item=groups[kind]?.[Number(button.dataset.findingIndex)];if(!item)return;
+    const text=findingText(kind,item),previous=findingReview(source,kind,text);
+    showModal('处理发现的问题',`<p class="meta">${esc(text)}</p><label>处理方式<select name="decision"><option value="solution"${previous?.Decision==='solution'?' selected':''}>提供解决方案</option><option value="not_issue"${previous?.Decision==='not_issue'?' selected':''}>并非问题</option><option value="workaround"${previous?.Decision==='workaround'?' selected':''}>提供规避手段</option></select></label><label>说明<textarea name="guidance" required rows="5" maxlength="4000" placeholder="写明依据、操作方法或可验证的替代路径">${esc(previous?.Guidance||'')}</textarea></label>`,async values=>{
+      await act('reviewTaskFinding',{FindingSource:source,FindingKind:kind,FindingText:text,FindingDecision:values.decision,FindingGuidance:values.guidance.trim()});redraw();
+    });
+  });
+}
+function findingGuidance(source){
+  const reviews=state.findingReviews.filter(x=>x.SourceID===source);
+  if(!reviews.length)return '';
+  return `人工逐条处理意见（请据此重新验证，不得直接忽略用例断言）：\n${reviews.map(x=>`- ${x.Kind==='issue'?'发现的问题':'未验证/受限范围'}「${x.Text}」；${({solution:'解决方案',not_issue:'认为非问题',workaround:'规避手段'})[x.Decision]}：${x.Guidance}`).join('\n')}`;
+}
+const withFindingGuidance=(instructions,source)=>[String(instructions||'').split('\n\n人工逐条处理意见（请据此重新验证，不得直接忽略用例断言）：')[0].trim(),findingGuidance(source)].filter(Boolean).join('\n\n');
 function renderAiImportConfirmation(doc,job,result){
   const planned=result.cases||[];
-  const issues=result.issues?.length?`<div class="card"><h3>探索中发现的问题 <small class="meta">按风险从高到低</small></h3>${aiRiskListHTML(result.issues,i=>`<b>${esc(i.scenario)}</b>：${esc(i.symptom)}`)}</div>`:'';
-  const limitations=result.limitations?.length?`<div class="card"><h3>未验证/受限范围 <small class="meta">按风险从高到低</small></h3>${aiRiskListHTML(result.limitations,l=>esc(l.summary))}</div>`:'';
+  const issues=result.issues?.length?`<div class="card"><h3>探索中发现的问题</h3>${findingListHTML(job.id,'issue',result.issues)}</div>`:'';
+  const limitations=result.limitations?.length?`<div class="card"><h3>未验证/受限范围</h3>${findingListHTML(job.id,'limitation',result.limitations)}</div>`:'';
   const casesHTML=planned.length?`<div class="card"><h3>待确认用例 <small class="meta">${planned.length} 条</small></h3><ol class="ai-result-cases">${planned.map(c=>`<li><b>${esc(c.name)}</b>${c.priority?` <small class="meta">${esc(c.priority)}</small>`:''}</li>`).join('')}</ol></div>`:'<p class="meta">设计结果中没有可导入的用例。</p>';
-  $('#ai-drawer-body').innerHTML=`<div class="card meta-grid"><span>状态 <b>设计已完成</b></span><span>待确认用例 <b>${planned.length}</b></span></div>${casesHTML}${issues}${limitations}<p class="meta">确认后才会创建目录并放入“用例评审”。</p><p class="drawer-actions"><button type="button" class="secondary" id="ai-restart">重新设计</button><button type="button" id="ai-confirm-import"${planned.length?'':' disabled'}>确认放入用例评审</button></p>`;
-  $('#ai-restart').onclick=()=>{clearAiJob(doc);renderAiForm(doc)};
+  $('#ai-drawer-body').innerHTML=`<div class="card meta-grid"><span>状态 <b>设计已完成</b></span><span>待确认用例 <b>${planned.length}</b></span></div>${casesHTML}${issues}${limitations}<p class="meta">点击具体问题可记录处理意见；重新设计时将一并带入。</p><p class="drawer-actions"><button type="button" class="secondary" id="ai-restart">带处理意见重新设计</button><button type="button" id="ai-confirm-import"${planned.length?'':' disabled'}>确认放入用例评审</button></p>`;
+  bindFindingReviews(job.id,{issue:result.issues,limitation:result.limitations},()=>renderAiImportConfirmation(doc,job,result));
+  $('#ai-restart').onclick=()=>{aiReviewSource.set(doc.ID,job.id);clearAiJob(doc);renderAiForm(doc)};
   $('#ai-confirm-import').onclick=async e=>{
     const button=e.currentTarget;button.disabled=true;
     try{
       await importAiResult(doc,result);
       await reportDefects((result.issues||[]).map(i=>({RequirementID:doc.ID,Title:`[${RISK_LABEL[i.risk]||'未评级'}] ${i.scenario}`,Description:`**场景**：${i.scenario}\n\n**现象**：${i.symptom}\n\n来源：用例设计探索（风险 ${RISK_LABEL[i.risk]||'未评级'}）`,Source:`planner:${doc.ID}:${i.scenario}`})));
-      const summary={count:planned.length,limitations:result.limitations||[],issues:result.issues||[]};
+      const summary={count:planned.length,limitations:result.limitations||[],issues:result.issues||[],jobId:job.id};
       localStorage.setItem(aiResultKey(doc),JSON.stringify(summary));
       clearAiJob(doc);
       toast(`已导入 ${planned.length} 条用例到“用例评审”`);
@@ -1442,10 +1467,11 @@ function renderAiImportConfirmation(doc,job,result){
 }
 // 发现的问题排在前面：那是探索时实测到的缺陷，用例仍按需求的正确行为编写，需要人来决定怎么处理。
 function renderAiResult(doc,summary){
-  const issues=summary.issues?.length?`<div class="card"><h3>探索中发现的问题 <small class="meta">按风险从高到低</small></h3>${aiRiskListHTML(summary.issues,i=>`<b>${esc(i.scenario)}</b>：${esc(i.symptom)}`)}</div>`:'';
-  const limitations=summary.limitations?.length?`<div class="card"><h3>未验证/受限范围 <small class="meta">按风险从高到低</small></h3>${aiRiskListHTML(summary.limitations,l=>esc(l.summary))}</div>`:'';
+  const issues=summary.issues?.length?`<div class="card"><h3>探索中发现的问题</h3>${summary.jobId?findingListHTML(summary.jobId,'issue',summary.issues):aiRiskListHTML(summary.issues,i=>esc(`${i.scenario}：${i.symptom}`))}</div>`:'';
+  const limitations=summary.limitations?.length?`<div class="card"><h3>未验证/受限范围</h3>${summary.jobId?findingListHTML(summary.jobId,'limitation',summary.limitations):aiRiskListHTML(summary.limitations,i=>esc(i.summary))}</div>`:'';
   $('#ai-drawer-body').innerHTML=`<div class="card meta-grid"><span>已导入用例 <b>${summary.count}</b></span></div>${issues}${limitations}<p class="meta">已自动创建目录并导入到"用例评审"，请前往评审。</p><p class="drawer-actions"><button type="button" class="secondary" id="ai-restart">重新设计</button></p>`;
-  $('#ai-restart').onclick=()=>{localStorage.removeItem(aiResultKey(doc));renderAiForm(doc)};
+  if(summary.jobId)bindFindingReviews(summary.jobId,{issue:summary.issues,limitation:summary.limitations},()=>renderAiResult(doc,summary));
+  $('#ai-restart').onclick=()=>{if(summary.jobId)aiReviewSource.set(doc.ID,summary.jobId);localStorage.removeItem(aiResultKey(doc));renderAiForm(doc)};
 }
 // 按用例编号 TC-<REQ>-<MOD>-<CAT>-NNN 归档：用例评审下先建以需求命名的文件夹（Code 为 REQ，同 Code 复用），
 // 其下按 planner 给出的模块路径（产品用例库里的文件夹路径，modules[].path）逐层建中文名文件夹、同名复用——
@@ -1523,6 +1549,15 @@ function hostStepsHTML(h){
   const v=version(h.VersionID),where=isCaseHost(h)?`「${esc(v?.name||'已删除的版本')}」：${esc(h.Label)} · ${h.CaseIDs?.length||0} 条用例`:`归档到「${esc(v?.name||'已删除的版本')}」：${esc(hostArchivePath(h).join(' / '))}`;
   return `<div class="card host-card"><h3>AI 托管 <small class="meta">${where}</small></h3><ol class="host-steps">${items}</ol>${h.Note?`<p class="meta">${esc(h.Note)}</p>`:''}${h.Stage==='stopped'?`<p class="meta host-error">托管已停止：${esc(h.Error||'')}</p>`:''}${hostCaseFailuresHTML(h)}</div>`;
 }
+let hostReviewSource='';
+function hostFindings(h){
+  const jobs=new Set([h.GenTaskID,...Object.values(h.ScriptJobs||{})].filter(Boolean));
+  const scripts=state.scripts.filter(s=>s.VersionID===h.VersionID&&jobs.has(s.JobID));
+  return {
+    issue:[...(h.Issues||[]),...scripts.flatMap(s=>(s.Deviations||[]).map(d=>({scenario:s.CaseID,symptom:d.Summary,risk:d.Risk})))],
+    limitation:[...(h.Limitations||[]),...scripts.filter(s=>s.Status==='blocked').map(s=>({summary:`${s.CaseID}：${s.MissingInputs?.join('；')||s.Summary}`}))]
+  };
+}
 // 设计和脚本生成阶段在托管视图里接上对应任务的进度流（和手动设计、生成同一个接口）。
 let hostLog=null;
 function closeHostLog(){hostLog?.source.close();hostLog=null}
@@ -1544,7 +1579,7 @@ function renderHostView(doc){
   // 设计之后的步骤重试不用重新填写；脚本生成要看生成任务是否已经完成（服务端会告诉我们是否需要重新填写）。
   const late=stopped&&['importing','reviewing','archiving','generating','running'].includes(h.FailedAt);
   const actions=done?`${hostRunStats(h).error?'<button type="button" class="secondary" id="host-retry-errors">重试执行出错用例</button>':''}<button type="button" class="secondary" id="host-again">重新托管</button><button type="button" id="host-goto">查看用例</button>`
-    :stopped?`<button type="button" class="secondary" id="host-abandon">放弃托管</button><button type="button" id="host-resume">${late?'重试这一步':h.Continuable?'继续或重新设计…':'重新填写并托管'}</button>`
+    :stopped?`<button type="button" class="secondary" id="host-abandon">放弃托管</button><button type="button" class="secondary" id="host-again">带处理意见重新托管</button><button type="button" id="host-resume">${late?'重试这一步':h.Continuable?'继续或重新设计…':'重新填写并托管'}</button>`
     :'<button type="button" class="secondary" id="host-abandon">取消托管</button>';
   const status=h.Stage==='estimating'?'正在评估用例数量，完成后自动采用评估结果并开始设计…'
     :h.Stage==='designing'?'正在设计用例，完成后自动放入用例评审、评审通过并归档。'
@@ -1552,14 +1587,17 @@ function renderHostView(doc){
     :h.Stage==='generating'?'用例已归档，正在为它们生成自动化脚本…'
     :h.Stage==='running'?'脚本已生成，正在逐条自动执行，每条执行完都会保存测试记录…'
     :done?`已完成：${h.CaseIDs?.length||0} 条用例已评审通过并归档${h.Generate?`，生成 ${h.Generated||0} 个脚本`:''}${h.Execute&&h.Generated?`，自动执行 ${hostRunText(hostRunStats(h))}`:''}。`:'';
-  const findings=done?`${h.Issues?.length?`<div class="card"><h3>探索中发现的问题 <small class="meta">已记录到问题单管理</small></h3>${aiRiskListHTML(h.Issues,i=>`<b>${esc(i.scenario)}</b>：${esc(i.symptom)}`)}</div>`:''}${h.Limitations?.length?`<div class="card"><h3>未验证/受限范围</h3>${aiRiskListHTML(h.Limitations,l=>esc(l.summary))}</div>`:''}`:'';
+  const found=hostFindings(h),findings=`${found.issue.length?`<div class="card"><h3>发现的问题</h3>${findingListHTML(h.ID,'issue',found.issue)}</div>`:''}${found.limitation.length?`<div class="card"><h3>未验证/受限范围</h3>${findingListHTML(h.ID,'limitation',found.limitation)}</div>`:''}`;
   const logTask=h.Stage==='designing'&&h.PlannerTaskID?['planner',h.PlannerTaskID]:h.Stage==='generating'&&h.GenTaskID?['generator',h.GenTaskID]:null;
   const goto=done&&h.Generate?'<button type="button" class="secondary" id="host-goto-auto">查看脚本</button>':'';
   $('#ai-drawer-body').innerHTML=`${hostStepsHTML(h)}${status?`<p class="meta">${esc(status)}</p>`:''}${hostActive(h)?'<p class="meta">托管在 CaseHub 服务端执行，可以关闭抽屉或页面。</p>':''}${logTask?'<div id="ai-log" class="ai-log"></div>':''}${findings}<p class="drawer-actions">${goto}${actions}</p>`;
+  bindFindingReviews(h.ID,found,()=>renderHostView(doc));
   closeHostLog();if(logTask)openHostLog(...logTask); // 重绘清掉了日志：重新订阅，事件从头重放
   $('#host-goto-auto')&&($('#host-goto-auto').onclick=()=>{setPage('automation');const id=h.CaseIDs?.[0];if(id&&state.scripts.some(x=>x.VersionID===h.VersionID&&x.CaseID===id))setAutoFocus({type:'script',versionID:h.VersionID,id})});
+  if(done||stopped){
+    $('#host-again').onclick=()=>{hostReviewSource=h.ID;renderHostForm(doc)};
+  }
   if(done){
-    $('#host-again').onclick=()=>renderHostForm(doc);
     $('#host-goto').onclick=()=>{const id=h.CaseIDs?.[0];setPage('cases');if(id&&state.cases.some(c=>c.VersionID===h.VersionID&&c.ID===id))setFocus({type:'case',versionID:h.VersionID,id})};
   }
   $('#host-retry-errors')&&($('#host-retry-errors').onclick=async()=>{try{hostingUpdated(await serviceRequest(`/api/hostings/${h.ID}/retry`,{method:'POST'}))}catch(e){toast(e.message,true)}});
@@ -1648,15 +1686,16 @@ async function renderHostForm(doc,{retry}={}){
     try{localStorage.setItem(AI_TIMEOUT_KEY,String(timeoutMinutes))}catch{}
     // 评估和设计请求的组成和手动设计完全一样（引用需求的上下文、探索记录、产品经验、资产、测试账号），由服务端补上评估出的数量和缩写。
     const {requirements,instructions,explorationNotes,constraints}=aiRequirementPayload(doc,{...values,product:String(data.get('product')||'')}),productExperience=productExperienceFor(values.baseUrl);
-    const estimate={requirements,context:{instructions}};
-    const job={requirements,target:{baseUrl:values.baseUrl},context:{instructions,...(constraints?{constraints}:{}),...(explorationNotes?{explorationNotes}:{}),...(productExperience?{productExperience}:{}),...(values.assetIds.length?{assetIds:values.assetIds}:{})},timeoutMs:timeoutMinutes*60000};
+    const retryInstructions=withFindingGuidance(instructions,retry?.ID||hostReviewSource);
+    const estimate={requirements,context:{instructions:retryInstructions}};
+    const job={requirements,target:{baseUrl:values.baseUrl},context:{instructions:retryInstructions,...(constraints?{constraints}:{}),...(explorationNotes?{explorationNotes}:{}),...(productExperience?{productExperience}:{}),...(values.assetIds.length?{assetIds:values.assetIds}:{})},timeoutMs:timeoutMinutes*60000};
     if(values.testAccount||values.testSecret)job.context.testData={username:values.testAccount,password:values.testSecret};
     // 脚本生成请求（不含用例，服务端归档后补上用例和需求）：和自动化页发起生成时一样的目标、说明、资产、账号和时限。
     const withScripts=Boolean(form.elements.withScripts?.checked)||retryGen,withRun=Boolean(form.elements.withRun?.checked);
     const saveScriptsIndividually=Boolean(form.elements.saveScriptsIndividually?.checked);
     const caseTimeoutMinutes=Number(data.get('caseTimeoutMinutes')||40);
     if(withScripts&&(!Number.isInteger(caseTimeoutMinutes)||caseTimeoutMinutes<1||caseTimeoutMinutes>60))return toast('单用例生成时长需为 1–60 分钟的整数',true);
-    const generate=withScripts?{target:{baseUrl:values.baseUrl},context:{...(constraints?{constraints}:{}),...(values.instructions.trim()?{instructions:values.instructions.trim()}:{}),...(productExperience?{productExperience}:{}),...(values.assetIds.length?{assetIds:values.assetIds}:{}),...(job.context.testData?{testData:job.context.testData}:{})},caseTimeoutMs:caseTimeoutMinutes*60000}:undefined;
+    const generate=withScripts?{target:{baseUrl:values.baseUrl},context:{...(constraints?{constraints}:{}),...(retryInstructions?{instructions:retryInstructions}:{}),...(productExperience?{productExperience}:{}),...(values.assetIds.length?{assetIds:values.assetIds}:{}),...(job.context.testData?{testData:job.context.testData}:{})},caseTimeoutMs:caseTimeoutMinutes*60000}:undefined;
     aiEstimates.set(doc.ID,{status:'draft',values}); // 手动设计/下次托管沿用填过的表单（密码只留在内存）
     saveAiForm(doc,values,est?.count||AI_DEFAULT_CASE_COUNT,liveReqDoc(doc).Code||'');
     const btns=form.querySelectorAll('button[type="submit"]');btns.forEach(b=>b.disabled=true);
@@ -1677,7 +1716,7 @@ async function renderHostForm(doc,{retry}={}){
         h=await serviceRequest('/api/hostings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({DocID:doc.ID,VersionID:cfg.versionID,Product:cfg.product,ProductVersion:cfg.productVersion,Author:'本地用户',withScripts,withRun,saveScriptsIndividually,BaseURL:values.baseUrl,estimate,job,...(generate?{generate}:{})})});
       }
       toast('已开始托管，可以关闭页面，CaseHub 会自动完成');
-      hostingUpdated(h);
+      hostReviewSource='';hostingUpdated(h);
     }catch(err){btns.forEach(b=>b.disabled=false);toast(err.message,true)}
   };
 }
@@ -1698,6 +1737,7 @@ function openCaseHost(x){
 function hostCasesOf(vid,ids,label){
   if(!editable(vid))return toast('只有测试版本里的用例可以托管',true);
   if(!ids.length)return toast('没有可托管的用例',true);
+  hostReviewSource='';
   openCaseHost({draft:{versionID:vid,caseIDs:ids,label}});
 }
 function hostFolder(vid,folderId){
@@ -1714,13 +1754,17 @@ function renderCaseHostView(){
   const status=h.Stage==='generating'?'正在为这些用例生成自动化脚本…':h.Stage==='running'?'脚本已生成，正在逐条自动执行，每条执行完都会保存测试记录…'
     :done?`已完成：生成 ${h.Generated||0} 个脚本${h.Blocked?`，${h.Blocked} 条受阻未生成`:''}${h.Execute&&h.Generated?`，自动执行 ${hostRunText(hostRunStats(h))}`:''}。`:'';
   const actions=done?`${hostRunStats(h).error?'<button type="button" class="secondary" id="host-retry-errors">重试执行出错用例</button>':''}<button type="button" class="secondary" id="host-again">重新托管</button><button type="button" id="host-goto-auto">查看脚本</button>`
-    :stopped?'<button type="button" class="secondary" id="host-abandon">放弃托管</button><button type="button" id="host-resume">重试这一步</button>'
+    :stopped?'<button type="button" class="secondary" id="host-abandon">放弃托管</button><button type="button" class="secondary" id="host-again">带处理意见重新托管</button><button type="button" id="host-resume">重试这一步</button>'
     :'<button type="button" class="secondary" id="host-abandon">取消托管</button>';
   const logTask=h.Stage==='generating'&&h.GenTaskID;
-  $('#ai-drawer-body').innerHTML=`${hostStepsHTML(h)}${status?`<p class="meta">${esc(status)}</p>`:''}${hostActive(h)?'<p class="meta">托管在 CaseHub 服务端执行，可以关闭抽屉或页面。</p>':''}${logTask?'<div id="ai-log" class="ai-log"></div>':''}<p class="drawer-actions">${actions}</p>`;
+  const found=hostFindings(h),findings=`${found.issue.length?`<div class="card"><h3>发现的问题</h3>${findingListHTML(h.ID,'issue',found.issue)}</div>`:''}${found.limitation.length?`<div class="card"><h3>未验证/受限范围</h3>${findingListHTML(h.ID,'limitation',found.limitation)}</div>`:''}`;
+  $('#ai-drawer-body').innerHTML=`${hostStepsHTML(h)}${status?`<p class="meta">${esc(status)}</p>`:''}${hostActive(h)?'<p class="meta">托管在 CaseHub 服务端执行，可以关闭抽屉或页面。</p>':''}${logTask?'<div id="ai-log" class="ai-log"></div>':''}${findings}<p class="drawer-actions">${actions}</p>`;
+  bindFindingReviews(h.ID,found,renderCaseHostView);
   closeHostLog();if(logTask)openHostLog('generator',h.GenTaskID);
+  if(done||stopped){
+    $('#host-again').onclick=()=>{hostReviewSource=h.ID;openCaseHost({draft:{versionID:h.VersionID,caseIDs:h.CaseIDs.filter(id=>state.cases.some(c=>c.VersionID===h.VersionID&&c.ID===id)),label:h.Label}})};
+  }
   if(done){
-    $('#host-again').onclick=()=>openCaseHost({draft:{versionID:h.VersionID,caseIDs:h.CaseIDs.filter(id=>state.cases.some(c=>c.VersionID===h.VersionID&&c.ID===id)),label:h.Label}});
     $('#host-goto-auto').onclick=()=>{setPage('automation');const id=h.CaseIDs.find(id=>scriptFor(h.VersionID,id));if(id)setAutoFocus({type:'script',versionID:h.VersionID,id})};
   }
   $('#host-retry-errors')&&($('#host-retry-errors').onclick=async()=>{try{hostingUpdated(await serviceRequest(`/api/hostings/${h.ID}/retry`,{method:'POST'}))}catch(e){toast(e.message,true)}});
@@ -1762,6 +1806,7 @@ async function renderCaseHostForm({retry}={}){
     saveGenTarget({...loadGenTarget(),...values});
     // 生成请求（不含用例和需求，由服务端按托管的用例补上）：和自动化页发起生成时一样的目标、说明、资产、账号和时限。
     const {cases:_,...generate}=genPayload(d.versionID,[],{...values,reqDoc:''});
+    generate.context.instructions=withFindingGuidance(generate.context.instructions,retry?.ID||hostReviewSource);
     const caseConstraints=constraintsForCases(d.versionID,d.caseIDs);
     if(caseConstraints)generate.context.constraints=caseConstraints;
     const withRun=Boolean(form.elements.withRun?.checked),saveScriptsIndividually=Boolean(form.elements.saveScriptsIndividually?.checked);
@@ -1775,6 +1820,7 @@ async function renderCaseHostForm({retry}={}){
         selected.get(d.versionID)?.clear();updateBulk();renderVersions();
       }
       toast('已开始托管，可以关闭页面，CaseHub 会自动完成');
+      hostReviewSource='';
       hostingUpdated(h);
     }catch(err){btn.disabled=false;toast(err.message,true)}
   };
@@ -2644,22 +2690,29 @@ function jumpToCase(versionID,id){
 }
 function genTaskHTML(task){
   const runtime=genRuntime.get(task.jobId);
+  const found=genTaskFindings(task);
   const done=task.saved?`<div class="card meta-grid"><span>${taskService(task)==='healer'?'已修复':'已生成'} <b>${task.saved.generated}</b></span><span>受阻 <b>${task.saved.blocked}</b></span>${task.saved.failed?`<span>保存失败 <b>${task.saved.failed}</b></span>`:''}</div>`:'';
-  const limitations=task.limitations?.length?`<div class="card"><h3>${taskService(task)==='healer'?'未完成修复':'未生成的用例'} <small class="meta">按风险从高到低</small></h3>${aiRiskListHTML(task.limitations,l=>esc(l.summary))}</div>`:'';
+  const issues=found.issue.length?`<div class="card"><h3>发现的问题</h3>${findingListHTML(task.jobId,'issue',found.issue)}</div>`:'';
+  const limitations=found.limitation.length?`<div class="card"><h3>${taskService(task)==='healer'?'未完成修复':'未验证/受限范围'}</h3>${findingListHTML(task.jobId,'limitation',found.limitation)}</div>`:'';
   const error=task.error?`<div class="card"><h3>失败原因</h3><p class="meta" style="white-space:pre-wrap">${esc(task.error.code||'')}${task.error.code?'：':''}${esc(task.error.message||'任务未返回详细原因，请查看下方运行日志')}</p></div>`:'';
   const actions=GEN_TERMINAL.includes(task.status)
-    ?`${taskService(task)==='generator'&&task.status==='failed'&&task.continuable&&task.error?.code==='JOB_TIMEOUT'?`<button type="button" data-gen-continue="${task.jobId}">继续生成</button>`:''}${task.diagnostics?`<a class="secondary" href="/api/${taskService(task)}/jobs/${task.jobId}/diagnostics" download>下载诊断包</a>`:''}${taskService(task)==='healer'&&task.status==='succeeded'?`<button type="button" class="secondary" data-heal-download="${task.jobId}">下载修复结果</button>`:''}${task.status==='succeeded'&&(!task.saved||task.saved.failed)?`<button type="button" data-gen-import="${task.jobId}">重试保存</button>`:''}${task.status!=='succeeded'||task.saved?.blocked||task.saved?.failed?`<button type="button" data-gen-intervene="${task.jobId}">${taskService(task)==='healer'?'补充说明并再次修复':'故障排查并重新生成'}</button>`:''}`
+    ?`${taskService(task)==='generator'&&task.status==='failed'&&task.continuable&&task.error?.code==='JOB_TIMEOUT'?`<button type="button" data-gen-continue="${task.jobId}">继续生成</button>`:''}${task.diagnostics?`<a class="secondary" href="/api/${taskService(task)}/jobs/${task.jobId}/diagnostics" download>下载诊断包</a>`:''}${taskService(task)==='healer'&&task.status==='succeeded'?`<button type="button" class="secondary" data-heal-download="${task.jobId}">下载修复结果</button>`:''}${task.status==='succeeded'&&(!task.saved||task.saved.failed)?`<button type="button" data-gen-import="${task.jobId}">重试保存</button>`:''}${task.status!=='succeeded'||task.saved?.blocked||task.saved?.failed||found.issue.length||found.limitation.length?`<button type="button" data-gen-intervene="${task.jobId}">${taskService(task)==='healer'?'补充说明并再次修复':'带处理意见重新生成'}</button>`:''}`
     :`<button type="button" class="secondary" data-gen-cancel="${task.jobId}">取消任务</button>`;
   return `<details class="gen-task" data-gen-panel="${task.jobId}"${genOpen.has(task.jobId)?' open':''}>
     <summary><span class="gen-task-title">${esc(task.label)}</span><span class="gen-chip">${genCaseCount(task)} 条</span><span class="gen-chip gen-status-${GEN_TERMINAL.includes(task.status)?task.status:'running'}" data-gen-status="${task.jobId}">${genStatusText(task)}</span></summary>
     <p class="meta">${esc(task.versionName||'')} · 提交于 ${fmt(task.createdAt)}</p>
     ${genCaseLinksHTML(task)}
-    ${done}${limitations}${error}
+    ${done}${issues}${limitations}${error}
     <div class="ai-log" data-gen-log="${task.jobId}">${(runtime?.log||[]).map(line=>`<div${line?.operationId?` data-operation-id="${esc(line.operationId)}"`:''}>${line?.toolCode?`<details class="ai-tool-detail"><summary>${esc(line.text)}</summary><div>意图：${esc(line.toolIntent||'')}</div><pre>${esc(line.toolCode)}</pre></details>`:esc(typeof line==='string'?line:line.text)}</div>`).join('')}</div>
     <p class="drawer-actions"><a class="secondary" href="/api/${taskService(task)}/jobs/${task.jobId}/log" download>下载完整日志</a>${actions}</p>
   </details>`;
 }
+function genTaskFindings(task){
+  const scripts=state.scripts.filter(s=>s.VersionID===task.versionID&&s.JobID===task.jobId);
+  return {issue:task.findings?.issue||scripts.flatMap(s=>(s.Deviations||[]).map(d=>({scenario:s.CaseID,symptom:d.Summary,risk:d.Risk}))),limitation:task.limitations||scripts.filter(s=>s.Status==='blocked').map(s=>({summary:`${s.CaseID}：${s.MissingInputs?.join('；')||s.Summary}`}))};
+}
 function bindGenTasks(){
+  for(const task of genTasks){const panel=[...$$('#gen-drawer-body [data-gen-panel]')].find(x=>x.dataset.genPanel===task.jobId);if(panel)bindFindingReviews(task.jobId,genTaskFindings(task),()=>renderGenDrawer(),panel)}
   $$('#gen-drawer-body [data-gen-case]').forEach(b=>b.onclick=e=>{e.preventDefault();jumpToCase(b.dataset.genCaseVersion,b.dataset.genCase)});
   $$('#gen-drawer-body [data-gen-panel]').forEach(el=>{
     el.ontoggle=()=>{el.open?genOpen.add(el.dataset.genPanel):genOpen.delete(el.dataset.genPanel);if(el.open)backfillGenLog(genTask(el.dataset.genPanel))};
@@ -2687,8 +2740,9 @@ function bindGenTasks(){
 }
 function interveneGenTask(task){
   const saved=task.input||genValues(taskService(task));
+  const needsInstructions=!state.findingReviews.some(x=>x.SourceID===task.jobId);
   if(taskService(task)==='healer'&&page!=='automation'){setPage('automation');setAutoFocus({type:'script',versionID:task.versionID,id:task.caseIDs[0]})}
-  showModal(taskService(task)==='healer'?'修复故障排查':'生成故障排查',`<p class="meta">会为 ${esc(task.caseIDs.join('、'))} 新建独立任务；已生成的其他用例不会受影响。请补充故障现象、可用路径或账号条件，${taskService(task)==='healer'?'Healer 会基于已有脚本继续排查。':'Generator 会据此重新探索。'}</p><label>排查提示词<textarea name="instructions" required placeholder="例如：登录后需先进入素材管理；上传按钮在右侧工具栏；上次失败时显示的错误是…">${esc(saved.instructions||'')}</textarea></label><label>测试账号 · 用户名（可选）<input name="testAccount" value="${esc(saved.testAccount||'')}"></label><label>测试账号 · 密码（如需重新填写）<input name="testSecret" type="text" class="fake-password" autocomplete="off"></label>`,async values=>{const next={...saved,...values,assetIds:saved.assetIds||[],caseTimeoutMinutes:saved.caseTimeoutMinutes||(taskService(task)==='healer'?60:40)};await submitGenJob(task.versionID,task.caseIDs,`${task.label} · 故障排查`,next,task.groupID||'',taskService(task));
+  showModal(taskService(task)==='healer'?'修复故障排查':'生成故障排查',`<p class="meta">会为 ${esc(task.caseIDs.join('、'))} 新建独立任务；已生成的其他用例不会受影响。请补充故障现象、可用路径或账号条件，${taskService(task)==='healer'?'Healer 会基于已有脚本继续排查。':'Generator 会据此重新探索。'}已记录的逐条处理意见会一起传给新任务。</p><label>排查提示词<textarea name="instructions"${needsInstructions?' required':''} placeholder="例如：登录后需先进入素材管理；上传按钮在右侧工具栏；上次失败时显示的错误是…">${esc(saved.instructions||'')}</textarea></label><label>测试账号 · 用户名（可选）<input name="testAccount" value="${esc(saved.testAccount||'')}"></label><label>测试账号 · 密码（如需重新填写）<input name="testSecret" type="text" class="fake-password" autocomplete="off"></label>`,async values=>{const next={...saved,...values,instructions:withFindingGuidance(values.instructions,task.jobId),assetIds:saved.assetIds||[],caseTimeoutMinutes:saved.caseTimeoutMinutes||(taskService(task)==='healer'?60:40)};await submitGenJob(task.versionID,task.caseIDs,`${task.label} · 故障排查`,next,task.groupID||'',taskService(task));
     // 批量任务里的重试留在原分组，同时保留失败的旧任务供追溯。
     if(task.groupID)genOpen.add(task.groupID);
     renderGenDrawer();toast('已提交故障排查任务')});
@@ -2824,6 +2878,7 @@ async function importGenResult(task){
     task.status='succeeded';
     task.saved={generated:result.generated??0,blocked:result.blocked??0,failed};
     task.limitations=(result.scripts||[]).filter(sc=>sc.status==='blocked').map(sc=>({risk:'high',summary:`${sc.caseId}：${(sc.missingInputs||[]).join('；')||sc.summary}`}));
+    task.findings={issue:(result.scripts||[]).flatMap(sc=>(sc.deviations||[]).map(d=>({scenario:sc.caseId,symptom:d.summary,risk:d.risk})))};
     if(taskService(task)==='healer')task.limitations=(result.scripts||[]).filter(sc=>sc.status==='blocked').map(sc=>({risk:'high',summary:(sc.missingInputs||[]).join('；')||sc.summary}));
     toast(`「${task.label}」${taskService(task)==='healer'?'修复':'生成'}完成：${Math.max(0,task.saved.generated-failed)} 个脚本已保存${task.saved.blocked?`，${task.saved.blocked} 条用例未生成`:''}`);
   }catch(e){
@@ -2991,6 +3046,21 @@ function aiRowStatusHTML(doc){
   const [cls,text]=st==='succeeded'?['ok','✓ 成功 · 待确认导入']:st==='failed'?['fail','✗ 失败']:st==='cancelled'?['','已取消']:['','已完成 / 待查看'];
   return `<small class="tc-status${cls?` ${cls}`:''}">${text}</small>`;
 }
+async function tcShowPlannerHistory(task,doc){
+  const box=$('#ai-drawer-body');
+  box.innerHTML='<p class="meta">正在读取设计结果…</p>';
+  try{
+    const result=await serviceRequest(`/api/planner/jobs/${task.id}/result`);
+    if(!box.isConnected)return;
+    const groups={issue:result.issues||[],limitation:result.limitations||[]};
+    const render=()=>{
+      box.innerHTML=`<div class="card meta-grid"><span>设计任务 <b>${esc(task.id)}</b></span><span>用例 <b>${result.cases?.length||0}</b></span></div>${groups.issue.length?`<div class="card"><h3>发现的问题</h3>${findingListHTML(task.id,'issue',groups.issue)}</div>`:''}${groups.limitation.length?`<div class="card"><h3>未验证/受限范围</h3>${findingListHTML(task.id,'limitation',groups.limitation)}</div>`:''}<p class="drawer-actions"><button type="button" class="secondary" id="tc-plan-retry">带处理意见重新设计</button><a class="secondary" href="/api/planner/jobs/${encodeURIComponent(task.id)}/log" download>下载完整日志</a></p>`;
+      bindFindingReviews(task.id,groups,render,box);
+      $('#tc-plan-retry').onclick=()=>{aiReviewSource.set(doc.ID,task.id);clearAiJob(doc);localStorage.removeItem(aiResultKey(doc));openAiDrawer(doc)};
+    };
+    render();
+  }catch(error){if(box.isConnected)box.innerHTML=`<p class="meta">${esc(error.message)}</p><p class="drawer-actions"><a class="secondary" href="/api/planner/jobs/${encodeURIComponent(task.id)}/log" download>下载完整日志</a></p>`}
+}
 function tcShowPlanner(){
   tcCollapse();aiDoc=null;hostCase=null;closeHostLog();
   $('#ai-drawer .panel-head strong').textContent='AI 设计';
@@ -2999,7 +3069,7 @@ function tcShowPlanner(){
   const active=tcFilter.plan==='active',docs=tcPlannerDocs().filter(isAiActive),done=tcPlannerDoneTasks();
   $('#ai-drawer-body').innerHTML=`<div class="tc-list">${active?docs.map(doc=>`<button type="button" class="tc-row" data-tc-plan="${esc(doc.ID)}"><span>${esc(doc.Title)}</span>${aiRowStatusHTML(doc)}</button>`).join(''):done.map(t=>{const doc=state.reqDocs.find(d=>d.ID===t.subject.slice(4));return `<button type="button" class="tc-row" data-tc-plan-job="${esc(t.id)}"><span>${esc(doc?.Title||t.subject)}<small class="meta">${fmt(t.createdAt)}</small></span><small>${esc(({succeeded:'已完成',failed:'失败',cancelled:'已取消'})[t.status]||t.status)}</small></button>`}).join('')}${(active?docs:done).length?'':tcEmptyHTML('plan')}</div>`;
   $$('#ai-drawer-body [data-tc-plan]').forEach(b=>b.onclick=()=>{const doc=state.reqDocs.find(d=>d.ID===b.dataset.tcPlan);if(doc)tcExpand(b,()=>openAiDrawer(doc))});
-  $$('#ai-drawer-body [data-tc-plan-job]').forEach(b=>b.onclick=()=>{const task=tcPlannerHistory.get(b.dataset.tcPlanJob);if(!task)return;const doc=state.reqDocs.find(d=>d.ID===task.subject.slice(4));if(doc&&aiJobOf(doc)===task.id&&!task.handled)tcExpand(b,()=>openAiDrawer(doc));else tcExpand(b,()=>tcShowTaskLog(task))});
+  $$('#ai-drawer-body [data-tc-plan-job]').forEach(b=>b.onclick=()=>{const task=tcPlannerHistory.get(b.dataset.tcPlanJob);if(!task)return;const doc=state.reqDocs.find(d=>d.ID===task.subject.slice(4));if(doc&&aiJobOf(doc)===task.id&&!task.handled)tcExpand(b,()=>openAiDrawer(doc));else if(doc&&task.status==='succeeded')tcExpand(b,()=>tcShowPlannerHistory(task,doc));else tcExpand(b,()=>tcShowTaskLog(task))});
   tcAttach('plan');
 }
 // 任何入口打开这三个抽屉，都带上标签，方便互相切换。

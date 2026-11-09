@@ -20,6 +20,24 @@ func apply(t *testing.T, service *core.Service, action core.Action) core.State {
 	return result.State
 }
 
+func TestReviewTaskFindingUpsertsAndValidates(t *testing.T) {
+	svc := core.NewService(store.NewMemory())
+	action := core.Action{Type: "reviewTaskFinding", FindingSource: "planner-job-1", FindingKind: "issue", FindingText: "登录按钮不可用", FindingDecision: "workaround", FindingGuidance: "改用测试账号入口", Author: "tester"}
+	state := apply(t, svc, action)
+	if len(state.FindingReviews) != 1 || state.FindingReviews[0].Guidance != action.FindingGuidance {
+		t.Fatalf("finding review was not saved: %+v", state.FindingReviews)
+	}
+	action.FindingDecision, action.FindingGuidance = "not_issue", "权限预期如此"
+	state = apply(t, svc, action)
+	if len(state.FindingReviews) != 1 || state.FindingReviews[0].Decision != "not_issue" || state.FindingReviews[0].Guidance != "权限预期如此" {
+		t.Fatalf("finding review was not updated: %+v", state.FindingReviews)
+	}
+	action.FindingGuidance = ""
+	if _, err := svc.Apply(context.Background(), action); err == nil {
+		t.Fatal("empty guidance should be rejected")
+	}
+}
+
 func branchID(t *testing.T, state core.State, name string) string {
 	t.Helper()
 	for _, v := range state.Versions {
