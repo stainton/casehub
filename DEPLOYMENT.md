@@ -89,6 +89,7 @@ CASEHUB_GENERATOR_URL=http://10.0.0.5:4502 \
 | 变量 | 默认值 | 含义 |
 | --- | --- | --- |
 | `CASEHUB_TASK_QUEUE_TIMEOUT` | `30m` | 任务排队超过这个时间仍没有节点接收，就以 `NO_NODE_AVAILABLE` 失败。节点按需从零扩容时，应留出拉起 Pod 的时间 |
+| `CASEHUB_REFERENCE_SCRIPTS` | 关闭 | 设为 `1` 时，脚本生成任务下发前自动附带同一需求下已生成的脚本（`context.referenceScripts`，同模块优先，最多 20 条），generator 直接复用其中的登录、导航和 locator，不再重复探索。需先部署支持该字段的 auto-test generator，旧版本会拒绝带此字段的请求 |
 | `CASEHUB_NODE_LOST_AFTER` | `2m` | 节点连续联系不上超过这个时间，视为其上的任务已丢失 |
 | `CASEHUB_TASK_RETENTION` | 永久 | 已结束任务及其完整日志、会话包、诊断包的保留时长；可设为正的时长启用自动清理 |
 

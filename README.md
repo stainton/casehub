@@ -96,6 +96,7 @@ http://<可访问的节点 IP>:30080
 | `CASEHUB_ORGANIZER_URL` | 同 `CASEHUB_PLANNER_URL` | 用例重整（临时功能）的 auto-test organizer 地址；它和 planner 在同一进程/Pod 里，一般不用单独设置 |
 | `CASEHUB_EXECUTOR_URL` | `http://localhost:4504` | auto-test executor 服务地址 |
 | `CASEHUB_TASK_QUEUE_TIMEOUT` | `30m` | 任务排队这么久仍没有执行节点接收，则以 `NO_NODE_AVAILABLE` 失败 |
+| `CASEHUB_REFERENCE_SCRIPTS` | 关闭 | 设为 `1` 时，脚本生成任务下发前自动附带同一需求下已生成的脚本（`context.referenceScripts`，同模块优先，最多 20 条），generator 直接复用其中的登录、导航和 locator，不再重复探索。需先部署支持该字段的 auto-test generator，旧版本会拒绝带此字段的请求 |
 | `CASEHUB_TASK_RETENTION` | 永久 | 已结束任务（含完整进度日志、结果、会话包、诊断包）保留时长；设置正的时长如 `168h` 可定期清理 |
 
 任务中心的已完成任务不会因刷新、重试或任务数量增加而从列表自动移除。生成、设计和执行任务会从服务端恢复历史记录；「任务日志」也可翻看所有历史任务。展开日志可查看最近 500 条事件，下载按钮提供该任务的完整 JSONL 日志（包括模型调用的意图、脱敏代码和耗时）。任务事件保存在 CaseHub 的 file 或 PostgreSQL 存储中。

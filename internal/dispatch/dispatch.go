@@ -28,6 +28,9 @@ type Kind struct {
 	Pool     *Pool
 	Settings upstream.Settings
 	Assets   *upstream.Assets
+	// Enrich, when set, adds what CaseHub knows to a request right before a node receives it (for the generator:
+	// already generated scripts to reuse). Best-effort: it never fails a task, and runs on a copy of the stored body.
+	Enrich func(ctx context.Context, body map[string]json.RawMessage)
 	// Continuable kinds (the planner) keep an interrupted run's session so a person can continue it.
 	Continuable bool
 }
@@ -357,6 +360,9 @@ func (d *Dispatcher) attempt(ctx context.Context, l *live) outcome {
 		body := make(map[string]json.RawMessage, len(req.body)+1)
 		for key, v := range req.body {
 			body[key] = v
+		}
+		if k.Enrich != nil {
+			k.Enrich(ctx, body)
 		}
 		if err := upstream.Prepare(ctx, d.cfg.Client, node, k.Name, body, k.Settings, k.Assets); err != nil {
 			if upstream.IsNodeError(err) {

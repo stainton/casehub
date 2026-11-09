@@ -203,7 +203,7 @@ func main() {
 	organizerProxy, organizerEnabled := proxy(organizerPool, "organizer", agentSettingsOf(svc, "planner"), nil)
 	dispatcher := dispatch.New(taskStore, []*dispatch.Kind{
 		{Name: "planner", Pool: plannerPool, Settings: agentSettingsOf(svc, "planner"), Assets: lookup, Continuable: true},
-		{Name: "generator", Pool: generatorPool, Settings: agentSettingsOf(svc, "generator"), Assets: lookup, Continuable: true},
+		{Name: "generator", Pool: generatorPool, Settings: agentSettingsOf(svc, "generator"), Assets: lookup, Continuable: true, Enrich: generatorEnricher(svc)},
 		{Name: "healer", Pool: healerPool, Settings: agentSettingsOf(svc, "healer"), Assets: lookup},
 		{Name: "executor", Pool: executorPool, Settings: agentSettingsOf(svc, "planner")},
 		{Name: "organizer", Pool: organizerPool, Settings: agentSettingsOf(svc, "planner"), Continuable: true},
@@ -273,6 +273,14 @@ func serviceURLs(getenv func(string) string) (planner, generator string) {
 		return fallback
 	}
 	return pick("CASEHUB_PLANNER_URL", "http://localhost:4501"), pick("CASEHUB_GENERATOR_URL", "http://localhost:4502")
+}
+
+// generatorEnricher is the reference-script injection (reference_scripts.go), on only with CASEHUB_REFERENCE_SCRIPTS=1.
+func generatorEnricher(svc *core.Service) func(context.Context, map[string]json.RawMessage) {
+	if os.Getenv("CASEHUB_REFERENCE_SCRIPTS") != "1" {
+		return nil
+	}
+	return referenceScriptsEnricher(svc)
 }
 func env(key, fallback string) string {
 	if v := os.Getenv(key); v != "" {
