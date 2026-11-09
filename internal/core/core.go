@@ -402,9 +402,11 @@ type Action struct {
 	IDPrefix                          string
 	IssueID, RequirementID, RootCause string
 	FindingSource, FindingKind, FindingText, FindingDecision, FindingGuidance string
-	ExplorationNotes                  string
-	Review                            string
-	TargetFolderID                    string
+	ExplorationNotes string
+	// Optional optimistic check for human edits. Agent writes leave it unset.
+	ExpectedExplorationNotes *string
+	Review                   string
+	TargetFolderID           string
 	// importPendingCases: the review folder mapped onto TargetFolderID; its
 	// subfolders are recreated beneath the target. Defaults to pending-root.
 	SourceFolderID string
@@ -721,6 +723,8 @@ func (s *Service) Apply(ctx context.Context, a Action) (Result, error) {
 		err = saveReqExploration(&st, a)
 	case "recordProductExploration":
 		err = recordProductExploration(&st, a)
+	case "replaceProductExploration":
+		err = replaceProductExploration(&st, a)
 	case "deleteReqFolder":
 		err = deleteReqFolder(&st, a)
 	case "reviseReqDoc":
@@ -2388,6 +2392,9 @@ func saveReqExploration(s *State, a Action) error {
 	if len(a.ExplorationNotes) > 200000 {
 		return errors.New("探索记录过长")
 	}
+	if a.ExpectedExplorationNotes != nil && d.ExplorationNotes != *a.ExpectedExplorationNotes {
+		return errors.New("探索记录已被其他任务更新，请重新读取后再保存")
+	}
 	d.ExplorationNotes = a.ExplorationNotes
 	return nil
 }
@@ -2437,6 +2444,33 @@ func recordProductExploration(s *State, a Action) error {
 		kept = kept[1:]
 	}
 	record.Notes, record.UpdatedAt = strings.Join(kept, "\n\n"), now()
+	return nil
+}
+
+// replaceProductExploration is the explicit human edit path. Agent results use
+// recordProductExploration so concurrent discoveries still merge by paragraph.
+func replaceProductExploration(s *State, a Action) error {
+	origin := strings.TrimSpace(a.Origin)
+	if !validOrigin(origin) {
+		return errors.New("被测系统地址无效")
+	}
+	if len(a.ExplorationNotes) > maxProductNotes {
+		return errors.New("探索记录过长")
+	}
+	for i := range s.ProductExperiences {
+		if s.ProductExperiences[i].Origin == origin {
+			if a.ExpectedExplorationNotes != nil && s.ProductExperiences[i].Notes != *a.ExpectedExplorationNotes {
+				return errors.New("探索记录已被其他任务更新，请重新读取后再保存")
+			}
+			s.ProductExperiences[i].Notes = a.ExplorationNotes
+			s.ProductExperiences[i].UpdatedAt = now()
+			return nil
+		}
+	}
+	if a.ExpectedExplorationNotes != nil && *a.ExpectedExplorationNotes != "" {
+		return errors.New("探索记录已被其他任务更新，请重新读取后再保存")
+	}
+	s.ProductExperiences = append(s.ProductExperiences, ProductExperience{Origin: origin, Notes: a.ExplorationNotes, UpdatedAt: now()})
 	return nil
 }
 

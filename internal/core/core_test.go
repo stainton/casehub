@@ -1446,6 +1446,10 @@ func TestRequirementExplorationNotesPersistSeparatelyFromRequirementText(t *test
 	if state.ReqDocs[0].ExplorationNotes == "" {
 		t.Fatal("exploration record was not saved")
 	}
+	stale := ""
+	if _, err := service.Apply(context.Background(), core.Action{Type: "saveReqExploration", DocID: "REQ-0001", ExplorationNotes: "过时的人工修改", ExpectedExplorationNotes: &stale, Author: "alice"}); err == nil {
+		t.Fatal("stale human edit overwrote a newer requirement exploration record")
+	}
 	state = apply(t, service, core.Action{Type: "editReqDoc", DocID: "REQ-0001", Title: state.ReqDocs[0].Title, Content: "新的需求正文", Author: "alice"})
 	if state.ReqDocs[0].ExplorationNotes == "" {
 		t.Fatal("editing requirement content must retain exploration record for a later redesign")
@@ -1471,6 +1475,36 @@ func TestProductExplorationMergesNewParagraphsPerOrigin(t *testing.T) {
 	for _, origin := range []string{"", "app.example.test", "https://app.example.test/login", "ftp://app.example.test"} {
 		if _, err := service.Apply(context.Background(), core.Action{Type: "recordProductExploration", Origin: origin, ExplorationNotes: "x"}); err == nil {
 			t.Fatalf("origin %q must be rejected", origin)
+		}
+	}
+}
+
+func TestProductExplorationHumanEditReplacesAndLaterAgentFindingsMerge(t *testing.T) {
+	service := core.NewService(store.NewMemory())
+	origin := "https://app.example.test"
+	apply(t, service, core.Action{Type: "recordProductExploration", Origin: origin, ExplorationNotes: "旧入口\n\n旧定位", Author: "agent"})
+	stale := "旧入口\n\n旧定位"
+	state := apply(t, service, core.Action{Type: "replaceProductExploration", Origin: origin, ExplorationNotes: "修正后的入口", Author: "alice"})
+	if got := state.ProductExperiences[0].Notes; got != "修正后的入口" {
+		t.Fatalf("human edit did not replace old notes: %q", got)
+	}
+	state = apply(t, service, core.Action{Type: "recordProductExploration", Origin: origin, ExplorationNotes: "新定位", Author: "agent"})
+	if got := state.ProductExperiences[0].Notes; got != "修正后的入口\n\n新定位" {
+		t.Fatalf("agent finding did not merge after human edit: %q", got)
+	}
+	if _, err := service.Apply(context.Background(), core.Action{Type: "replaceProductExploration", Origin: origin, ExplorationNotes: "覆盖新定位", ExpectedExplorationNotes: &stale}); err == nil {
+		t.Fatal("stale human edit overwrote a newer agent finding")
+	}
+	state = apply(t, service, core.Action{Type: "replaceProductExploration", Origin: origin, ExplorationNotes: "", Author: "alice"})
+	if state.ProductExperiences[0].Notes != "" {
+		t.Fatal("human could not clear incorrect notes")
+	}
+	for _, invalid := range []core.Action{
+		{Type: "replaceProductExploration", Origin: "https://app.example.test/path", ExplorationNotes: "x"},
+		{Type: "replaceProductExploration", Origin: origin, ExplorationNotes: strings.Repeat("x", 200001)},
+	} {
+		if _, err := service.Apply(context.Background(), invalid); err == nil {
+			t.Fatalf("invalid human edit accepted: %+v", invalid)
 		}
 	}
 }

@@ -736,6 +736,9 @@ function renderReqFocus(){
   const inRefs=reqBacklinks(doc.ID);
   const relHTML=(outRefs.length||inRefs.length)?`<div class="card req-rel"><h4>关联需求</h4><div class="req-rel-list">${outRefs.map(r=>`<button type="button" class="req-rel-chip" data-req-doc="${esc(r.ID)}">→ ${esc(r.ID)} ${esc(r.Title)}</button>`).join('')}${inRefs.map(r=>`<button type="button" class="req-rel-chip" data-req-doc="${esc(r.ID)}">← ${esc(r.ID)} ${esc(r.Title)}</button>`).join('')}</div></div>`:'';
   d.innerHTML=`<div class="detail-head"><div><div class="eyebrow">${esc(doc.ID)} · ${reqStatusBadge(doc)}</div><h1>${esc(doc.Title)}</h1></div><div class="detail-actions"><button type="button" id="req-link-btn" class="secondary">🔗 引用需求</button><button type="button" id="req-ai-revise" class="secondary${reqReviseInFlight.has(doc.ID)?' ai-running':''}"${reqReviseInFlight.has(doc.ID)?' disabled':''} title="按修改点改写需求，并同步修正关联的用例（与用例自身的「AI 修正」不同）">${reqReviseInFlight.has(doc.ID)?'AI 修正需求中…':'AI 修正需求'}</button><button type="button" id="req-ai-supplement" class="secondary${reqSupplementInFlight.has(doc.ID)?' ai-running':''}"${reqSupplementInFlight.has(doc.ID)?' disabled':''} title="按你的提示为这份需求补充用例，加入待评审区">${reqSupplementInFlight.has(doc.ID)?'AI 补充设计中…':'AI 补充设计'}</button><button type="button" id="req-ai-design" class="secondary${isAiActive(doc)?' ai-running':''}">${isAiActive(doc)?'AI 设计中':'AI 设计'}</button><button type="button" id="req-ai-host" class="secondary${isHosting(doc)?' ai-running':''}" title="评估、设计、评审、归档由服务端全自动完成，提交后关掉页面也会继续">${isHosting(doc)?'AI 托管中':'AI 托管'}</button><button type="button" id="save-req-doc">保存</button></div></div><div class="card meta-grid"><span>需求缩写 <b id="req-doc-code">${esc(doc.Code||'未设置')}</b></span><span>创建者 <b>${esc(doc.CreatedBy)}</b></span><span>创建时间 <b>${fmt(doc.CreatedAt)}</b></span><span>更新者 <b>${esc(doc.UpdatedBy)}</b></span><span>更新时间 <b>${fmt(doc.UpdatedAt)}</b></span></div>${relHTML}<div class="card"><div id="req-editor"></div></div>`;
+  const experienceButton=document.createElement('button');experienceButton.type='button';experienceButton.className='link-button';
+  experienceButton.textContent=doc.ExplorationNotes?.trim()?'探索记录 · 查看/编辑':'探索记录 · 添加';
+  experienceButton.onclick=()=>openExperienceDialog(experienceKey('doc',doc.ID));d.querySelector('.meta-grid').append(experienceButton);
   reqEditor?.destroy();
   reqEditor=new toastui.Editor({el:$('#req-editor'),height:'520px',initialEditType:'wysiwyg',previewStyle:'tab',initialValue:doc.Content||'',language:'zh-CN',theme:document.documentElement.classList.contains('dark')?'dark':'light',usageStatistics:false});
   $('#save-req-doc').onclick=()=>saveReqDoc(doc).catch(()=>{});
@@ -760,7 +763,7 @@ function currentReqFolderTarget(){
 $('#create-req-folder').onclick=()=>reqFolderModal(currentReqFolderTarget());
 $('#create-req-doc').onclick=()=>reqDocModal(currentReqFolderTarget());
 function reqFolderMenu(id){const items=[['查看详情',()=>setReqFocus({type:'folder',id})],['新建文件夹',()=>reqFolderModal(id)],['新增需求文档',()=>reqDocModal(id)],['重命名文件夹',()=>renameReqFolderModal(id)]];if(id!=='req-root')items.push(['删除空文件夹',()=>{if(confirm('确定删除这个空文件夹？'))actReview('deleteReqFolder',{FolderID:id})}]);return items}
-function reqDocMenu(id){const doc=state.reqDocs.find(x=>x.ID===id),active=isAiActive(doc);return [['查看详情',()=>setReqFocus({type:'doc',id})],['重命名',()=>renameReqDocModal(doc)],[reqReviseInFlight.has(id)?'AI 修正需求中':'AI 修正需求',()=>openReqAiRevise(doc),reqReviseInFlight.has(id)?'ai-running':''],[active?'AI 设计中':'AI 设计',()=>openAiDrawer(doc),active?'ai-running':''],['删除',()=>{if(confirm('确定删除这份需求文档？'))actReview('deleteReqDoc',{DocID:id})}]]}
+function reqDocMenu(id){const doc=state.reqDocs.find(x=>x.ID===id),active=isAiActive(doc);return [['查看详情',()=>setReqFocus({type:'doc',id})],['探索记录',()=>openExperienceDialog(experienceKey('doc',id))],['重命名',()=>renameReqDocModal(doc)],[reqReviseInFlight.has(id)?'AI 修正需求中':'AI 修正需求',()=>openReqAiRevise(doc),reqReviseInFlight.has(id)?'ai-running':''],[active?'AI 设计中':'AI 设计',()=>openAiDrawer(doc),active?'ai-running':''],['删除',()=>{if(confirm('确定删除这份需求文档？'))actReview('deleteReqDoc',{DocID:id})}]]}
 // 位置可选「顶级」（与现有的顶级文件夹并列，例如按 产品 / 产品版本 / 需求 组织时新建一个产品），默认放在当前文件夹下。
 const REQ_TOP='__top__';
 function reqFolderOptionsHTML(selected){
@@ -1061,8 +1064,73 @@ async function openSettingsDialog(){
 $('#settings-close').onclick=()=>$('#settings-dialog').close();
 $('#settings-dialog').onclose=()=>{agentSettingsGeneration++;agentSettingsDrafts.clear();agentRuntimeFiles.clear()};
 
-// ---- 头像菜单：设置 / 资产 ----
-$('#avatar-menu').onclick=e=>{e.stopPropagation();menu(e,[['⚙ 设置',openSettingsDialog],['🗂 资产',openAssetsDialog]])};
+// ---- 探索经验：需求记录可直接修改，产品经验的人工修改覆盖旧内容 ----
+let experienceSelected=null,experienceOriginal='',experienceDraftProduct=null;
+const experienceKey=(type,id)=>`${type}:${id}`;
+function experienceItems(){
+  return [
+    ...[...state.productExperiences,...(experienceDraftProduct?[experienceDraftProduct]:[])].map(p=>({type:'product',id:p.Origin,label:p.Origin,notes:p.Notes||'',updatedAt:p.UpdatedAt})).sort((a,b)=>a.label.localeCompare(b.label)),
+    ...state.reqDocs.map(d=>({type:'doc',id:d.ID,label:`${d.ID} · ${d.Title}`,notes:d.ExplorationNotes||'',updatedAt:d.UpdatedAt})).sort((a,b)=>a.label.localeCompare(b.label))
+  ];
+}
+function experienceCurrent(){return experienceItems().find(x=>experienceKey(x.type,x.id)===experienceSelected)}
+function experienceDirty(){const editor=$('#experience-editor');return !!experienceSelected&&!!editor&&editor.value!==experienceOriginal}
+function renderExperienceList(){
+  const search=$('#experience-search').value.trim().toLowerCase(),items=experienceItems(),list=$('#experience-list');
+  list.innerHTML=['product','doc'].map(type=>{
+    const group=items.filter(x=>x.type===type&&x.label.toLowerCase().includes(search));
+    return `<h4>${type==='product'?'产品经验':'需求探索记录'}（${group.length}）</h4>${group.map(x=>`<button type="button" data-experience="${esc(experienceKey(x.type,x.id))}" aria-current="${experienceSelected===experienceKey(x.type,x.id)}">${esc(x.label)}${x.notes?'':' · 空'}</button>`).join('')||'<p class="meta">无匹配记录</p>'}`;
+  }).join('');
+  list.querySelectorAll('[data-experience]').forEach(button=>button.onclick=()=>selectExperience(button.dataset.experience));
+}
+function renderExperienceContent(){
+  const item=experienceCurrent(),content=$('#experience-content');
+  if(!item){content.innerHTML='<p class="meta">选择左侧的产品域名或需求文档，查看并修改探索经验。</p>';return}
+  experienceOriginal=item.notes;
+  content.innerHTML=`<h2>${esc(item.type==='product'?'产品经验':'需求探索记录')}</h2><p class="meta">${esc(item.label)}</p><p class="meta">${item.type==='product'?'由相同被测系统域名的设计、生成与修复任务共用；人工保存会替换整份内容，之后 agent 的新发现仍会合并进来。':'只属于这份需求文档，设计、生成与修复任务会读取它。'}</p><form id="experience-form"><label>探索经验全文<textarea class="experience-editor" id="experience-editor" name="notes" maxlength="200000" spellcheck="false" placeholder="暂无探索经验">${esc(item.notes)}</textarea></label><div class="experience-actions"><span class="meta" id="experience-count"></span><button type="button" class="secondary" id="experience-reload">重新读取</button><button type="submit">保存探索经验</button></div><p class="settings-status" id="experience-status" role="status"></p></form>`;
+  const editor=$('#experience-editor'),count=$('#experience-count');
+  const updateCount=()=>{count.textContent=`${new TextEncoder().encode(editor.value).length} / 200000 字节`};
+  editor.oninput=()=>{updateCount();$('#experience-status').textContent='有未保存的修改'};updateCount();
+  $('#experience-reload').onclick=async()=>{
+    if(experienceDirty()&&!confirm('确定放弃当前修改并重新读取？'))return;
+    try{state=normalizeState(await request('/api/state'));experienceDraftProduct=null;renderExperienceList();renderExperienceContent()}catch(error){$('#experience-status').textContent=`重新读取失败：${error.message}`}
+  };
+  $('#experience-form').onsubmit=async e=>{
+    e.preventDefault();const button=e.currentTarget.querySelector('[type="submit"]');button.disabled=true;
+    const notes=editor.value;
+    try{
+      if(item.type==='product')await act('replaceProductExploration',{Origin:item.id,ExplorationNotes:notes,ExpectedExplorationNotes:experienceOriginal});
+      else await act('saveReqExploration',{DocID:item.id,ExplorationNotes:notes,ExpectedExplorationNotes:experienceOriginal});
+      experienceDraftProduct=null;renderExperienceContent();renderExperienceList();$('#experience-status').textContent='已保存';toast('探索经验已保存');
+    }catch(error){$('#experience-status').textContent=`保存失败：${error.message}`}finally{button.disabled=false}
+  };
+}
+function selectExperience(key){
+  if(key===experienceSelected)return;
+  if(experienceDirty()&&!confirm('当前探索经验尚未保存，确定放弃修改？'))return;
+  experienceSelected=key;renderExperienceList();renderExperienceContent();
+}
+function openExperienceDialog(key){
+  if(!state)return toast('数据尚未载入，请稍后再试',true);
+  experienceSelected=key||null;experienceOriginal='';experienceDraftProduct=null;$('#experience-search').value='';
+  $('#experience-dialog').showModal();renderExperienceList();renderExperienceContent();
+}
+$('#experience-search').oninput=renderExperienceList;
+$('#experience-add').onclick=()=>{
+  const raw=prompt('输入被测系统 URL 或域名（如 https://app.example.com）');if(raw===null)return;
+  let origin;try{const value=raw.trim(),url=new URL(/^[a-z][a-z\d+.-]*:\/\//i.test(value)?value:`https://${value}`);if(!['http:','https:'].includes(url.protocol)||url.username||url.password)throw Error();origin=url.origin}catch{return toast('请输入有效的 HTTP 或 HTTPS 地址',true)}
+  const key=experienceKey('product',origin);
+  if(experienceDirty()&&key!==experienceSelected&&!confirm('当前探索经验尚未保存，确定放弃修改？'))return;
+  if(!state.productExperiences.some(x=>x.Origin===origin))experienceDraftProduct={Origin:origin,Notes:''};
+  $('#experience-search').value='';experienceSelected=key;renderExperienceList();renderExperienceContent();
+};
+function closeExperienceDialog(){if(experienceDirty()&&!confirm('当前探索经验尚未保存，确定放弃修改？'))return;$('#experience-dialog').close()}
+$('#experience-close').onclick=closeExperienceDialog;
+$('#experience-dialog').addEventListener('cancel',event=>{if(experienceDirty()&&!confirm('当前探索经验尚未保存，确定放弃修改？'))event.preventDefault()});
+$('#experience-dialog').onclose=()=>{experienceSelected=null;experienceOriginal='';experienceDraftProduct=null};
+
+// ---- 头像菜单：设置 / 资产 / 探索经验 ----
+$('#avatar-menu').onclick=e=>{e.stopPropagation();menu(e,[['⚙ 设置',openSettingsDialog],['🗂 资产',openAssetsDialog],['🧭 探索经验',()=>openExperienceDialog()]])};
 // ---- 资产：图片 / 视频 / 音频，存在 CaseHub 数据库里；AI 设计时勾选后随任务交给 agent ----
 const ASSET_TYPES=[{id:'image',label:'图片',accept:'image/*'},{id:'video',label:'视频',accept:'video/*'},{id:'audio',label:'音频',accept:'audio/*'}];
 const assetTypeLabel=t=>ASSET_TYPES.find(x=>x.id===t)?.label||t;

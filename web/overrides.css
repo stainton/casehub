@@ -167,6 +167,15 @@ table{border-collapse:collapse;width:100%}th,td{text-align:left;vertical-align:t
 
 /* Agent settings dialog. */
 #settings-dialog{width:min(900px,94vw);max-height:88vh}
+#experience-dialog{width:min(980px,94vw);max-height:88vh}
+.experience-sidebar label{margin:0 0 12px}
+.experience-sidebar input{width:100%;min-width:0}
+.experience-sidebar h4{margin:16px 10px 6px}
+.experience-sidebar button{white-space:normal}
+#experience-add{margin-top:12px;border:1px dashed var(--line)}
+.experience-editor{width:100%;min-height:360px;resize:vertical;font:13px/1.6 ui-monospace,SFMono-Regular,Consolas,monospace}
+.experience-actions{display:flex;align-items:center;gap:12px;justify-content:flex-end;margin-top:12px}
+.experience-actions .meta{margin-right:auto}
 .settings-layout{display:grid;grid-template-columns:210px minmax(0,1fr);height:min(650px,72vh)}
 .settings-sidebar{padding:18px 12px;background:var(--surface2);border-right:1px solid var(--line);overflow:auto}
 .settings-sidebar h4{margin:0 10px 14px;color:var(--muted);font-size:12px}

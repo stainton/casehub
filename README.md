@@ -167,6 +167,9 @@ planner 不会绕开约束去试；同一段文字也会参与"建议覆盖用�
 
 每份需求文档还保存独立的探索记录：AI 设计完成时 CaseHub 保存 planner 返回的记录；脚本生成或修复完成时保存 generator/healer 按需求返回的记录。另外按被测系统 origin 保存一份产品级探索经验（各需求共用的入口、导航和控件定位），服务每次只返回新验证的段落，由 CaseHub 去重合并。下一次设计、生成或修复时，CaseHub 把需求记录（`explorationNotes`）和对应 origin 的产品级经验（`context.productExperience`）随请求带给 auto-test；auto-test 自身不保存经验，planner 与 generator 分开部署也共用同一份。
 
+头像菜单的「探索经验」可查看、搜索和编辑全部产品级经验与需求探索记录；需求文档详情与右键菜单也可直接打开该需求的记录。产品经验支持新增域名，人工保存会替换该域名的整份记录（可清空错误内容），之后 agent 新验证的段落仍按原规则合并。需求记录的修改只影响对应需求。保存后，后续任务会收到修改后的经验；已在运行的任务继续使用提交时的快照。
+若打开编辑后有任务更新了同一份记录，保存会提示重新读取，避免覆盖新发现。
+
 脚本生成对应 auto-test 的另一个独立服务：准备 `build/generator/setting.json` 后运行 `node server/generator/main.mjs`（默认 4502），CaseHub 通过 `CASEHUB_GENERATOR_URL` 连接。general-agent（默认 4503）提供不带 Playwright 的通用 Claude CLI 调用，CaseHub 当前用它生成阅读友好版，通过 `CASEHUB_GENERAL_AGENT_URL` 连接。三个服务相互独立，可以只启动所需服务；未配置时对应入口会提示服务未配置，其余功能不受影响。
 
 容器中的 localhost 指容器自身；如果 agent 服务运行在另一容器或主机上，将对应的 `CASEHUB_*_URL` 配置为容器可访问的地址。
