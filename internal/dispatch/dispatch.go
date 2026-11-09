@@ -818,6 +818,44 @@ func (d *Dispatcher) Update(ctx context.Context, kind, id string, meta json.RawM
 	return t, d.store.SaveTask(ctx, t)
 }
 
+// ArchiveTask changes only the task-center visibility; its result and downloadable log remain intact.
+func (d *Dispatcher) ArchiveTask(ctx context.Context, id string, archived bool) (tasks.Task, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	t, err := d.store.GetTask(ctx, id)
+	if errors.Is(err, tasks.ErrNotFound) {
+		return tasks.Task{}, errNotFound
+	}
+	if err != nil {
+		return tasks.Task{}, err
+	}
+	if !tasks.Terminal(t.Status) {
+		return tasks.Task{}, &HTTPError{http.StatusConflict, "TASK_ACTIVE", "正在运行的任务不能归档"}
+	}
+	t.Archived = archived
+	if err := d.store.SaveTask(ctx, t); err != nil {
+		return tasks.Task{}, err
+	}
+	return t, nil
+}
+
+// DeleteTask permanently removes a finished task and its events and blobs.
+func (d *Dispatcher) DeleteTask(ctx context.Context, id string) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	t, err := d.store.GetTask(ctx, id)
+	if errors.Is(err, tasks.ErrNotFound) {
+		return errNotFound
+	}
+	if err != nil {
+		return err
+	}
+	if !tasks.Terminal(t.Status) {
+		return &HTTPError{http.StatusConflict, "TASK_ACTIVE", "正在运行的任务不能删除"}
+	}
+	return d.store.DeleteTask(ctx, id)
+}
+
 func (d *Dispatcher) List(ctx context.Context, f tasks.Filter) ([]tasks.Task, error) {
 	known := f.Kinds[:0:0]
 	for _, k := range f.Kinds {

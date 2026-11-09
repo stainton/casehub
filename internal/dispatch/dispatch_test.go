@@ -339,6 +339,8 @@ func TestTheHTTPContractMatchesANodes(t *testing.T) {
 	mux.Handle("/api/planner/jobs", d.Jobs("planner"))
 	mux.Handle("/api/planner/jobs/", d.Jobs("planner"))
 	mux.Handle("GET /api/tasks", d.Tasks())
+	mux.Handle("PATCH /api/tasks/{id}", d.TaskRecord())
+	mux.Handle("DELETE /api/tasks/{id}", d.TaskRecord())
 	mux.Handle("GET /metrics", d.Metrics())
 	mux.Handle("GET /api/queue", d.Queue())
 	srv := httptest.NewServer(mux)
@@ -360,6 +362,14 @@ func TestTheHTTPContractMatchesANodes(t *testing.T) {
 	var job map[string]any
 	_ = json.NewDecoder(resp.Body).Decode(&job)
 	id := job["id"].(string)
+	activeArchive, _ := http.NewRequest(http.MethodPatch, srv.URL+"/api/tasks/"+id, strings.NewReader(`{"archived":true}`))
+	if resp, err := http.DefaultClient.Do(activeArchive); err != nil || resp.StatusCode != 409 {
+		t.Fatalf("active archive: %v %v", err, resp)
+	}
+	activeDelete, _ := http.NewRequest(http.MethodDelete, srv.URL+"/api/tasks/"+id, nil)
+	if resp, err := http.DefaultClient.Do(activeDelete); err != nil || resp.StatusCode != 409 {
+		t.Fatalf("active delete: %v %v", err, resp)
+	}
 	if _, leaked := node.submissions()[0]["casehubTask"]; leaked {
 		t.Fatal("casehubTask is CaseHub's own field and never reaches a node")
 	}
@@ -420,6 +430,20 @@ func TestTheHTTPContractMatchesANodes(t *testing.T) {
 	}
 	if _, body := get("/metrics"); !strings.Contains(body, `casehub_tasks{kind="planner",state="queued"} 0`) || !strings.Contains(body, `casehub_nodes{kind="planner"} 1`) {
 		t.Fatalf("metrics:\n%s", body)
+	}
+	archive, _ := http.NewRequest(http.MethodPatch, srv.URL+"/api/tasks/"+id, strings.NewReader(`{"archived":true}`))
+	if resp, err := http.DefaultClient.Do(archive); err != nil || resp.StatusCode != 200 {
+		t.Fatalf("archive: %v %v", err, resp)
+	}
+	if code, body := get("/api/tasks?kind=planner"); code != 200 || !strings.Contains(body, `"archived":true`) {
+		t.Fatalf("archive listing: %d %s", code, body)
+	}
+	remove, _ := http.NewRequest(http.MethodDelete, srv.URL+"/api/tasks/"+id, nil)
+	if resp, err := http.DefaultClient.Do(remove); err != nil || resp.StatusCode != 204 {
+		t.Fatalf("delete: %v %v", err, resp)
+	}
+	if code, _ := get("/api/planner/jobs/"+id+"/log"); code != 404 {
+		t.Fatalf("deleted log status: %d", code)
 	}
 }
 

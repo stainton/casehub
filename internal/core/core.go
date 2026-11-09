@@ -381,7 +381,7 @@ type State struct {
 	KnowledgeDocs      []KnowledgeDoc      `json:"knowledgeDocs"`
 	// KnowledgeItems is the legacy flat list; it is migrated on load and never written back.
 	KnowledgeItems []LegacyKnowledgeItem `json:"knowledgeItems,omitempty"`
-	// Hostings are the AI 托管 runs, at most one per requirement (see hosting.go).
+	// Hostings are the AI 托管 runs; archived runs remain as history (see hosting.go).
 	Hostings []Hosting `json:"hostings"`
 }
 

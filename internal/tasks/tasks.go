@@ -72,6 +72,7 @@ type Task struct {
 	Diagnostics    bool       `json:"diagnostics,omitempty"`
 	// Handled marks a finished task the frontend has dealt with (imported, saved or dismissed).
 	Handled bool            `json:"handled,omitempty"`
+	Archived bool           `json:"archived,omitempty"`
 	Result  json.RawMessage `json:"result,omitempty"`
 }
 
@@ -112,6 +113,9 @@ func (t Task) Summary() map[string]any {
 	}
 	if t.Handled {
 		out["handled"] = true
+	}
+	if t.Archived {
+		out["archived"] = true
 	}
 	if t.Attempts > 1 {
 		out["attempts"] = t.Attempts
@@ -156,6 +160,8 @@ type Store interface {
 	GetTask(ctx context.Context, id string) (Task, error)
 	// ListTasks returns matching tasks newest first, without their results.
 	ListTasks(ctx context.Context, f Filter) ([]Task, error)
+	// DeleteTask removes one finished task, its progress events, and its blobs.
+	DeleteTask(ctx context.Context, id string) error
 	// DeleteFinishedBefore removes finished tasks (and their events and blobs) older than cutoff.
 	DeleteFinishedBefore(ctx context.Context, cutoff time.Time) (int, error)
 	// AppendEvent stores one progress event and drops all but the last keep events of the task.

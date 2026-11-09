@@ -89,6 +89,37 @@ func conformance(t *testing.T, s Store, reopen func() Store) {
 	if _, err := s.GetTask(ctx, open.ID); err != nil {
 		t.Fatal("the open task stays")
 	}
+	if err := s.DeleteTask(ctx, open.ID); err == nil {
+		t.Fatal("unfinished tasks cannot be deleted")
+	}
+	fresh := Task{ID: NewID(), Kind: "planner", Status: Succeeded, CreatedAt: time.Now().UTC(), Archived: true}
+	if err := s.SaveTask(ctx, fresh); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.AppendEvent(ctx, fresh.ID, 1, json.RawMessage(`{"id":1}`), 0); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.PutBlob(ctx, fresh.ID, BlobCheckpoint, []byte("checkpoint")); err != nil {
+		t.Fatal(err)
+	}
+	if reopen != nil {
+		s = reopen()
+	}
+	if got, err := s.GetTask(ctx, fresh.ID); err != nil || !got.Archived {
+		t.Fatalf("archive not persisted: %+v %v", got, err)
+	}
+	if err := s.DeleteTask(ctx, fresh.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.GetTask(ctx, fresh.ID); err != ErrNotFound {
+		t.Fatalf("task remains: %v", err)
+	}
+	if _, err := s.GetBlob(ctx, fresh.ID, BlobCheckpoint); err != ErrNotFound {
+		t.Fatalf("blob remains: %v", err)
+	}
+	if events, err := s.Events(ctx, fresh.ID, 0); (err != nil && err != ErrNotFound) || len(events) != 0 {
+		t.Fatalf("events remain: %v %v", events, err)
+	}
 }
 
 // PostgreSQL normalises JSONB text; what matters is the same value.

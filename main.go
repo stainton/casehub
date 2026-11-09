@@ -103,6 +103,8 @@ func routes(a *api, services ...service) http.Handler {
 	}
 	if a.dispatcher != nil {
 		m.Handle("GET /api/tasks", a.dispatcher.Tasks())
+		m.Handle("PATCH /api/tasks/{id}", a.dispatcher.TaskRecord())
+		m.Handle("DELETE /api/tasks/{id}", a.dispatcher.TaskRecord())
 		m.Handle("GET /metrics", a.dispatcher.Metrics())
 		m.Handle("GET /api/queue", a.dispatcher.Queue())
 	}

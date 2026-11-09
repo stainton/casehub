@@ -299,6 +299,37 @@ func (d *Dispatcher) Tasks() http.Handler {
 	})
 }
 
+// TaskRecord manages a finished task in the task center without changing the node job lifecycle.
+func (d *Dispatcher) TaskRecord() http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		id := r.PathValue("id")
+		switch r.Method {
+		case http.MethodPatch:
+			var in struct {
+				Archived *bool `json:"archived"`
+			}
+			if json.NewDecoder(http.MaxBytesReader(w, r.Body, 1024)).Decode(&in) != nil || in.Archived == nil {
+				writeError(w, &HTTPError{http.StatusBadRequest, "INVALID_REQUEST", "Body must be {archived: boolean}"})
+				return
+			}
+			t, err := d.ArchiveTask(r.Context(), id, *in.Archived)
+			if err != nil {
+				writeError(w, err)
+				return
+			}
+			writeJSON(w, http.StatusOK, t.Summary())
+		case http.MethodDelete:
+			if err := d.DeleteTask(r.Context(), id); err != nil {
+				writeError(w, err)
+				return
+			}
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			writeError(w, &HTTPError{http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "Method not allowed"})
+		}
+	})
+}
+
 // current prefers the in-memory state of a live task over its last stored copy.
 func (d *Dispatcher) current(t tasks.Task) tasks.Task {
 	d.mu.Lock()

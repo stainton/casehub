@@ -120,6 +120,31 @@ func (l *Local) ListTasks(_ context.Context, f Filter) ([]Task, error) {
 	}
 	return out, nil
 }
+func (l *Local) DeleteTask(_ context.Context, id string) error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	r := l.records[id]
+	if r == nil {
+		return ErrNotFound
+	}
+	if !Terminal(r.Task.Status) {
+		return errors.New("task is still running")
+	}
+	if l.dir != "" {
+		matches, err := filepath.Glob(filepath.Join(l.dir, id+".*"))
+		if err != nil {
+			return err
+		}
+		for _, file := range matches {
+			if err := os.Remove(file); err != nil && !errors.Is(err, os.ErrNotExist) {
+				return err
+			}
+		}
+	}
+	delete(l.records, id)
+	delete(l.blobs, id)
+	return nil
+}
 func (l *Local) DeleteFinishedBefore(_ context.Context, cutoff time.Time) (int, error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()

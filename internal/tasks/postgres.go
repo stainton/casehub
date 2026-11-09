@@ -98,6 +98,20 @@ func (p *Postgres) ListTasks(ctx context.Context, f Filter) ([]Task, error) {
 	}
 	return out, rows.Err()
 }
+func (p *Postgres) DeleteTask(ctx context.Context, id string) error {
+	res, err := p.db.ExecContext(ctx, `DELETE FROM casehub_tasks WHERE id=$1 AND status = ANY($2)`, id, []string{Succeeded, Failed, Cancelled})
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
 func (p *Postgres) DeleteFinishedBefore(ctx context.Context, cutoff time.Time) (int, error) {
 	res, err := p.db.ExecContext(ctx, `DELETE FROM casehub_tasks WHERE finished_at IS NOT NULL AND finished_at < $1 AND status = ANY($2)`,
 		cutoff, []string{Succeeded, Failed, Cancelled})

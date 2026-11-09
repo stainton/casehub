@@ -2083,6 +2083,35 @@ func TestHostingPicksAFreeRequirementCodeOnAClash(t *testing.T) {
 	}
 }
 
+func TestHostingTaskArchiveAndDelete(t *testing.T) {
+	svc := core.NewService(store.NewMemory())
+	state := apply(t, svc, core.Action{Type: "createReqDoc", FolderID: "req-root", Title: "归档任务"})
+	docID := state.ReqDocs[len(state.ReqDocs)-1].ID
+	branch := branchID(t, apply(t, svc, core.Action{Type: "createVersion", Name: "任务版本", Blank: true}), "任务版本")
+	state = apply(t, svc, core.Action{Type: "startHosting", Hosting: &core.Hosting{DocID: docID, VersionID: branch, Product: "P", ProductVersion: "1"}})
+	id := state.Hostings[0].ID
+	if _, err := svc.Apply(context.Background(), core.Action{Type: "archiveHosting", HostingID: id}); err == nil {
+		t.Fatal("active hosting cannot be archived")
+	}
+	state = apply(t, svc, core.Action{Type: "hostingStop", HostingID: id, Note: "waiting"})
+	state = apply(t, svc, core.Action{Type: "archiveHosting", HostingID: id})
+	if !state.Hostings[0].Archived {
+		t.Fatal("hosting not archived")
+	}
+	state = apply(t, svc, core.Action{Type: "startHosting", Hosting: &core.Hosting{DocID: docID, VersionID: branch, Product: "P", ProductVersion: "1"}})
+	if len(state.Hostings) != 2 || state.Hostings[0].ID != id || !state.Hostings[0].Archived {
+		t.Fatal("new run replaced archived hosting")
+	}
+	state = apply(t, svc, core.Action{Type: "unarchiveHosting", HostingID: id})
+	if state.Hostings[0].Archived {
+		t.Fatal("hosting not restored")
+	}
+	state = apply(t, svc, core.Action{Type: "deleteHosting", HostingID: id})
+	if len(state.Hostings) != 1 {
+		t.Fatal("hosting not deleted")
+	}
+}
+
 func TestKnowledgeDocKind(t *testing.T) {
 	service := core.NewService(store.NewMemory())
 	state := apply(t, service, core.Action{Type: "createKnowledgeDoc", FolderID: "kb-root", Title: "用例树构建约束", Content: "目录不超过 4 层", Kind: "constraint"})

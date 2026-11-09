@@ -20,6 +20,7 @@ type Hosting struct {
 	Source, Label           string // Source: "" (a requirement) or HostingFromCases
 	Product, ProductVersion string
 	Stage                   string // estimating, designing, reviewing, archiving, generating, running, done, stopped
+	Archived                bool   // task-center archive; completed hosting data remains available
 	FailedAt, Error, Note   string // FailedAt: the stage a stopped hosting stopped in
 	Code, Rationale         string
 	CaseCount               int
@@ -143,6 +144,10 @@ func applyHosting(s *State, a Action) (ok bool, err error) {
 		return true, startHosting(s, a)
 	case "deleteHosting":
 		return true, deleteHosting(s, a)
+	case "archiveHosting":
+		return true, setHostingArchived(s, a, true)
+	case "unarchiveHosting":
+		return true, setHostingArchived(s, a, false)
 	}
 	if !strings.HasPrefix(a.Type, "hosting") {
 		return false, nil
@@ -238,10 +243,10 @@ func startHosting(s *State, a Action) error {
 			return errors.New("这份需求已有进行中的托管")
 		}
 	}
-	// One record per requirement: a new run replaces the finished or stopped one.
+	// A new run replaces the latest unarchived record; archived runs stay in task-center history.
 	kept := s.Hostings[:0]
 	for _, h := range s.Hostings {
-		if h.DocID != doc.ID {
+		if h.DocID != doc.ID || h.Archived {
 			kept = append(kept, h)
 		}
 	}
@@ -253,7 +258,7 @@ func startHosting(s *State, a Action) error {
 }
 
 // startCaseHosting hosts cases already in a test version: generate a script for each (and run them once when
-// asked). A case can be in only one running hosting; a new run replaces the finished or stopped ones it covers.
+// asked). A case can be in only one running hosting; a new run replaces matching unarchived finished or stopped runs.
 func startCaseHosting(s *State, a Action) error {
 	in := a.Hosting
 	if _, err := requireBranch(s, in.VersionID); err != nil {
@@ -300,7 +305,7 @@ func startCaseHosting(s *State, a Action) error {
 		for _, id := range h.CaseIDs {
 			covered = covered && picked[id]
 		}
-		if !covered {
+		if !covered || h.Archived {
 			kept = append(kept, h)
 		}
 	}
@@ -347,6 +352,19 @@ func deleteHosting(s *State, a Action) error {
 		}
 	}
 	return errors.New("托管不存在")
+}
+
+func setHostingArchived(s *State, a Action, archived bool) error {
+	h := hostingAt(s, a.HostingID)
+	if h == nil {
+		return errors.New("托管不存在")
+	}
+	if HostingActive(*h) {
+		return errors.New("托管进行中，不能归档")
+	}
+	h.Archived = archived
+	h.UpdatedAt = now()
+	return nil
 }
 
 // hostingDesigning takes the estimate as-is: the requirement keeps its code, or gets the suggested one.
@@ -753,6 +771,7 @@ func hostingRecord(s *State, h *Hosting, a Action) error {
 //
 // clearTask (Force on the action) drops a failed generator task so the runner submits a new one.
 func hostingRetry(h *Hosting, clearTask bool) error {
+	h.Archived = false
 	if h.Stage == HostingDone {
 		hasRunError := false
 		for _, result := range h.Results {
