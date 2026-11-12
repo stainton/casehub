@@ -198,6 +198,20 @@ func (d *Dispatcher) complete(l *live, node, jobID string, job nodeJob) {
 	l.mu.Lock()
 	final := l.nodeFinal
 	l.mu.Unlock()
+	if job.Status == tasks.Failed || job.Diagnostics {
+		status, body, err := d.call(d.ctx, http.MethodGet, base+"/sessions", nil, 5*time.Minute)
+		if err == nil && status == http.StatusOK && json.Valid(body) {
+			err = d.store.PutBlob(d.ctx, l.task.ID, tasks.BlobSessions, body)
+		} else if err == nil && status != http.StatusNotFound {
+			err = errors.New("cannot collect Claude sessions: HTTP " + strconv.Itoa(status))
+		}
+		if err != nil {
+			release = false // Keep the source files available when collection or persistence fails.
+			d.cfg.Logf("dispatch: saving Claude sessions for task %s failed: %v", l.task.ID, err)
+			note, _ := json.Marshal(map[string]any{"type": "claude_sessions", "error": err.Error(), "files": []any{}})
+			_ = d.store.PutBlob(d.ctx, l.task.ID, tasks.BlobSessions, note)
+		}
+	}
 	switch job.Status {
 	case tasks.Succeeded:
 		var result []byte

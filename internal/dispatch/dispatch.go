@@ -472,7 +472,10 @@ func (d *Dispatcher) call(ctx context.Context, method, u string, body []byte, ti
 		return 0, nil, err
 	}
 	defer resp.Body.Close()
-	data, err := io.ReadAll(io.LimitReader(resp.Body, 64<<20))
+	data, err := io.ReadAll(io.LimitReader(resp.Body, (64<<20)+1))
+	if err == nil && len(data) > 64<<20 {
+		err = errors.New("node response exceeds 64 MiB")
+	}
 	return resp.StatusCode, data, err
 }
 

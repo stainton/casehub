@@ -19,19 +19,20 @@ import (
 // ?queue=false, SSE progress, result, release, checkpoint, diagnostics and asset pushes. legacy turns it into
 // a node from before step 1: no capacity, no release, no checkpoint (it still keeps sessions to continue).
 type fakeNode struct {
-	t           *testing.T
-	srv         *httptest.Server
-	kind        string
-	legacy      bool
-	mu          sync.Mutex
-	concurrency int
-	jobs        map[string]*fakeJob
-	assets      map[string][]byte
-	submitted   []map[string]any
-	released    []string
-	cancelled   []string
-	reject      func(body map[string]any) (int, string)
-	changed     chan struct{}
+	t             *testing.T
+	srv           *httptest.Server
+	kind          string
+	legacy        bool
+	sessionStatus int
+	mu            sync.Mutex
+	concurrency   int
+	jobs          map[string]*fakeJob
+	assets        map[string][]byte
+	submitted     []map[string]any
+	released      []string
+	cancelled     []string
+	reject        func(body map[string]any) (int, string)
+	changed       chan struct{}
 }
 
 type fakeJob struct {
@@ -206,6 +207,14 @@ func (n *fakeNode) job(w http.ResponseWriter, r *http.Request, j *fakeJob, resou
 	case resource == "diagnostics" && !n.legacy:
 		w.Header().Set("Content-Type", "application/gzip")
 		_, _ = w.Write([]byte("diagnostics-of-" + j.id))
+	case resource == "sessions" && !n.legacy:
+		if n.sessionStatus != 0 {
+			writeJSON(w, n.sessionStatus, map[string]string{"error": "session download failed"})
+			return
+		}
+		writeJSON(w, 200, map[string]any{"type": "claude_sessions", "files": []map[string]string{
+			{"path": "claude-config/projects/test/session.jsonl", "content": "original conversation of " + j.id},
+		}})
 	case resource == "events":
 		n.events(w, r, j)
 	default:

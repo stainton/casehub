@@ -3,8 +3,8 @@
 // status, progress events, result, the planner session to continue and a failed run's diagnostics — is the
 // one that survives node restarts, scale-in and a browser that was closed while the task ran.
 //
-// What a task was submitted with is deliberately not part of it: requests carry test accounts, passwords and
-// storageState, so the dispatcher keeps them in memory only until the task is done (see dispatch).
+// Requests and credentials are not part of a task's public summary. Failed-run conversations and
+// invocation contexts are stored separately as BlobSessions for explicit diagnostic downloads.
 package tasks
 
 import (
@@ -35,6 +35,7 @@ func Terminal(status string) bool {
 const (
 	BlobCheckpoint  = "checkpoint"
 	BlobDiagnostics = "diagnostics"
+	BlobSessions    = "sessions"
 	// BlobRequest is a queued task's request, kept only until a node has it (see dispatch.keepRequest).
 	BlobRequest = "request"
 )
@@ -71,9 +72,9 @@ type Task struct {
 	ContinuedAt    *time.Time `json:"continuedAt,omitempty"`
 	Diagnostics    bool       `json:"diagnostics,omitempty"`
 	// Handled marks a finished task the frontend has dealt with (imported, saved or dismissed).
-	Handled bool            `json:"handled,omitempty"`
-	Archived bool           `json:"archived,omitempty"`
-	Result  json.RawMessage `json:"result,omitempty"`
+	Handled  bool            `json:"handled,omitempty"`
+	Archived bool            `json:"archived,omitempty"`
+	Result   json.RawMessage `json:"result,omitempty"`
 }
 
 func (t Task) Continuable() bool {

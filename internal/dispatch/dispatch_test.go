@@ -70,6 +70,66 @@ func waitStatus(t *testing.T, d *dispatch.Dispatcher, kind, id, want string) tas
 
 const request = `{"target":{"baseUrl":"https://app.example.test/login"},"context":{"testData":{"username":"qa","password":"secret"}},"requirements":[{"id":"REQ-1"}]}`
 
+func TestFailedSessionsAreSavedBeforeReleaseAndIncludedInLog(t *testing.T) {
+	for _, kind := range []string{"planner", "generator", "healer"} {
+		t.Run(kind, func(t *testing.T) {
+			node := newFakeNode(t, kind, 1)
+			store := tasks.NewMemory()
+			d := start(t, store, &dispatch.Kind{Name: kind, Pool: pool(t, node), Continuable: true})
+			task, err := d.Submit(context.Background(), kind, []byte(request))
+			if err != nil {
+				t.Fatal(err)
+			}
+			job := node.only()
+			node.fail(job, "RUNTIME_FAILED", true, kind != "planner")
+			waitStatus(t, d, kind, task.ID, tasks.Failed)
+			waitFor(t, "release after session collection", func() bool { return len(node.releasedIDs()) == 1 })
+			data, err := store.GetBlob(context.Background(), task.ID, tasks.BlobSessions)
+			if err != nil || !strings.Contains(string(data), "original conversation of "+job.id) {
+				t.Fatalf("saved session: %s, %v", data, err)
+			}
+			mux := http.NewServeMux()
+			mux.Handle("/api/"+kind+"/jobs/", d.Jobs(kind))
+			server := httptest.NewServer(mux)
+			defer server.Close()
+			response, err := http.Get(server.URL + "/api/" + kind + "/jobs/" + task.ID + "/log")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer response.Body.Close()
+			log, _ := io.ReadAll(response.Body)
+			if response.StatusCode != 200 || !strings.Contains(string(log), `"type":"claude_sessions"`) || !strings.Contains(string(log), "original conversation of "+job.id) {
+				t.Fatalf("downloaded log lacks saved conversation: %s", log)
+			}
+			for _, line := range strings.Split(strings.TrimSpace(string(log)), "\n") {
+				if !json.Valid([]byte(line)) {
+					t.Fatalf("invalid JSONL line: %s", line)
+				}
+			}
+		})
+	}
+}
+
+func TestSessionCollectionFailureKeepsTheNodeWorkspace(t *testing.T) {
+	node := newFakeNode(t, "planner", 1)
+	node.sessionStatus = http.StatusInternalServerError
+	store := tasks.NewMemory()
+	d := start(t, store, &dispatch.Kind{Name: "planner", Pool: pool(t, node), Continuable: true})
+	task, err := d.Submit(context.Background(), "planner", []byte(request))
+	if err != nil {
+		t.Fatal(err)
+	}
+	node.fail(node.only(), "RUNTIME_FAILED", true, false)
+	waitStatus(t, d, "planner", task.ID, tasks.Failed)
+	if len(node.releasedIDs()) != 0 {
+		t.Fatal("must not release the source when session collection fails")
+	}
+	note, err := store.GetBlob(context.Background(), task.ID, tasks.BlobSessions)
+	if err != nil || !strings.Contains(string(note), `"error"`) {
+		t.Fatalf("missing collection error: %s %v", note, err)
+	}
+}
+
 func TestHandsATaskToAnIdleNodeAndCollectsItsResult(t *testing.T) {
 	busy, idle := newFakeNode(t, "generator", 1), newFakeNode(t, "generator", 1)
 	busy.occupy()
@@ -442,7 +502,7 @@ func TestTheHTTPContractMatchesANodes(t *testing.T) {
 	if resp, err := http.DefaultClient.Do(remove); err != nil || resp.StatusCode != 204 {
 		t.Fatalf("delete: %v %v", err, resp)
 	}
-	if code, _ := get("/api/planner/jobs/"+id+"/log"); code != 404 {
+	if code, _ := get("/api/planner/jobs/" + id + "/log"); code != 404 {
 		t.Fatalf("deleted log status: %d", code)
 	}
 }

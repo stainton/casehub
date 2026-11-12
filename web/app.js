@@ -3112,6 +3112,11 @@ async function tcShowTaskLog(task){
     log.replaceChildren();
     const calls=new Map();
     for(const event of events){
+      if(event.type==='claude_sessions'){
+        const row=document.createElement('div');row.className='meta';
+        row.textContent=event.error?`Claude 会话收集失败：${event.error}`:`已保存 ${event.files?.length||0} 个 Claude 会话及调用上下文文件，原文包含在下载的完整日志中。`;
+        log.appendChild(row);continue;
+      }
       let row=event.operationId&&event.toolStatus!=='started'?calls.get(event.operationId):null;
       if(!row){row=document.createElement('div');log.appendChild(row)}
       progressLogContent(row,aiProgressLine(event),event);

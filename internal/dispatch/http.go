@@ -130,6 +130,10 @@ func (d *Dispatcher) Jobs(kind string) http.Handler {
 				_, _ = w.Write(event)
 				_, _ = w.Write([]byte("\n"))
 			}
+			if sessions, err := d.store.GetBlob(r.Context(), id, tasks.BlobSessions); err == nil {
+				_, _ = w.Write(sessions)
+				_, _ = w.Write([]byte("\n"))
+			}
 		default:
 			d.events(w, r, kind, id)
 		}
